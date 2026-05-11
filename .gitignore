@@ -1,0 +1,45 @@
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.#*
+#*#
+.DS_Store
+Thumbs.db
+
+# Perl build / test artifacts
+blib/
+_build/
+build/
+inc/
+make.out
+Makefile.old
+pm_to_blib
+MYMETA.*
+MANIFEST.bak
+*.packlist
+
+# Compiled / binary
+*.bs
+*.so
+
+# Local dev / libraries
+local/
+locallib/
+cpanfile.snapshot
+
+# Test / coverage
+t/.cache/
+cover_db/
+cover.html
+
+# Logs / env
+*.log
+.env
+
+# Misc
+coverage/
+node_modules/
+dist/
