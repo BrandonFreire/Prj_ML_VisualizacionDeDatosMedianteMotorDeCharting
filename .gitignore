@@ -39,6 +39,8 @@ cover.html
 *.log
 .env
 
+# Data files (no subir al repo)
+
 # Misc
 coverage/
 node_modules/
