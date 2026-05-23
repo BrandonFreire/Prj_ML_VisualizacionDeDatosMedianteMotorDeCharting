@@ -207,6 +207,7 @@ sub render_last_visible_price {
     }
 }
 
+=pod
 # Alias for compatibility
 sub set_y_range {
     my ($self, $y_min, $y_max) = @_;
@@ -215,6 +216,7 @@ sub set_y_range {
         $self->{scale}{y_max} = $y_max;
     }
 }
+=cut
 
 # Draw synchronized crosshair on this panel
 sub draw_crosshair {

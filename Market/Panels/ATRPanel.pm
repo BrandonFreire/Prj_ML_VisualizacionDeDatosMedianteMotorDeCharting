@@ -68,10 +68,12 @@ sub get_y_range {
     return ( 0, $max + $pad );
 }
 
+=pod
 sub set_scale_range {
     my ($self, $scale) = @_;
     $self->{scale} = $scale;
 }
+=cut
 
 # Draw a single ATR segment between two consecutive defined points
 sub render_atr_segment {
