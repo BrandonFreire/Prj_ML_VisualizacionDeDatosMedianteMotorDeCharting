@@ -456,12 +456,7 @@ sub set_timeframe {
     $self->{market}->set_timeframe($tf);
     $self->{indicators}->reset_all();
 
-    my $size = $self->{market}->size();
-    for my $i ( 0 .. $size - 1 ) {
-        $self->{market}{_cursor} = $i;
-        $self->{indicators}->update_last( $self->{market} );
-    }
-    delete $self->{market}{_cursor};
+    $self->{indicators}->compute_all( $self->{market} );
 
     $self->reset_view();
 }
