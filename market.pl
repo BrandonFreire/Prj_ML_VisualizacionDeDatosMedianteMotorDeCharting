@@ -197,16 +197,13 @@ $toolbar->Button(
 # ---- 6. Bind events and first render ----
 $engine->bind_events();
 
-# Pan: click izquierdo + arrastrar
-# Ev('X') captura la coordenada global X en el momento del evento (forma correcta en Perl/Tk)
-$mw->bind( '<ButtonPress-1>',   [ sub { $engine->drag_start( $_[1] ) }, Ev('X') ] );
-$mw->bind( '<ButtonRelease-1>', sub { $engine->drag_end() } );
-$mw->bind( '<B1-Motion>',       [ sub { $engine->drag_move( $_[1] ) }, Ev('X') ] );
-
-# Zoom: rueda del mouse
-$mw->bind( '<Button-4>',   sub { $engine->zoom(-1) } );
-$mw->bind( '<Button-5>',   sub { $engine->zoom( 1) } );
-$mw->bind( '<MouseWheel>', [ sub { $engine->zoom( $_[1] > 0 ? -1 : 1 ) }, Ev('D') ] );
+# Pan: click izquierdo + arrastrar solo dentro de los paneles sincronizados.
+# Ev('X') captura la coordenada global X en el momento del evento.
+for my $pan_canvas ( $price_canvas, $atr_canvas ) {
+    $pan_canvas->bind( '<ButtonPress-1>',   [ sub { $engine->drag_start( $_[1] ) }, Ev('X') ] );
+    $pan_canvas->bind( '<ButtonRelease-1>', sub { $engine->drag_end() } );
+    $pan_canvas->bind( '<B1-Motion>',       [ sub { $engine->drag_move( $_[1] ) }, Ev('X') ] );
+}
 
 # Teclado: + zoom in,  - zoom out,  0 reset vista
 $mw->bind( '<plus>',    sub { $engine->zoom(-1) } );

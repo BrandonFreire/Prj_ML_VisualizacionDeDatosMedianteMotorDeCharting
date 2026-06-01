@@ -2,6 +2,7 @@ package Market::ChartEngine;
 
 use strict;
 use warnings;
+use POSIX qw(strftime);
 use Market::Panels::Scales;
 use Market::Panels::PricePanel;
 use Market::Panels::ATRPanel;
@@ -24,12 +25,16 @@ sub new {
 
         visible_bars   => $args{visible_bars} // 100,
         offset         => 0,
+        follow_last    => 1,
         y_auto         => 1,
         y_min_manual   => 0,
         y_max_manual   => 1,
 
-        crosshair_x    => undef,
-        crosshair_y    => undef,
+        crosshair_x        => undef,
+        crosshair_y_price  => undef,
+        crosshair_y_atr    => undef,
+        crosshair_info     => undef,
+        _last_mouse_x      => undef,
         pending_render => 0,
 
         _drag_start_x      => undef,
@@ -59,6 +64,11 @@ sub new {
 sub compute_window {
     my ($self) = @_;
     my $last  = $self->{market}->last_index();
+    return (0, -1) if $last < 0;
+
+    $self->{offset} = 0     if $self->{offset} < 0;
+    $self->{offset} = $last if $self->{offset} > $last;
+
     my $end   = $last - $self->{offset};
     $end = $last if $end > $last;
     $end = 0     if $end < 0;
@@ -168,6 +178,7 @@ sub render {
     };
 
     if ( defined $self->{crosshair_x} ) {
+        $self->_update_crosshair_info();
         $self->_draw_crosshair_all();
     }
 }
@@ -335,23 +346,26 @@ sub bind_events {
 
 sub _bind_all_canvas {
     my ($self, $c) = @_;
-    $c->bind( '<Button-4>', sub { $self->zoom(-1) } );
-    $c->bind( '<Button-5>', sub { $self->zoom( 1) } );
+    $c->bind( '<Button-4>', sub {
+        my $e = $c->XEvent();
+        $self->zoom( -1, $e->x );
+    });
+    $c->bind( '<Button-5>', sub {
+        my $e = $c->XEvent();
+        $self->zoom( 1, $e->x );
+    });
     $c->bind( '<MouseWheel>', sub {
         my $e = $c->XEvent();
-        $self->zoom( $e->Delta > 0 ? -1 : 1 );
+        $self->zoom( $e->Delta > 0 ? -1 : 1, $e->x );
         $c->xviewMoveto(0); $c->yviewMoveto(0);
     });
 
     $c->bind( '<Motion>', sub {
         my $e = $c->XEvent();
-        $self->_on_mouse_move($e);
+        $self->_on_mouse_move( $e, $c );
     });
     $c->bind( '<Leave>', sub {
-        $self->{crosshair_x} = undef;
-        $self->{crosshair_y} = undef;
-        $self->{price_panel}->hide_crosshair();
-        $self->{atr_panel}->hide_crosshair();
+        $self->_hide_crosshair();
     });
 }
 
@@ -361,11 +375,13 @@ sub drag_start {
     my ($self, $global_x) = @_;
     $self->{_drag_start_x}      = $global_x;
     $self->{_drag_start_offset} = $self->{offset};
+    $self->{follow_last}        = 0;
 }
 
 sub drag_end {
     my ($self) = @_;
     $self->{_drag_start_x} = undef;
+    $self->{follow_last}   = $self->{offset} == 0 ? 1 : 0;
 }
 
 sub drag_move {
@@ -376,12 +392,12 @@ sub drag_move {
     my $bar_w = ( $self->{price_canvas}->width() || 900 ) / ( $self->{visible_bars} || 100 );
     $bar_w    = 0.5 if $bar_w < 0.5;
 
-    my $new_off = $self->{_drag_start_offset} - int( $dx / $bar_w );
-    $new_off = 0                             if $new_off < 0;
-    $new_off = $self->{market}->last_index() if $new_off > $self->{market}->last_index();
+    my $new_off = $self->{_drag_start_offset} + int( $dx / $bar_w );
+    $new_off = $self->_clamp_offset($new_off);
 
     if ( $new_off != $self->{offset} ) {
-        $self->{offset} = $new_off;
+        $self->{offset}      = $new_off;
+        $self->{follow_last} = $new_off == 0 ? 1 : 0;
         $self->render();
     }
 }
@@ -389,12 +405,51 @@ sub drag_move {
 # delta < 0 = zoom in  (fewer visible bars, wider bars)
 # delta > 0 = zoom out (more visible bars, overview)
 sub zoom {
-    my ($self, $delta) = @_;
+    my ($self, $delta, $mouse_x) = @_;
+    $mouse_x = $self->{_last_mouse_x} unless defined $mouse_x;
+
+    my ($old_start, $old_end) = $self->compute_window();
+    return if $old_end < $old_start;
+
+    my $old_bars = $self->{visible_bars};
     my $factor   = $delta > 0 ? 1.4 : 0.65;
-    my $new_bars = int( $self->{visible_bars} * $factor + 0.5 );
+    my $new_bars = int( $old_bars * $factor + 0.5 );
     $new_bars = 5    if $new_bars < 5;
     $new_bars = 5000 if $new_bars > 5000;
+
+    return if $new_bars == $old_bars;
+
+    my $last  = $self->{market}->last_index();
+    my $width = $self->{price_canvas}->width() || 900;
+    my $has_mouse = defined $mouse_x && $mouse_x >= 0 && $mouse_x <= $width;
+
     $self->{visible_bars} = $new_bars;
+
+    if ( $has_mouse ) {
+        my $old_visible = $old_end - $old_start + 1;
+        $old_visible = $old_bars if $old_visible <= 0;
+        my $old_bar_w = $width / ( $old_visible || 1 );
+        my $ratio     = $width > 0 ? $mouse_x / $width : 0.5;
+
+        my $pivot_index = $old_start + ( $mouse_x / ( $old_bar_w || 1 ) ) - 0.5;
+        $pivot_index = $old_start if $pivot_index < $old_start;
+        $pivot_index = $old_end   if $pivot_index > $old_end;
+
+        my $new_start = $pivot_index + 0.5 - $ratio * $new_bars;
+        my $new_end   = int( $new_start + $new_bars - 1 + 0.5 );
+        $self->{offset} = $self->_clamp_offset( $last - $new_end );
+    }
+    elsif ( $self->{follow_last} ) {
+        $self->{offset} = 0;
+    }
+    else {
+        my $pivot_index = ( $old_start + $old_end ) / 2;
+        my $new_start   = $pivot_index + 0.5 - 0.5 * $new_bars;
+        my $new_end     = int( $new_start + $new_bars - 1 + 0.5 );
+        $self->{offset} = $self->_clamp_offset( $last - $new_end );
+    }
+
+    $self->{follow_last} = $self->{offset} == 0 ? 1 : 0;
     $self->{_render_state} = undef;    # force full render after zoom
     my $tf = $self->{market}{current_tf};
     $self->{price_canvas}->toplevel->title("Market Chart | ${tf}m  [velas: $new_bars]");
@@ -437,17 +492,83 @@ sub _vertical_zoom {
 }
 
 sub _on_mouse_move {
-    my ($self, $event) = @_;
+    my ($self, $event, $canvas) = @_;
     $self->{crosshair_x} = $event->x;
-    $self->{crosshair_y} = $event->y;
+    $self->{_last_mouse_x} = $event->x;
+
+    if ( defined $canvas && "$canvas" eq "$self->{atr_canvas}" ) {
+        $self->{crosshair_y_price} = undef;
+        $self->{crosshair_y_atr}   = $event->y;
+    }
+    else {
+        $self->{crosshair_y_price} = $event->y;
+        $self->{crosshair_y_atr}   = undef;
+    }
+
+    $self->_update_crosshair_info();
     $self->_draw_crosshair_all();
 }
 
 sub _draw_crosshair_all {
     my ($self) = @_;
     return unless defined $self->{crosshair_x};
-    $self->{price_panel}->draw_crosshair( $self->{crosshair_x}, $self->{crosshair_y} );
-    $self->{atr_panel}->draw_crosshair(   $self->{crosshair_x}, $self->{crosshair_y} );
+
+    my $info = $self->{crosshair_info};
+    my $x    = $info && defined $info->{x} ? $info->{x} : $self->{crosshair_x};
+
+    $self->{price_panel}->draw_crosshair( $x, $self->{crosshair_y_price}, $info );
+    $self->{atr_panel}->draw_crosshair(   $x, $self->{crosshair_y_atr},   $info );
+}
+
+sub _hide_crosshair {
+    my ($self) = @_;
+    $self->{crosshair_x}       = undef;
+    $self->{crosshair_y_price} = undef;
+    $self->{crosshair_y_atr}   = undef;
+    $self->{crosshair_info}    = undef;
+    $self->{_last_mouse_x}     = undef;
+    $self->{price_panel}->hide_crosshair();
+    $self->{atr_panel}->hide_crosshair();
+}
+
+sub _update_crosshair_info {
+    my ($self) = @_;
+    my $scale = $self->{price_scale};
+    return $self->{crosshair_info} = undef unless $scale && defined $self->{crosshair_x};
+
+    my $index = $scale->x_to_index( $self->{crosshair_x} );
+    my ($start, $end) = $self->compute_window();
+    return $self->{crosshair_info} = undef if $index < $start || $index > $end;
+
+    my $candle = $self->{market}->get_candle($index);
+    return $self->{crosshair_info} = undef unless $candle;
+
+    my $atr;
+    my $indicator = $self->{indicators}->get('ATR');
+    if ($indicator) {
+        my $values = $indicator->get_values();
+        $atr = $values->[$index] if defined $values && $index <= $#$values;
+    }
+
+    my $time_label = strftime( "%Y-%m-%d %H:%M", localtime( $candle->{time} ) );
+    my $atr_label  = defined $atr ? sprintf( "%.4f", $atr ) : 'n/a';
+    my $text       = sprintf(
+        "%s  O %.2f  H %.2f  L %.2f  C %.2f  ATR %s",
+        $time_label,
+        $candle->{open},
+        $candle->{high},
+        $candle->{low},
+        $candle->{close},
+        $atr_label,
+    );
+
+    $self->{crosshair_info} = {
+        index  => $index,
+        x      => int( $scale->index_to_center_x($index) + 0.5 ),
+        candle => $candle,
+        atr    => $atr,
+        text   => $text,
+    };
 }
 
 # Switch active timeframe, recompute indicators, reset view
@@ -465,9 +586,18 @@ sub reset_view {
     my ($self) = @_;
     $self->{offset}        = 0;
     $self->{visible_bars}  = 100;
+    $self->{follow_last}   = 1;
     $self->{y_auto}        = 1;
     $self->{_render_state} = undef;
     $self->request_render();
+}
+
+sub _clamp_offset {
+    my ($self, $offset) = @_;
+    my $last = $self->{market}->last_index();
+    $offset = 0     if $offset < 0;
+    $offset = $last if $offset > $last;
+    return $offset;
 }
 
 # Compute time labels for visible range (filtered to avoid overlap)
@@ -482,7 +612,7 @@ sub _nice_step_minutes {
 
 sub compute_intraday_labels {
     my ($self, $start, $end, $scale) = @_;
-    my @labels;
+    my %labels_by_index;
 
     my $bar_w = 8;
     if ($scale && ($scale->{visible_bars} || 0) > 0) {
@@ -511,11 +641,13 @@ sub compute_intraday_labels {
         my $day_key = sprintf("%04d-%02d-%02d", $lt[5] + 1900, $lt[4] + 1, $lt[3]);
 
         if (!defined $prev_day_key || $day_key ne $prev_day_key) {
-            push @labels, {
-                index => $i,
-                label => sprintf("%02d/%02d", $lt[4] + 1, $lt[3]),
-                time  => $ts,
-            };
+            $self->_add_time_label( \%labels_by_index, {
+                index    => $i,
+                label    => sprintf("%02d/%02d", $lt[4] + 1, $lt[3]),
+                time     => $ts,
+                type     => 'day',
+                priority => 3,
+            });
             $prev_day_key = $day_key;
             $prev_bucket  = int($ts / $step_sec);
             next;
@@ -529,10 +661,63 @@ sub compute_intraday_labels {
             ? sprintf("%02d:%02d", $lt[2], $lt[1])
             : sprintf("%02d:00", $lt[2]);
 
-        push @labels, { index => $i, label => $label, time => $ts };
+        $self->_add_time_label( \%labels_by_index, {
+            index    => $i,
+            label    => $label,
+            time     => $ts,
+            type     => 'regular',
+            priority => 5,
+        });
     }
 
+    for my $anchor ( @{ $self->{market}->compute_time_anchors() } ) {
+        my $i = $anchor->{index};
+        next if $i < $start || $i > $end;
+        my $ts = $self->{market}->get_timestamp($i);
+        next unless defined $ts;
+
+        my @lt = localtime($ts);
+        my $label =
+              $anchor->{type} eq 'last'        ? sprintf( "Last %02d:%02d", $lt[2], $lt[1] )
+            : $anchor->{type} eq 'midnight'    ? sprintf( "%02d/%02d 00:00", $lt[4] + 1, $lt[3] )
+            : $anchor->{type} eq 'market_open' ? sprintf( "%02d:00", $lt[2] )
+            : $anchor->{type} eq 'day'         ? sprintf( "%02d/%02d", $lt[4] + 1, $lt[3] )
+            :                                    sprintf( "%02d:00", $lt[2] );
+
+        $self->_add_time_label( \%labels_by_index, {
+            index    => $i,
+            label    => $label,
+            time     => $ts,
+            type     => $anchor->{type},
+            priority => $anchor->{priority},
+        });
+    }
+
+    if ( !%labels_by_index ) {
+        for my $i ( $start, $end ) {
+            my $ts = $self->{market}->get_timestamp($i);
+            next unless defined $ts;
+            my @lt = localtime($ts);
+            $self->_add_time_label( \%labels_by_index, {
+                index    => $i,
+                label    => sprintf( "%02d:%02d", $lt[2], $lt[1] ),
+                time     => $ts,
+                type     => 'fallback',
+                priority => 4,
+            });
+        }
+    }
+
+    my @labels = sort { $a->{index} <=> $b->{index} } values %labels_by_index;
     return \@labels;
+}
+
+sub _add_time_label {
+    my ($self, $labels_by_index, $label) = @_;
+    my $existing = $labels_by_index->{ $label->{index} };
+    if ( !$existing || ( $label->{priority} // 5 ) < ( $existing->{priority} // 5 ) ) {
+        $labels_by_index->{ $label->{index} } = $label;
+    }
 }
 
 sub get_all_timestamps {

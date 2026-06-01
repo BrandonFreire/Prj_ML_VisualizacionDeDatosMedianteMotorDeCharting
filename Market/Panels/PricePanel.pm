@@ -23,6 +23,8 @@ sub new {
         _ch_vline    => undef,
         _ch_hline    => undef,
         _ch_label    => undef,
+        _ch_info_bg  => undef,
+        _ch_info     => undef,
     };
     bless $self, $class;
     $self->_init_crosshair_objects();
@@ -54,6 +56,22 @@ sub _init_crosshair_objects {
         -fill   => '#ffffff',
         -font   => [ 'Helvetica', 9 ],
         -anchor => 'w',
+        -state  => 'hidden',
+        -tags   => ['crosshair'],
+    );
+    $self->{_ch_info_bg} = $c->createRectangle(
+        0, 0, 1, 1,
+        -fill    => '#131722',
+        -outline => '#434651',
+        -state   => 'hidden',
+        -tags    => ['crosshair'],
+    );
+    $self->{_ch_info} = $c->createText(
+        8, 8,
+        -text   => '',
+        -fill   => '#ffffff',
+        -font   => [ 'Helvetica', 9 ],
+        -anchor => 'nw',
         -state  => 'hidden',
         -tags   => ['crosshair'],
     );
@@ -218,24 +236,50 @@ sub set_y_range {
 
 # Draw synchronized crosshair on this panel
 sub draw_crosshair {
-    my ($self, $x, $y) = @_;
+    my ($self, $x, $y, $info) = @_;
     my $c     = $self->{canvas};
     my $scale = $self->{scale};
     my $w     = $c->width();
     my $h     = $c->height();
 
     $c->coords( $self->{_ch_vline}, $x, 0, $x, $h );
-    $c->coords( $self->{_ch_hline}, 0, $y, $w, $y );
     $c->itemconfigure( $self->{_ch_vline}, -state => 'normal' );
-    $c->itemconfigure( $self->{_ch_hline}, -state => 'normal' );
 
-    if ($scale) {
+    if ( defined $y && $scale && $y >= 0 && $y <= $scale->{y_height} ) {
+        $c->coords( $self->{_ch_hline}, 0, $y, $w, $y );
+        $c->itemconfigure( $self->{_ch_hline}, -state => 'normal' );
         my $price = $scale->y_to_value($y);
         $c->coords( $self->{_ch_label}, $w - 68, $y - 8 );
         $c->itemconfigure( $self->{_ch_label},
             -text  => sprintf( "%.2f", $price ),
             -state => 'normal',
         );
+    }
+    else {
+        $c->itemconfigure( $self->{_ch_hline}, -state => 'hidden' );
+        $c->itemconfigure( $self->{_ch_label}, -state => 'hidden' );
+    }
+
+    if ( $info && $info->{text} ) {
+        $c->coords( $self->{_ch_info}, 8, 8 );
+        $c->itemconfigure( $self->{_ch_info},
+            -text  => $info->{text},
+            -state => 'normal',
+        );
+        my @bbox = $c->bbox( $self->{_ch_info} );
+        if (@bbox) {
+            $c->coords(
+                $self->{_ch_info_bg},
+                $bbox[0] - 5, $bbox[1] - 3,
+                $bbox[2] + 5, $bbox[3] + 3,
+            );
+            $c->itemconfigure( $self->{_ch_info_bg}, -state => 'normal' );
+            $c->lower( $self->{_ch_info_bg}, $self->{_ch_info} );
+        }
+    }
+    else {
+        $c->itemconfigure( $self->{_ch_info},    -state => 'hidden' );
+        $c->itemconfigure( $self->{_ch_info_bg}, -state => 'hidden' );
     }
 
     $c->raise('crosshair');
@@ -247,6 +291,8 @@ sub hide_crosshair {
     $c->itemconfigure( $self->{_ch_vline}, -state => 'hidden' );
     $c->itemconfigure( $self->{_ch_hline}, -state => 'hidden' );
     $c->itemconfigure( $self->{_ch_label}, -state => 'hidden' );
+    $c->itemconfigure( $self->{_ch_info},    -state => 'hidden' );
+    $c->itemconfigure( $self->{_ch_info_bg}, -state => 'hidden' );
 }
 
 # Draw the time axis at the bottom of the price canvas
@@ -268,11 +314,37 @@ sub draw_time_axis {
         $min_px = $bar_w > 20 ? 35 : $bar_w < 7 ? 70 : 55;
     }
 
-    my $prev_x = -999;
+    my @accepted;
     for my $ts (@$timestamps) {
         my $x = $self->round( $scale->index_to_center_x( $ts->{index} ) );
         next if $x < 0 || $x > $w;
-        next if abs( $x - $prev_x ) < $min_px;
+        $ts->{x} = $x;
+
+        my $priority = $ts->{priority} // 5;
+        my $spacing  = $priority <= 2 ? 28 : $min_px;
+        my $skip     = 0;
+
+        for ( my $i = 0; $i < @accepted; $i++ ) {
+            my $other = $accepted[$i];
+            my $other_spacing = ( ( $other->{priority} // 5 ) <= 2 ) ? 28 : $min_px;
+            my $required = $spacing > $other_spacing ? $spacing : $other_spacing;
+            next if abs( $x - $other->{x} ) >= $required;
+
+            if ( $priority < ( $other->{priority} // 5 ) ) {
+                splice @accepted, $i, 1;
+                $i--;
+                next;
+            }
+
+            $skip = 1;
+            last;
+        }
+
+        push @accepted, $ts unless $skip;
+    }
+
+    for my $ts ( sort { $a->{index} <=> $b->{index} } @accepted ) {
+        my $x = $ts->{x};
 
         $canvas->createLine( $x, $y, $x, $y + 4, -fill => $COLOR_AXIS, -tags => ['timeaxis'] );
         $canvas->createText(
@@ -283,7 +355,6 @@ sub draw_time_axis {
             -anchor => 'n',
             -tags   => ['timeaxis'],
         );
-        $prev_x = $x;
     }
 }
 

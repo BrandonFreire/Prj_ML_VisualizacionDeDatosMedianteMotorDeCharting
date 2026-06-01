@@ -36,6 +36,10 @@ sub build_tf_candles {
     my $n       = scalar @base;
     my $tf_secs = $tf * 60;
     return unless $n > 0;
+    if ( $tf == 1 ) {
+        $self->{data}{'1'} = \@base;
+        return;
+    }
 
     # ---- Extract columns ----
     my (@times, @opens, @highs, @lows, @closes, @vols);
@@ -60,10 +64,13 @@ sub build_tf_candles {
 
     # ---- Group boundary detection (vectorized diff) ----
     # diff[i] = bucket[i+1] - bucket[i]; nonzero means new group starts at i+1
-    my $nd_b_cur  = $nd_bucket->slice([1, $n - 1]);
-    my $nd_b_prev = $nd_bucket->slice([0, $n - 2]);
-    my $nd_diff   = $nd_b_cur - $nd_b_prev;
-    my @diff      = @{ $nd_diff->asarray() };
+    my @diff;
+    if ( $n > 1 ) {
+        my $nd_b_cur  = $nd_bucket->slice([1, $n - 1]);
+        my $nd_b_prev = $nd_bucket->slice([0, $n - 2]);
+        my $nd_diff   = $nd_b_cur - $nd_b_prev;
+        @diff         = @{ $nd_diff->asarray() };
+    }
 
     # Group start indices: 0, then every i+1 where diff[i] != 0
     my @starts = (0, map { $_ + 1 } grep { $diff[$_] != 0 } 0 .. $#diff);
@@ -107,12 +114,13 @@ sub build_timeframes {
 
 sub set_timeframe {
     my ($self, $tf) = @_;
+    die "Unsupported timeframe: $tf" unless exists $self->{data}{$tf};
     $self->{current_tf} = $tf;
 }
 
 sub _active_array {
     my ($self) = @_;
-    return $self->{data}{ $self->{current_tf} };
+    return $self->{data}{ $self->{current_tf} } || [];
 }
 
 sub get_slice {
@@ -127,7 +135,9 @@ sub get_slice {
 
 sub get_candle {
     my ($self, $index) = @_;
-    return $self->_active_array()->[$index];
+    my $arr = $self->_active_array();
+    return undef if !defined $index || $index < 0 || $index > $#$arr;
+    return $arr->[$index];
 }
 
 sub size {
@@ -171,24 +181,68 @@ sub compute_time_anchors {
     my ($self) = @_;
     my $arr      = $self->_active_array();
     my @anchors;
-    my $prev_day  = -1;
+    return \@anchors unless @$arr;
+
+    my %seen;
+    my $prev_day_key;
     my $prev_hour = -1;
 
     for my $i ( 0 .. $#$arr ) {
-        my @lt   = localtime( $arr->[$i]{time} );
-        my $hour = $lt[2];
-        my $day  = $lt[3];
-        if ( $day != $prev_day ) {
-            push @anchors, { index => $i, type => 'day' };
-            $prev_day  = $day;
+        my @lt      = localtime( $arr->[$i]{time} );
+        my $minute  = $lt[1];
+        my $hour    = $lt[2];
+        my $day_key = sprintf( "%04d-%02d-%02d", $lt[5] + 1900, $lt[4] + 1, $lt[3] );
+
+        if ( !defined $prev_day_key || $day_key ne $prev_day_key ) {
+            _add_anchor( \@anchors, \%seen, $i, 'day' );
+            $prev_day_key = $day_key;
             $prev_hour = $hour;
         }
         elsif ( $hour != $prev_hour ) {
-            push @anchors, { index => $i, type => 'hour' };
+            _add_anchor( \@anchors, \%seen, $i, 'hour' );
             $prev_hour = $hour;
         }
+
+        _add_anchor( \@anchors, \%seen, $i, 'midnight' )    if $hour == 0  && $minute == 0;
+        _add_anchor( \@anchors, \%seen, $i, 'market_open' ) if $hour == 17 && $minute == 0;
     }
+
+    _add_anchor( \@anchors, \%seen, $#$arr, 'last' );
+
     return \@anchors;
+}
+
+sub _anchor_priority {
+    my ($type) = @_;
+    return 0 if $type eq 'last';
+    return 1 if $type eq 'midnight';
+    return 2 if $type eq 'market_open';
+    return 3 if $type eq 'day';
+    return 4 if $type eq 'hour';
+    return 5;
+}
+
+sub _add_anchor {
+    my ($anchors, $seen, $index, $type) = @_;
+    my $priority = _anchor_priority($type);
+
+    if ( exists $seen->{$index} ) {
+        my $pos = $seen->{$index};
+        return if $anchors->[$pos]{priority} <= $priority;
+        $anchors->[$pos] = {
+            index    => $index,
+            type     => $type,
+            priority => $priority,
+        };
+        return;
+    }
+
+    $seen->{$index} = scalar @$anchors;
+    push @$anchors, {
+        index    => $index,
+        type     => $type,
+        priority => $priority,
+    };
 }
 
 1;
