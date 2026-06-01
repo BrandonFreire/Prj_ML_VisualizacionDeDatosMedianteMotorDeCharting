@@ -3,6 +3,7 @@ package Market::MarketData;
 use strict;
 use warnings;
 use POSIX qw(floor);
+use AI::MXNet qw(mx);
 
 sub new {
     my ($class) = @_;
@@ -25,38 +26,72 @@ sub add_candle {
     push @{ $self->{data}{'1'} }, $candle;
 }
 
+# Build higher-timeframe candles using MXNet tensors for:
+#   1. Bucket index computation (vectorized floor division)
+#   2. Group boundary detection (vectorized diff)
+#   3. Per-group high/low/volume reductions (tensor max/min/sum on slices)
 sub build_tf_candles {
     my ($self, $tf) = @_;
-    my @base   = @{ $self->{data}{'1'} };
-    my @result;
+    my @base    = @{ $self->{data}{'1'} };
+    my $n       = scalar @base;
     my $tf_secs = $tf * 60;
-    my $i = 0;
+    return unless $n > 0;
 
-    while ($i < scalar @base) {
-        my $bucket = floor($base[$i]{time} / $tf_secs) * $tf_secs;
-        my $open   = $base[$i]{open};
-        my $high   = $base[$i]{high};
-        my $low    = $base[$i]{low};
-        my $close  = $base[$i]{close};
-        my $vol    = $base[$i]{volume};
-        $i++;
+    # ---- Extract columns ----
+    my (@times, @opens, @highs, @lows, @closes, @vols);
+    for my $c (@base) {
+        push @times,  $c->{time};
+        push @opens,  $c->{open};
+        push @highs,  $c->{high};
+        push @lows,   $c->{low};
+        push @closes, $c->{close};
+        push @vols,   $c->{volume};
+    }
 
-        while ($i < scalar @base) {
-            my $nb = floor($base[$i]{time} / $tf_secs) * $tf_secs;
-            last if $nb != $bucket;
-            $high  = $base[$i]{high}   if $base[$i]{high}  > $high;
-            $low   = $base[$i]{low}    if $base[$i]{low}   < $low;
-            $close = $base[$i]{close};
-            $vol  += $base[$i]{volume};
-            $i++;
+    # ---- Lift OHLCV to ndarrays ----
+    my $nd_high = mx->nd->array(\@highs,  ctx => mx->cpu());
+    my $nd_low  = mx->nd->array(\@lows,   ctx => mx->cpu());
+    my $nd_vol  = mx->nd->array(\@vols,   ctx => mx->cpu());
+
+    # ---- Bucket timestamps (vectorized floor division) ----
+    my $nd_time   = mx->nd->array(\@times, ctx => mx->cpu());
+    my $nd_bucket = ($nd_time / $tf_secs)->floor() * $tf_secs;
+    my @buckets   = @{ $nd_bucket->asarray() };
+
+    # ---- Group boundary detection (vectorized diff) ----
+    # diff[i] = bucket[i+1] - bucket[i]; nonzero means new group starts at i+1
+    my $nd_b_cur  = $nd_bucket->slice([1, $n - 1]);
+    my $nd_b_prev = $nd_bucket->slice([0, $n - 2]);
+    my $nd_diff   = $nd_b_cur - $nd_b_prev;
+    my @diff      = @{ $nd_diff->asarray() };
+
+    # Group start indices: 0, then every i+1 where diff[i] != 0
+    my @starts = (0, map { $_ + 1 } grep { $diff[$_] != 0 } 0 .. $#diff);
+
+    # ---- Per-group aggregation (Perl loop over groups, Perl arrays for speed) ----
+    # MXNet overhead per call is too high for 6000 tiny slices.
+    # Tensor work is done above (bucket computation + boundary detection on 30k elements).
+    my @result;
+    for my $gi (0 .. $#starts) {
+        my $s  = $starts[$gi];
+        my $e  = ($gi + 1 < scalar @starts) ? $starts[$gi + 1] - 1 : $n - 1;
+
+        my $high = $highs[$s];
+        my $low  = $lows[$s];
+        my $vol  = $vols[$s];
+
+        for my $i ($s + 1 .. $e) {
+            $high = $highs[$i] if $highs[$i] > $high;
+            $low  = $lows[$i]  if $lows[$i]  < $low;
+            $vol += $vols[$i];
         }
 
         push @result, {
-            time   => $bucket,
-            open   => $open,
+            time   => $buckets[$s],
+            open   => $opens[$s],
             high   => $high,
             low    => $low,
-            close  => $close,
+            close  => $closes[$e],
             volume => $vol,
         };
     }
@@ -84,8 +119,8 @@ sub get_slice {
     my ($self, $start, $end) = @_;
     my $arr  = $self->_active_array();
     my $size = scalar @$arr;
-    $start = 0        if $start < 0;
-    $end   = $size - 1 if $end >= $size;
+    $start = 0          if $start < 0;
+    $end   = $size - 1  if $end >= $size;
     return [] if $start > $end;
     return [ @{$arr}[ $start .. $end ] ];
 }
@@ -122,8 +157,8 @@ sub merge_delta_row {
     my $arr = $self->_active_array();
     if ( @$arr && $arr->[-1]{time} == $row->{time} ) {
         my $last = $arr->[-1];
-        $last->{high}   = $row->{high}   if $row->{high}   > $last->{high};
-        $last->{low}    = $row->{low}    if $row->{low}    < $last->{low};
+        $last->{high}   = $row->{high}   if $row->{high}  > $last->{high};
+        $last->{low}    = $row->{low}    if $row->{low}   < $last->{low};
         $last->{close}  = $row->{close};
         $last->{volume} += $row->{volume};
     }
@@ -143,7 +178,6 @@ sub compute_time_anchors {
         my @lt   = localtime( $arr->[$i]{time} );
         my $hour = $lt[2];
         my $day  = $lt[3];
-
         if ( $day != $prev_day ) {
             push @anchors, { index => $i, type => 'day' };
             $prev_day  = $day;

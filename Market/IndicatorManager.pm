@@ -17,6 +17,16 @@ sub register {
     $self->{indicators}{$name} = $indicator;
 }
 
+# Batch computation: calls compute_all on every registered indicator.
+# Preferred over the update_last loop when all data is already loaded.
+sub compute_all {
+    my ($self, $market_data) = @_;
+    for my $ind ( values %{ $self->{indicators} } ) {
+        $ind->compute_all($market_data);
+    }
+}
+
+# Incremental update (fallback, kept for compatibility)
 sub update_last {
     my ($self, $market_data) = @_;
     for my $ind ( values %{ $self->{indicators} } ) {
@@ -35,8 +45,8 @@ sub slice_array {
     return [] unless $ind;
     my $values = $ind->get_values();
     my $size   = scalar @$values;
-    $start = 0        if $start < 0;
-    $end   = $size - 1 if $end >= $size;
+    $start = 0          if $start < 0;
+    $end   = $size - 1  if $end >= $size;
     return [] if $start > $end;
     return [ @{$values}[ $start .. $end ] ];
 }

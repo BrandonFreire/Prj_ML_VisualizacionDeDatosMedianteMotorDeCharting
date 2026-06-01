@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 use FindBin qw($Bin);
-use lib $Bin;       
+use lib $Bin;       # siempre apunta al directorio del script sin importar desde donde se ejecute
 
 use Tk;
 
@@ -35,6 +35,7 @@ use Market::IndicatorManager;
 use Market::Indicators::ATR;
 use Market::ChartEngine;
 
+# ---- Configuration ----
 my $CSV_FILE     = '2026_03.csv';
 my $ATR_PERIOD   = 14;
 my $PRICE_H      = 500;
@@ -78,12 +79,8 @@ printf "Loaded: 1m=%d  5m=%d  15m=%d candles\n",
 my $indicators = Market::IndicatorManager->new();
 $indicators->register( 'ATR', Market::Indicators::ATR->new($ATR_PERIOD) );
 
-print "Computing ATR($ATR_PERIOD)...\n";
-for my $i ( 0 .. $market->last_index() ) {
-    $market->{_cursor} = $i;
-    $indicators->update_last($market);
-}
-delete $market->{_cursor};
+print "Computing ATR($ATR_PERIOD) with MXNet tensors...\n";
+$indicators->compute_all($market);
 print "Done.\n";
 
 # ---- 4. Build Tk window ----
@@ -91,6 +88,19 @@ my $mw = MainWindow->new();
 $mw->title("Market Chart  |  1m");
 $mw->configure( -bg => $BG );
 $mw->resizable( 1, 1 );
+$mw->attributes( -fullscreen => 1 );
+
+# Escape para salir de pantalla completa
+$mw->bind( '<Escape>', sub { $mw->attributes( -fullscreen => 0 ) } );
+$mw->bind( '<F11>',    sub {
+    my $fs = $mw->attributes('-fullscreen');
+    $mw->attributes( -fullscreen => !$fs );
+});
+
+# Cerrar ventana o Ctrl+Q mata el proceso
+$mw->protocol( 'WM_DELETE_WINDOW', sub { exit 0 } );
+$mw->bind( '<Control-q>', sub { exit 0 } );
+$mw->bind( '<Control-Q>', sub { exit 0 } );
 
 # Toolbar (timeframe buttons + reset)
 my $toolbar = $mw->Frame( -bg => '#1e222d' )
@@ -170,10 +180,25 @@ $toolbar->Button(
     -command          => sub { $engine->reset_view(); },
 )->pack( -side => 'left', -padx => 8, -pady => 2 );
 
+# Boton cerrar (siempre visible en pantalla completa)
+$toolbar->Button(
+    -text             => '  X  ',
+    -bg               => '#2a2d3e',
+    -fg               => '#ef5350',
+    -relief           => 'flat',
+    -padx             => 10,
+    -pady             => 3,
+    -activebackground => '#ef5350',
+    -activeforeground => '#ffffff',
+    -font             => ['Helvetica', 10, 'bold'],
+    -command          => sub { exit 0 },
+)->pack( -side => 'right', -padx => 4, -pady => 2 );
+
 # ---- 6. Bind events and first render ----
 $engine->bind_events();
 
 # Pan: click izquierdo + arrastrar
+# Ev('X') captura la coordenada global X en el momento del evento (forma correcta en Perl/Tk)
 $mw->bind( '<ButtonPress-1>',   [ sub { $engine->drag_start( $_[1] ) }, Ev('X') ] );
 $mw->bind( '<ButtonRelease-1>', sub { $engine->drag_end() } );
 $mw->bind( '<B1-Motion>',       [ sub { $engine->drag_move( $_[1] ) }, Ev('X') ] );
