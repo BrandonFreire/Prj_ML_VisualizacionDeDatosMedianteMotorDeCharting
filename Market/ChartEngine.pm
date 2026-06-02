@@ -26,6 +26,8 @@ sub new {
         visible_bars   => $args{visible_bars} // 100,
         offset         => 0,
         follow_last    => 1,
+        auto_follow    => 1,
+        manual_scroll  => 0,
         y_auto         => 1,
         y_min_manual   => 0,
         y_max_manual   => 1,
@@ -186,6 +188,11 @@ sub render {
 # Returns true when an incremental pan is safe (no Y rescale, no zoom, no resize)
 sub _can_incremental {
     my ($self, $rs, $start, $end, $pscale, $n_visible, $pw, $ph) = @_;
+
+    # Full redraw keeps candles, ATR and time labels synchronized while pan/zoom
+    # behavior is being corrected. Incremental pan can be re-enabled after it
+    # validates both price and ATR scales plus time-axis state.
+    return 0;
 
     return 0 if $rs->{pw} != $pw || $rs->{ph} != $ph;
     return 0 if $rs->{visible_bars} != $n_visible;
@@ -375,13 +382,13 @@ sub drag_start {
     my ($self, $global_x) = @_;
     $self->{_drag_start_x}      = $global_x;
     $self->{_drag_start_offset} = $self->{offset};
-    $self->{follow_last}        = 0;
+    $self->_set_manual_scroll();
 }
 
 sub drag_end {
     my ($self) = @_;
     $self->{_drag_start_x} = undef;
-    $self->{follow_last}   = $self->{offset} == 0 ? 1 : 0;
+    $self->_sync_follow_state();
 }
 
 sub drag_move {
@@ -392,12 +399,15 @@ sub drag_move {
     my $bar_w = ( $self->{price_canvas}->width() || 900 ) / ( $self->{visible_bars} || 100 );
     $bar_w    = 0.5 if $bar_w < 0.5;
 
+    # TradingView-style grab: dragging right reveals older candles; dragging
+    # left moves back toward the latest candle.
     my $new_off = $self->{_drag_start_offset} + int( $dx / $bar_w );
     $new_off = $self->_clamp_offset($new_off);
 
     if ( $new_off != $self->{offset} ) {
         $self->{offset}      = $new_off;
-        $self->{follow_last} = $new_off == 0 ? 1 : 0;
+        $self->_sync_follow_state();
+        $self->{_render_state} = undef;
         $self->render();
     }
 }
@@ -449,7 +459,7 @@ sub zoom {
         $self->{offset} = $self->_clamp_offset( $last - $new_end );
     }
 
-    $self->{follow_last} = $self->{offset} == 0 ? 1 : 0;
+    $self->_sync_follow_state();
     $self->{_render_state} = undef;    # force full render after zoom
     my $tf = $self->{market}{current_tf};
     $self->{price_canvas}->toplevel->title("Market Chart | ${tf}m  [velas: $new_bars]");
@@ -587,6 +597,8 @@ sub reset_view {
     $self->{offset}        = 0;
     $self->{visible_bars}  = 100;
     $self->{follow_last}   = 1;
+    $self->{auto_follow}   = 1;
+    $self->{manual_scroll} = 0;
     $self->{y_auto}        = 1;
     $self->{_render_state} = undef;
     $self->request_render();
@@ -598,6 +610,21 @@ sub _clamp_offset {
     $offset = 0     if $offset < 0;
     $offset = $last if $offset > $last;
     return $offset;
+}
+
+sub _set_manual_scroll {
+    my ($self) = @_;
+    $self->{follow_last}   = 0;
+    $self->{auto_follow}   = 0;
+    $self->{manual_scroll} = 1;
+}
+
+sub _sync_follow_state {
+    my ($self) = @_;
+    my $at_last = ($self->{offset} || 0) == 0 ? 1 : 0;
+    $self->{follow_last}   = $at_last;
+    $self->{auto_follow}   = $at_last;
+    $self->{manual_scroll} = $at_last ? 0 : 1;
 }
 
 # Compute time labels for visible range (filtered to avoid overlap)
@@ -706,6 +733,19 @@ sub compute_intraday_labels {
                 priority => 4,
             });
         }
+    }
+
+    for my $i ( $start, $end ) {
+        my $ts = $self->{market}->get_timestamp($i);
+        next unless defined $ts;
+        my @lt = localtime($ts);
+        $self->_add_time_label( \%labels_by_index, {
+            index    => $i,
+            label    => sprintf( "%02d:%02d", $lt[2], $lt[1] ),
+            time     => $ts,
+            type     => 'edge',
+            priority => 4,
+        });
     }
 
     my @labels = sort { $a->{index} <=> $b->{index} } values %labels_by_index;

@@ -7,29 +7,6 @@ use lib $Bin;       # siempre apunta al directorio del script sin importar desde
 
 use Tk;
 
-# Use Time::Moment if available, otherwise fall back to pure-Perl parser
-my $HAS_MOMENT;
-BEGIN {
-    eval { require Time::Moment; $HAS_MOMENT = 1 };
-}
-
-sub parse_ts {
-    my ($ts) = @_;
-    if ($HAS_MOMENT) {
-        return Time::Moment->from_string($ts)->epoch;
-    }
-    return 0 unless $ts =~
-        /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})([-+])(\d{2}):(\d{2})$/;
-    my ($y,$mo,$d,$h,$mi,$s,$sign,$tzh,$tzm) = ($1,$2,$3,$4,$5,$6,$7,$8,$9);
-    my @dim = (0,31,59,90,120,151,181,212,243,273,304,334);
-    my $leap = ($y%4==0 && ($y%100!=0 || $y%400==0)) ? 1 : 0;
-    my $doy  = $dim[$mo-1] + ($mo>2 ? $leap : 0) + $d;
-    my $days = ($y-1970)*365 + int(($y-1969)/4)
-               - int(($y-1901)/100) + int(($y-1601)/400) + $doy - 1;
-    my $utc  = $days*86400 + $h*3600 + $mi*60 + $s;
-    return $utc - ($tzh*3600 + $tzm*60) * ($sign eq '+' ? 1 : -1);
-}
-
 use Market::MarketData;
 use Market::IndicatorManager;
 use Market::Indicators::ATR;
@@ -56,7 +33,8 @@ while ( my $line = <$fh> ) {
     my ($time_str, $open, $high, $low, $close, $volume) = split /,/, $line;
     next unless defined $volume;
 
-    my $epoch = parse_ts($time_str);
+    my $epoch = Market::MarketData->parse_timestamp($time_str);
+    die "Invalid timestamp in $CSV_FILE: $time_str\n" unless defined $epoch;
     $market->add_candle({
         time   => $epoch,
         open   => $open   + 0,

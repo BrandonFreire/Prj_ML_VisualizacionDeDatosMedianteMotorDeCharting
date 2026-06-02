@@ -3,7 +3,11 @@ package Market::MarketData;
 use strict;
 use warnings;
 use POSIX qw(floor);
-use AI::MXNet qw(mx);
+
+my $HAS_MOMENT;
+BEGIN {
+    eval { require Time::Moment; $HAS_MOMENT = 1 };
+}
 
 sub new {
     my ($class) = @_;
@@ -26,10 +30,28 @@ sub add_candle {
     push @{ $self->{data}{'1'} }, $candle;
 }
 
-# Build higher-timeframe candles using MXNet tensors for:
-#   1. Bucket index computation (vectorized floor division)
-#   2. Group boundary detection (vectorized diff)
-#   3. Per-group high/low/volume reductions (tensor max/min/sum on slices)
+# Parse ISO timestamps with explicit timezone offsets.
+sub parse_timestamp {
+    my ($class_or_self, $ts) = @_;
+    if ($HAS_MOMENT) {
+        return Time::Moment->from_string($ts)->epoch;
+    }
+
+    return undef unless defined $ts && $ts =~
+        /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})([-+])(\d{2}):(\d{2})$/;
+
+    my ($y,$mo,$d,$h,$mi,$s,$sign,$tzh,$tzm) = ($1,$2,$3,$4,$5,$6,$7,$8,$9);
+    my @dim = (0,31,59,90,120,151,181,212,243,273,304,334);
+    my $leap = ($y%4==0 && ($y%100!=0 || $y%400==0)) ? 1 : 0;
+    my $doy  = $dim[$mo-1] + ($mo>2 ? $leap : 0) + $d;
+    my $days = ($y-1970)*365 + int(($y-1969)/4)
+               - int(($y-1901)/100) + int(($y-1601)/400) + $doy - 1;
+    my $utc  = $days*86400 + $h*3600 + $mi*60 + $s;
+    return $utc - ($tzh*3600 + $tzm*60) * ($sign eq '+' ? 1 : -1);
+}
+
+# Build higher-timeframe candles with integer timestamp buckets.
+# Do not use float tensors for epochs: float32 loses minute-level precision.
 sub build_tf_candles {
     my ($self, $tf) = @_;
     my @base    = @{ $self->{data}{'1'} };
@@ -41,73 +63,40 @@ sub build_tf_candles {
         return;
     }
 
-    # ---- Extract columns ----
-    my (@times, @opens, @highs, @lows, @closes, @vols);
-    for my $c (@base) {
-        push @times,  $c->{time};
-        push @opens,  $c->{open};
-        push @highs,  $c->{high};
-        push @lows,   $c->{low};
-        push @closes, $c->{close};
-        push @vols,   $c->{volume};
-    }
-
-    # ---- Lift OHLCV to ndarrays ----
-    my $nd_high = mx->nd->array(\@highs,  ctx => mx->cpu());
-    my $nd_low  = mx->nd->array(\@lows,   ctx => mx->cpu());
-    my $nd_vol  = mx->nd->array(\@vols,   ctx => mx->cpu());
-
-    # ---- Bucket timestamps (vectorized floor division) ----
-    my $nd_time   = mx->nd->array(\@times, ctx => mx->cpu());
-    my $nd_bucket = ($nd_time / $tf_secs)->floor() * $tf_secs;
-    my @buckets   = @{ $nd_bucket->asarray() };
-
-    # ---- Group boundary detection (vectorized diff) ----
-    # diff[i] = bucket[i+1] - bucket[i]; nonzero means new group starts at i+1
-    my @diff;
-    if ( $n > 1 ) {
-        my $nd_b_cur  = $nd_bucket->slice([1, $n - 1]);
-        my $nd_b_prev = $nd_bucket->slice([0, $n - 2]);
-        my $nd_diff   = $nd_b_cur - $nd_b_prev;
-        @diff         = @{ $nd_diff->asarray() };
-    }
-
-    # Group start indices: 0, then every i+1 where diff[i] != 0
-    my @starts = (0, map { $_ + 1 } grep { $diff[$_] != 0 } 0 .. $#diff);
-
-    # ---- Per-group aggregation (Perl loop over groups, Perl arrays for speed) ----
-    # MXNet overhead per call is too high for 6000 tiny slices.
-    # Tensor work is done above (bucket computation + boundary detection on 30k elements).
     my @result;
-    for my $gi (0 .. $#starts) {
-        my $s  = $starts[$gi];
-        my $e  = ($gi + 1 < scalar @starts) ? $starts[$gi + 1] - 1 : $n - 1;
+    my $current;
+    my $current_bucket;
 
-        my $high = $highs[$s];
-        my $low  = $lows[$s];
-        my $vol  = $vols[$s];
+    for my $c (@base) {
+        my $bucket = int( $c->{time} / $tf_secs ) * $tf_secs;
 
-        for my $i ($s + 1 .. $e) {
-            $high = $highs[$i] if $highs[$i] > $high;
-            $low  = $lows[$i]  if $lows[$i]  < $low;
-            $vol += $vols[$i];
+        if ( !defined $current_bucket || $bucket != $current_bucket ) {
+            push @result, $current if $current;
+            $current_bucket = $bucket;
+            $current = {
+                time   => $bucket,
+                open   => $c->{open},
+                high   => $c->{high},
+                low    => $c->{low},
+                close  => $c->{close},
+                volume => $c->{volume},
+            };
+            next;
         }
 
-        push @result, {
-            time   => $buckets[$s],
-            open   => $opens[$s],
-            high   => $high,
-            low    => $low,
-            close  => $closes[$e],
-            volume => $vol,
-        };
+        $current->{high}   = $c->{high} if $c->{high} > $current->{high};
+        $current->{low}    = $c->{low}  if $c->{low}  < $current->{low};
+        $current->{close}  = $c->{close};
+        $current->{volume} += $c->{volume};
     }
+    push @result, $current if $current;
 
     $self->{data}{$tf} = \@result;
 }
 
 sub build_timeframes {
     my ($self) = @_;
+    @{ $self->{data}{'1'} } = sort { $a->{time} <=> $b->{time} } @{ $self->{data}{'1'} };
     $self->build_tf_candles(5);
     $self->build_tf_candles(15);
 }

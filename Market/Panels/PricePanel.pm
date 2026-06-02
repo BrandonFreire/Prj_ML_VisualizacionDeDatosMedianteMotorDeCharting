@@ -111,9 +111,12 @@ sub render_candle {
     my $body_w = $bar_w * 0.7;
     $body_w = 1 if $body_w < 1;
 
+    my $high = _max4( $c->{high}, $c->{low}, $c->{open}, $c->{close} );
+    my $low  = _min4( $c->{high}, $c->{low}, $c->{open}, $c->{close} );
+
     my $x       = $self->round( $scale->index_to_center_x($ix) );
-    my $y_high  = $self->round( $scale->value_to_y( $c->{high} ) );
-    my $y_low   = $self->round( $scale->value_to_y( $c->{low} ) );
+    my $y_high  = $self->round( $scale->value_to_y($high) );
+    my $y_low   = $self->round( $scale->value_to_y($low) );
     my $y_open  = $self->round( $scale->value_to_y( $c->{open} ) );
     my $y_close = $self->round( $scale->value_to_y( $c->{close} ) );
 
@@ -343,6 +346,18 @@ sub draw_time_axis {
         push @accepted, $ts unless $skip;
     }
 
+    if ( !@accepted && @$timestamps ) {
+        my $first = $timestamps->[0];
+        my $last  = $timestamps->[-1];
+        for my $ts ( $first, $last ) {
+            next unless $ts;
+            my $x = $self->round( $scale->index_to_center_x( $ts->{index} ) );
+            next if $x < 0 || $x > $w;
+            $ts->{x} = $x;
+            push @accepted, $ts;
+        }
+    }
+
     for my $ts ( sort { $a->{index} <=> $b->{index} } @accepted ) {
         my $x = $ts->{x};
 
@@ -356,6 +371,24 @@ sub draw_time_axis {
             -tags   => ['timeaxis'],
         );
     }
+}
+
+sub _max4 {
+    my ($a, $b, $c, $d) = @_;
+    my $m = $a;
+    $m = $b if $b > $m;
+    $m = $c if $c > $m;
+    $m = $d if $d > $m;
+    return $m;
+}
+
+sub _min4 {
+    my ($a, $b, $c, $d) = @_;
+    my $m = $a;
+    $m = $b if $b < $m;
+    $m = $c if $c < $m;
+    $m = $d if $d < $m;
+    return $m;
 }
 
 1;

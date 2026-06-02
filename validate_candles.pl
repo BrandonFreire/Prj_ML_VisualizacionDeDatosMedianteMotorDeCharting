@@ -6,29 +6,7 @@ use FindBin qw($Bin);
 use lib $Bin;
 use POSIX qw(strftime);
 
-my $HAS_MOMENT;
-BEGIN {
-    eval { require Time::Moment; $HAS_MOMENT = 1 };
-}
-
 use Market::MarketData;
-
-sub parse_ts {
-    my ($ts) = @_;
-    if ($HAS_MOMENT) {
-        return Time::Moment->from_string($ts)->epoch;
-    }
-    return 0 unless $ts =~
-        /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})([-+])(\d{2}):(\d{2})$/;
-    my ($y,$mo,$d,$h,$mi,$s,$sign,$tzh,$tzm) = ($1,$2,$3,$4,$5,$6,$7,$8,$9);
-    my @dim = (0,31,59,90,120,151,181,212,243,273,304,334);
-    my $leap = ($y%4==0 && ($y%100!=0 || $y%400==0)) ? 1 : 0;
-    my $doy  = $dim[$mo-1] + ($mo>2 ? $leap : 0) + $d;
-    my $days = ($y-1970)*365 + int(($y-1969)/4)
-               - int(($y-1901)/100) + int(($y-1601)/400) + $doy - 1;
-    my $utc  = $days*86400 + $h*3600 + $mi*60 + $s;
-    return $utc - ($tzh*3600 + $tzm*60) * ($sign eq '+' ? 1 : -1);
-}
 
 my $csv_file = $ARGV[0] // '2026_03.csv';
 my $market   = Market::MarketData->new();
@@ -39,9 +17,11 @@ while ( my $line = <$fh> ) {
     chomp $line;
     my ($time_str, $open, $high, $low, $close, $volume) = split /,/, $line;
     next unless defined $volume;
+    my $epoch = Market::MarketData->parse_timestamp($time_str);
+    die "Invalid timestamp in $csv_file: $time_str\n" unless defined $epoch;
 
     $market->add_candle({
-        time   => parse_ts($time_str),
+        time   => $epoch,
         open   => $open   + 0,
         high   => $high   + 0,
         low    => $low    + 0,
@@ -52,10 +32,81 @@ while ( my $line = <$fh> ) {
 close $fh;
 
 $market->build_timeframes();
+validate_timeframes($market);
 
 for my $tf ( '1', '5', '15' ) {
     $market->set_timeframe($tf);
     print_timeframe_samples($market, $tf);
+}
+
+sub validate_timeframes {
+    my ($market) = @_;
+    validate_array($market->get_data()->{'1'}, 1);
+    validate_array($market->get_data()->{'5'}, 5);
+    validate_array($market->get_data()->{'15'}, 15);
+    validate_aggregate($market, 5);
+    validate_aggregate($market, 15);
+    print "Validation OK: 1m sorted, 5m/15m aligned, OHLCV aggregation matches base candles.\n";
+}
+
+sub validate_array {
+    my ($arr, $tf) = @_;
+    my $tf_secs = $tf * 60;
+    for my $i (0 .. $#$arr) {
+        my $c = $arr->[$i];
+        die "${tf}m candle $i has invalid high/low\n"
+            if $c->{high} < $c->{low};
+        die "${tf}m candle $i open outside high/low\n"
+            if $c->{open} > $c->{high} || $c->{open} < $c->{low};
+        die "${tf}m candle $i close outside high/low\n"
+            if $c->{close} > $c->{high} || $c->{close} < $c->{low};
+        die "${tf}m candle $i timestamp is not aligned\n"
+            if $tf > 1 && $c->{time} % $tf_secs != 0;
+        die "${tf}m candles are not sorted at $i\n"
+            if $i > 0 && $arr->[$i - 1]{time} > $c->{time};
+    }
+}
+
+sub validate_aggregate {
+    my ($market, $tf) = @_;
+    my $base = $market->get_data()->{'1'};
+    my $got  = $market->get_data()->{$tf};
+    my $tf_secs = $tf * 60;
+    my @expected;
+    my $cur;
+    my $bucket;
+
+    for my $c (@$base) {
+        my $b = int($c->{time} / $tf_secs) * $tf_secs;
+        if (!defined $bucket || $b != $bucket) {
+            push @expected, $cur if $cur;
+            $bucket = $b;
+            $cur = {
+                time   => $b,
+                open   => $c->{open},
+                high   => $c->{high},
+                low    => $c->{low},
+                close  => $c->{close},
+                volume => $c->{volume},
+            };
+            next;
+        }
+        $cur->{high} = $c->{high} if $c->{high} > $cur->{high};
+        $cur->{low}  = $c->{low}  if $c->{low}  < $cur->{low};
+        $cur->{close} = $c->{close};
+        $cur->{volume} += $c->{volume};
+    }
+    push @expected, $cur if $cur;
+
+    die "${tf}m candle count mismatch: got " . scalar(@$got) . " expected " . scalar(@expected) . "\n"
+        if scalar(@$got) != scalar(@expected);
+
+    for my $i (0 .. $#expected) {
+        for my $field (qw(time open high low close volume)) {
+            die "${tf}m mismatch at candle $i field $field: got $got->[$i]{$field} expected $expected[$i]{$field}\n"
+                if $got->[$i]{$field} != $expected[$i]{$field};
+        }
+    }
 }
 
 sub print_timeframe_samples {
