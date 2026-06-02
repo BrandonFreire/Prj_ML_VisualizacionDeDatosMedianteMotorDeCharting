@@ -471,36 +471,67 @@ sub reset_view {
 }
 
 # Compute time labels for visible range (filtered to avoid overlap)
+sub _nice_step_minutes {
+    my ($self, $raw) = @_;
+    my @steps = (1, 2, 3, 5, 10, 15, 20, 30, 60, 120, 180, 240, 360, 720, 1440);
+    for my $s (@steps) {
+        return $s if $raw <= $s;
+    }
+    return 1440;
+}
+
 sub compute_intraday_labels {
     my ($self, $start, $end, $scale) = @_;
     my @labels;
-    my $prev_day  = -1;
-    my $prev_hour = -1;
 
-    for my $i ( $start .. $end ) {
+    my $bar_w = 8;
+    if ($scale && ($scale->{visible_bars} || 0) > 0) {
+        $bar_w = $scale->{x_width} / $scale->{visible_bars};
+    }
+
+    my $target_px      = 90;
+    my $bars_per_label = int($target_px / ($bar_w || 1) + 0.999);
+    $bars_per_label = 1 if $bars_per_label < 1;
+
+    my $tf_min = $self->{market}{current_tf} || 1;
+    $tf_min += 0;
+    $tf_min = 1 if $tf_min <= 0;
+
+    my $step_min = $self->_nice_step_minutes($bars_per_label * $tf_min);
+    my $step_sec = $step_min * 60;
+
+    my $prev_day_key = undef;
+    my $prev_bucket  = undef;
+
+    for my $i ($start .. $end) {
         my $ts = $self->{market}->get_timestamp($i);
         next unless defined $ts;
 
-        my @lt   = localtime($ts);
-        my $hour = $lt[2];
-        my $day  = $lt[3];
-        my $mon  = $lt[4] + 1;
+        my @lt = localtime($ts);
+        my $day_key = sprintf("%04d-%02d-%02d", $lt[5] + 1900, $lt[4] + 1, $lt[3]);
 
-        my $label;
-        if ( $day != $prev_day ) {
-            $label     = sprintf( "%02d/%02d", $mon, $day );
-            $prev_day  = $day;
-            $prev_hour = $hour;
-        }
-        elsif ( $hour != $prev_hour ) {
-            $label     = sprintf( "%02d:00", $hour );
-            $prev_hour = $hour;
+        if (!defined $prev_day_key || $day_key ne $prev_day_key) {
+            push @labels, {
+                index => $i,
+                label => sprintf("%02d/%02d", $lt[4] + 1, $lt[3]),
+                time  => $ts,
+            };
+            $prev_day_key = $day_key;
+            $prev_bucket  = int($ts / $step_sec);
+            next;
         }
 
-        if ( defined $label ) {
-            push @labels, { index => $i, label => $label, time => $ts };
-        }
+        my $bucket = int($ts / $step_sec);
+        next if defined $prev_bucket && $bucket == $prev_bucket;
+        $prev_bucket = $bucket;
+
+        my $label = $step_min < 60
+            ? sprintf("%02d:%02d", $lt[2], $lt[1])
+            : sprintf("%02d:00", $lt[2]);
+
+        push @labels, { index => $i, label => $label, time => $ts };
     }
+
     return \@labels;
 }
 

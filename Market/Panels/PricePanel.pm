@@ -261,11 +261,18 @@ sub draw_time_axis {
 
     $canvas->createLine( 0, $y, $w, $y, -fill => $COLOR_AXIS, -tags => ['timeaxis'] );
 
+    # Dynamic label spacing: wider candles => allow denser labels; narrow candles => separate more
+    my $min_px = 55;
+    if ( ($scale->{visible_bars} || 0) > 0 ) {
+        my $bar_w = $scale->{x_width} / $scale->{visible_bars};
+        $min_px = $bar_w > 20 ? 35 : $bar_w < 7 ? 70 : 55;
+    }
+
     my $prev_x = -999;
     for my $ts (@$timestamps) {
         my $x = $self->round( $scale->index_to_center_x( $ts->{index} ) );
         next if $x < 0 || $x > $w;
-        next if abs( $x - $prev_x ) < 55;
+        next if abs( $x - $prev_x ) < $min_px;
 
         $canvas->createLine( $x, $y, $x, $y + 4, -fill => $COLOR_AXIS, -tags => ['timeaxis'] );
         $canvas->createText(
