@@ -24,17 +24,22 @@ sub new {
 
         visible_bars   => $args{visible_bars} // 100,
         offset         => 0,
+        _offset_exact  => 0.0,
+        _x_offset      => 0.0,
         y_auto         => 1,
         y_min_manual   => 0,
         y_max_manual   => 1,
 
-        crosshair_x    => undef,
-        crosshair_y    => undef,
-        pending_render => 0,
+        crosshair_x       => undef,
+        crosshair_y       => undef,
+        _crosshair_source => 'price',
+        pending_render    => 0,
 
         _drag_start_x      => undef,
         _drag_start_offset => 0,
         _render_state      => undef,
+
+        on_scale_mode_change => undef,
 
         price_panel => undef,
         atr_panel   => undef,
@@ -125,6 +130,7 @@ sub render {
         $price_scale->{y_min} = $self->{y_min_manual};
         $price_scale->{y_max} = $self->{y_max_manual};
     }
+    $price_scale->{x_offset} = $self->{_x_offset} // 0;
     $self->{price_scale} = $price_scale;
 
     # Build ATR scale
@@ -143,6 +149,7 @@ sub render {
     my ( $a_min, $a_max ) = $self->{atr_panel}->get_y_range($atr_slice);
     $atr_scale->{y_min} = $a_min;
     $atr_scale->{y_max} = $a_max;
+    $atr_scale->{x_offset} = $self->{_x_offset} // 0;
     $self->{atr_scale} = $atr_scale;
 
     # Dispatch to incremental or full render
@@ -176,6 +183,7 @@ sub render {
 sub _can_incremental {
     my ($self, $rs, $start, $end, $pscale, $n_visible, $pw, $ph) = @_;
 
+    return 0 if $self->{_x_offset} != 0;   # x_offset sub-pixel requiere full render
     return 0 if $rs->{pw} != $pw || $rs->{ph} != $ph;
     return 0 if $rs->{visible_bars} != $n_visible;
 
@@ -208,7 +216,6 @@ sub _full_render {
     $self->{price_panel}->render( $pc, $data_slice, $pscale );
     my $ts = $self->compute_intraday_labels( $start, $end, $pscale );
     $self->{price_panel}->draw_time_axis( $pc, $ts );
-    $self->{price_panel}->_init_crosshair_objects();
 
     # --- Price scale (must come after candles so lastprice draws on ready canvas) ---
     $psc->delete('all');
@@ -219,7 +226,6 @@ sub _full_render {
     $ac->delete('all');
     $self->{atr_panel}->set_scale($ascale);
     $self->{atr_panel}->render( $ac, $atr_slice, $ascale );
-    $self->{atr_panel}->_init_crosshair();
 
     # --- ATR scale ---
     $asc->delete('all');
@@ -331,10 +337,30 @@ sub bind_events {
         $self->_vertical_drag( $e->y - ( $self->{_vy_drag_start} // $e->y ) );
         $self->{_vy_drag_start} = $e->y;
     });
+
+    # Crosshair via MainWindow: <Motion> en canvas-level no dispara de forma confiable
+    # en X11/Linux. Se usan coords de pantalla (X,Y mayusculas) y se convierten a canvas-local
+    # con rootx/rooty, igual que funciona el pan con Ev('X').
+    my $mw = $self->{price_canvas}->MainWindow;
+    $mw->bind( '<Motion>', [ sub {
+        $self->_handle_global_motion( $_[1], $_[2] );
+    }, Tk::Ev('X'), Tk::Ev('Y') ] );
+    $mw->bind( '<Leave>', sub { $self->_hide_crosshair_all() } );
+
+    # Ctrl+scroll al nivel del MainWindow (mas confiable que canvas-level en X11).
+    # crosshair_x ya contiene la coord canvas-local exacta bajo el cursor.
+    $mw->bind( '<Control-Button-4>', sub {
+        $self->zoom_at( -1, $self->{crosshair_x} );
+    });
+    $mw->bind( '<Control-Button-5>', sub {
+        $self->zoom_at(  1, $self->{crosshair_x} );
+    });
 }
 
 sub _bind_all_canvas {
     my ($self, $c) = @_;
+
+    # Zoom normal (sin Ctrl): ajusta visible_bars manteniendo el borde derecho fijo
     $c->bind( '<Button-4>', sub { $self->zoom(-1) } );
     $c->bind( '<Button-5>', sub { $self->zoom( 1) } );
     $c->bind( '<MouseWheel>', sub {
@@ -343,45 +369,106 @@ sub _bind_all_canvas {
         $c->xviewMoveto(0); $c->yviewMoveto(0);
     });
 
-    $c->bind( '<Motion>', sub {
-        my $e = $c->XEvent();
-        $self->_on_mouse_move($e);
-    });
-    $c->bind( '<Leave>', sub {
-        $self->{crosshair_x} = undef;
-        $self->{crosshair_y} = undef;
-        $self->{price_panel}->hide_crosshair();
-        $self->{atr_panel}->hide_crosshair();
-    });
+    # (Ctrl+scroll se maneja al nivel del MainWindow en bind_events, no aqui)
+}
+
+# Convierte coords de pantalla (rx, ry) a coords locales del canvas para el crosshair.
+# Se usa Motion al nivel del MainWindow porque es mas confiable que canvas-level en X11.
+sub _handle_global_motion {
+    my ($self, $rx, $ry) = @_;
+
+    my $pc = $self->{price_canvas};
+    my $ac = $self->{atr_canvas};
+
+    my $pcx = $rx - $pc->rootx;
+    my $pcy = $ry - $pc->rooty;
+    if ( $pcx >= 0 && $pcx < ( $pc->width || 900 )
+      && $pcy >= 0 && $pcy < ( $pc->height || 500 ) ) {
+        $self->_on_mouse_move_xy( $pcx, $pcy, 'price' );
+        return;
+    }
+
+    my $acx = $rx - $ac->rootx;
+    my $acy = $ry - $ac->rooty;
+    if ( $acx >= 0 && $acx < ( $ac->width || 900 )
+      && $acy >= 0 && $acy < ( $ac->height || 150 ) ) {
+        $self->_on_mouse_move_xy( $acx, $acy, 'atr' );
+        return;
+    }
+
+    $self->_hide_crosshair_all();
+}
+
+sub _hide_crosshair_all {
+    my ($self) = @_;
+    return unless defined $self->{crosshair_x};
+    $self->{crosshair_x} = undef;
+    $self->{crosshair_y} = undef;
+    $self->{price_panel}->hide_crosshair();
+    $self->{atr_panel}->hide_crosshair();
 }
 
 # --- Public pan methods (called from market.pl) ---
 
 sub drag_start {
-    my ($self, $global_x) = @_;
+    my ($self, $global_x, $global_y) = @_;
     $self->{_drag_start_x}      = $global_x;
+    $self->{_drag_start_y}      = $global_y;
     $self->{_drag_start_offset} = $self->{offset};
+    # Capturar rango Y al inicio del drag para pan vertical relativo al punto de inicio
+    $self->{_drag_start_y_min}  = $self->{y_min_manual};
+    $self->{_drag_start_y_max}  = $self->{y_max_manual};
 }
 
 sub drag_end {
     my ($self) = @_;
     $self->{_drag_start_x} = undef;
+    $self->{_drag_start_y} = undef;
 }
 
 sub drag_move {
-    my ($self, $global_x) = @_;
+    my ($self, $global_x, $global_y) = @_;
     return unless defined $self->{_drag_start_x};
 
+    # --- Pan horizontal (siempre) ---
     my $dx    = $global_x - $self->{_drag_start_x};
     my $bar_w = ( $self->{price_canvas}->width() || 900 ) / ( $self->{visible_bars} || 100 );
     $bar_w    = 0.5 if $bar_w < 0.5;
 
-    my $new_off = $self->{_drag_start_offset} - int( $dx / $bar_w );
+    my $new_off = $self->{_drag_start_offset} + int( $dx / $bar_w );
     $new_off = 0                             if $new_off < 0;
     $new_off = $self->{market}->last_index() if $new_off > $self->{market}->last_index();
 
-    if ( $new_off != $self->{offset} ) {
-        $self->{offset} = $new_off;
+    my $needs_render = ( $new_off != $self->{offset} || $self->{_x_offset} != 0 );
+
+    # --- Pan vertical (solo en modo manual) ---
+    if ( !$self->{y_auto} && defined $self->{_drag_start_y} && $self->{price_scale} ) {
+        my $dy    = $global_y - $self->{_drag_start_y};   # positivo = mouse hacia abajo
+        my $range = $self->{_drag_start_y_max} - $self->{_drag_start_y_min};
+        my $ph    = $self->{price_scale}{y_height} || 400;
+
+        # En pantalla Y crece hacia abajo, pero precio crece hacia arriba → invertir signo
+        my $price_shift = $dy * $range / $ph;
+
+        my $new_y_min = $self->{_drag_start_y_min} + $price_shift;
+        my $new_y_max = $self->{_drag_start_y_max} + $price_shift;
+
+        if ( abs($new_y_min - $self->{y_min_manual}) > 1e-9
+          || abs($new_y_max - $self->{y_max_manual}) > 1e-9 ) {
+            $self->{y_min_manual}  = $new_y_min;
+            $self->{y_max_manual}  = $new_y_max;
+            $self->{_render_state} = undef;   # Y cambio → full render obligatorio
+            $needs_render = 1;
+        }
+    }
+
+    if ($needs_render) {
+        $self->{offset}        = $new_off;
+        $self->{_offset_exact} = $new_off * 1.0;
+        if ( $self->{_x_offset} != 0 ) {
+            $self->{_x_offset}     = 0.0;
+            $self->{_render_state} = undef;
+        }
         $self->render();
     }
 }
@@ -396,6 +483,70 @@ sub zoom {
     $new_bars = 5000 if $new_bars > 5000;
     $self->{visible_bars} = $new_bars;
     $self->{_render_state} = undef;    # force full render after zoom
+    my $tf = $self->{market}{current_tf};
+    $self->{price_canvas}->toplevel->title("Market Chart | ${tf}m  [velas: $new_bars]");
+    $self->request_render();
+}
+
+# Zoom centrado en cursor_x: la vela bajo el cursor mantiene su posicion en pantalla.
+#
+# Problema del enfoque anterior (frac-based): redondear new_bars introduce un error
+# que se acumula en cada paso de zoom consecutivo porque target_ix se recalcula
+# desde la escala ya redondeada.
+#
+# Solucion: guardar _offset_exact (float) entre llamadas. Cada llamada calcula
+# target_ix desde _offset_exact (no desde el offset entero redondeado), por lo que
+# el error por paso es como maximo 0.5 * bar_w y NO se acumula.
+#
+# Derivacion:
+#   target_ix  = start_exact + cursor_x * old_bars / pw
+#   new_start  = target_ix - cursor_x * new_bars / pw
+#   new_end    = new_start + new_bars - 1
+#   new_offset = last - new_end
+sub zoom_at {
+    my ($self, $delta, $cursor_x) = @_;
+
+    my $old_bars = $self->{visible_bars};
+    my $factor   = $delta > 0 ? 1.4 : 0.65;
+    my $new_bars = int( $old_bars * $factor + 0.5 );
+    $new_bars = 5    if $new_bars < 5;
+    $new_bars = 5000 if $new_bars > 5000;
+    return if $new_bars == $old_bars;
+
+    my $pw = $self->{price_canvas}->width() || 900;
+    $cursor_x //= $pw / 2;
+    $cursor_x = 0   if $cursor_x < 0;
+    $cursor_x = $pw if $cursor_x > $pw;
+
+    my $last      = $self->{market}->last_index();
+    my $old_bar_w = $pw / $old_bars;
+    my $new_bar_w = $pw / $new_bars;
+
+    # Indice fraccional exacto bajo el cursor (usa _x_offset actual para precision)
+    my $start     = $last - $self->{offset} - $old_bars + 1;
+    my $frac_ix   = ($cursor_x - ($self->{_x_offset} // 0)) / $old_bar_w + $start - 0.5;
+
+    # Calcular new_off entero (aproximacion necesaria por indices enteros)
+    my $new_end_exact    = $frac_ix - $cursor_x * $new_bars / $pw + $new_bars - 0.5;
+    my $new_offset_exact = $last - $new_end_exact;
+    my $new_off          = int( $new_offset_exact + 0.5 );
+
+    my $clamped = 0;
+    if ( $new_off < 0 )     { $new_off = 0;     $clamped = 1; }
+    if ( $new_off > $last ) { $new_off = $last;  $clamped = 1; }
+
+    $self->{_offset_exact} = $clamped ? $new_off * 1.0 : $new_offset_exact;
+
+    # Calcular _x_offset sub-pixel para que frac_ix quede exactamente en cursor_x.
+    # Esto absorbe el error de redondeo de new_off => drift = 0 entre pasos consecutivos.
+    my $new_start = $last - $new_off - $new_bars + 1;
+    my $new_x_offset = $clamped ? 0.0
+                                : $cursor_x - ($frac_ix - $new_start + 0.5) * $new_bar_w;
+    $self->{_x_offset} = $new_x_offset;
+
+    $self->{visible_bars}  = $new_bars;
+    $self->{offset}        = $new_off;
+    $self->{_render_state} = undef;
     my $tf = $self->{market}{current_tf};
     $self->{price_canvas}->toplevel->title("Market Chart | ${tf}m  [velas: $new_bars]");
     $self->request_render();
@@ -416,11 +567,37 @@ sub _vertical_drag {
     my $mid      = ( $scale->{y_max} + $scale->{y_min} ) / 2;
     my $new_half = ( $range / 2 ) * $factor;
 
+    my $was_auto       = $self->{y_auto};
     $self->{y_auto}        = 0;
     $self->{y_min_manual}  = $mid - $new_half;
     $self->{y_max_manual}  = $mid + $new_half;
     $self->{_render_state} = undef;
+
+    # Notificar cambio de modo solo si cambia (de auto a manual)
+    if ($was_auto && $self->{on_scale_mode_change}) {
+        $self->{on_scale_mode_change}->(0);
+    }
+
     $self->request_render();
+}
+
+sub toggle_auto_scale {
+    my ($self) = @_;
+    if ( $self->{y_auto} && $self->{price_scale} ) {
+        # Al entrar a manual: copiar el rango actual para no perder las velas de vista
+        $self->{y_min_manual} = $self->{price_scale}{y_min};
+        $self->{y_max_manual} = $self->{price_scale}{y_max};
+    }
+    $self->{y_auto}        = !$self->{y_auto};
+    $self->{_render_state} = undef;
+    $self->{on_scale_mode_change}->( $self->{y_auto} ) if $self->{on_scale_mode_change};
+    $self->request_render();
+    return $self->{y_auto};
+}
+
+sub set_scale_mode_callback {
+    my ($self, $cb) = @_;
+    $self->{on_scale_mode_change} = $cb;
 }
 
 sub _vertical_zoom {
@@ -436,18 +613,49 @@ sub _vertical_zoom {
     $self->request_render();
 }
 
-sub _on_mouse_move {
-    my ($self, $event) = @_;
-    $self->{crosshair_x} = $event->x;
-    $self->{crosshair_y} = $event->y;
+sub _on_mouse_move_xy {
+    my ($self, $x, $y, $source) = @_;
+    $self->{crosshair_x}       = $x;
+    $self->{crosshair_y}       = $y;
+    $self->{_crosshair_source} = $source // 'price';
     $self->_draw_crosshair_all();
 }
 
 sub _draw_crosshair_all {
     my ($self) = @_;
-    return unless defined $self->{crosshair_x};
-    $self->{price_panel}->draw_crosshair( $self->{crosshair_x}, $self->{crosshair_y} );
-    $self->{atr_panel}->draw_crosshair(   $self->{crosshair_x}, $self->{crosshair_y} );
+    return unless defined $self->{crosshair_x} && $self->{price_scale};
+
+    my $scale = $self->{price_scale};
+
+    # Snap la linea vertical al centro de la barra mas cercana
+    my $ix = $scale->x_to_index( $self->{crosshair_x} );
+    my $lo = $scale->{start_index};
+    my $hi = $scale->{start_index} + $scale->{visible_bars} - 1;
+    $ix    = $lo if $ix < $lo;
+    $ix    = $hi if $ix > $hi;
+    my $snapped_x = int( $scale->index_to_center_x($ix) + 0.5 );
+
+    # La linea horizontal solo se dibuja cuando el mouse esta sobre el panel de precio
+    my $price_y = ( $self->{_crosshair_source} eq 'price' ) ? $self->{crosshair_y} : undef;
+    $self->{price_panel}->draw_crosshair( $snapped_x, $price_y );
+
+    # Label de fecha/hora en el time-axis
+    my $ts = $self->{market}->get_timestamp($ix);
+    $self->{price_panel}->draw_crosshair_time_label( $snapped_x, $ts );
+
+    # OHLC legend en la esquina superior izquierda del canvas de precio
+    my $candle = $self->{market}->get_candle($ix);
+    my $prev   = $ix > 0 ? $self->{market}->get_candle($ix - 1) : undef;
+    $self->{price_panel}->draw_ohlc_legend($candle, $prev ? $prev->{close} : undef);
+
+    # Valor ATR en la barra bajo el cursor
+    my $atr_val;
+    my $atr_obj = $self->{indicators}->get('ATR');
+    if ($atr_obj) {
+        my $vals = $atr_obj->get_values();
+        $atr_val = $vals->[$ix] if defined $vals && $ix >= 0 && $ix < scalar @$vals;
+    }
+    $self->{atr_panel}->draw_crosshair( $snapped_x, $atr_val );
 }
 
 # Switch active timeframe, recompute indicators, reset view
@@ -464,9 +672,12 @@ sub set_timeframe {
 sub reset_view {
     my ($self) = @_;
     $self->{offset}        = 0;
+    $self->{_offset_exact} = 0.0;
+    $self->{_x_offset}     = 0.0;
     $self->{visible_bars}  = 100;
     $self->{y_auto}        = 1;
     $self->{_render_state} = undef;
+    $self->{on_scale_mode_change}->(1) if $self->{on_scale_mode_change};
     $self->request_render();
 }
 

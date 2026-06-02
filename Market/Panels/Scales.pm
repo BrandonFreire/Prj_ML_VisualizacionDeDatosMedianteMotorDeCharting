@@ -28,24 +28,28 @@ sub new {
 }
 
 # Convert data index -> screen X (center of bar)
+# x_offset permite desplazamiento sub-pixel para zoom sin drift (ver ChartEngine::zoom_at)
 sub index_to_x {
     my ($self, $index) = @_;
-    my $bar_w = $self->{x_width} / $self->{visible_bars};
-    return $self->{x_left} + ( $index - $self->{start_index} + 0.5 ) * $bar_w;
+    my $bar_w  = $self->{x_width} / $self->{visible_bars};
+    my $x_off  = $self->{x_offset} // 0;
+    return $self->{x_left} + ( $index - $self->{start_index} + 0.5 ) * $bar_w + $x_off;
 }
 
 # Convert screen X -> data index (integer)
 sub x_to_index {
     my ($self, $x) = @_;
     my $bar_w = $self->{x_width} / $self->{visible_bars};
-    return int( ( $x - $self->{x_left} ) / $bar_w ) + $self->{start_index};
+    my $x_off = $self->{x_offset} // 0;
+    return int( ( $x - $self->{x_left} - $x_off ) / $bar_w ) + $self->{start_index};
 }
 
 # Convert screen X -> data index (float, for precise crosshair)
 sub x_to_index_float {
     my ($self, $x) = @_;
     my $bar_w = $self->{x_width} / $self->{visible_bars};
-    return ( $x - $self->{x_left} ) / $bar_w + $self->{start_index};
+    my $x_off = $self->{x_offset} // 0;
+    return ( $x - $self->{x_left} - $x_off ) / $bar_w + $self->{start_index};
 }
 
 # Returns the screen X of the center of a bar

@@ -180,6 +180,30 @@ $toolbar->Button(
     -command          => sub { $engine->reset_view(); },
 )->pack( -side => 'left', -padx => 8, -pady => 2 );
 
+# Boton modo escala Y: Auto (verde) / Manual (amarillo)
+# Cambia cuando el usuario arrastra el eje Y o hace click aqui
+my $mode_btn;
+sub _update_mode_btn {
+    my ($is_auto) = @_;
+    return unless defined $mode_btn;
+    if ($is_auto) {
+        $mode_btn->configure( -text => 'Escala: Auto',   -fg => '#26a69a' );
+    } else {
+        $mode_btn->configure( -text => 'Escala: Manual', -fg => '#f6c90e' );
+    }
+}
+$mode_btn = $toolbar->Button(
+    -text             => 'Escala: Auto',
+    -bg               => '#2a2d3e',
+    -fg               => '#26a69a',
+    -relief           => 'flat',
+    -padx             => 10,
+    -pady             => 3,
+    -activebackground => '#3a3d4e',
+    -activeforeground => '#ffffff',
+    -command          => sub { $engine->toggle_auto_scale() },
+)->pack( -side => 'left', -padx => 2, -pady => 2 );
+
 # Boton cerrar (siempre visible en pantalla completa)
 $toolbar->Button(
     -text             => '  X  ',
@@ -195,13 +219,14 @@ $toolbar->Button(
 )->pack( -side => 'right', -padx => 4, -pady => 2 );
 
 # ---- 6. Bind events and first render ----
+$engine->set_scale_mode_callback( \&_update_mode_btn );
 $engine->bind_events();
 
-# Pan: click izquierdo + arrastrar
-# Ev('X') captura la coordenada global X en el momento del evento (forma correcta en Perl/Tk)
-$mw->bind( '<ButtonPress-1>',   [ sub { $engine->drag_start( $_[1] ) }, Ev('X') ] );
+# Pan horizontal + vertical (Ev('X','Y') = coords globales de pantalla)
+# El pan vertical solo actua en modo manual (ChartEngine lo verifica internamente)
+$mw->bind( '<ButtonPress-1>',   [ sub { $engine->drag_start( $_[1], $_[2] ) }, Ev('X'), Ev('Y') ] );
 $mw->bind( '<ButtonRelease-1>', sub { $engine->drag_end() } );
-$mw->bind( '<B1-Motion>',       [ sub { $engine->drag_move( $_[1] ) }, Ev('X') ] );
+$mw->bind( '<B1-Motion>',       [ sub { $engine->drag_move( $_[1], $_[2] ) }, Ev('X'), Ev('Y') ] );
 
 # Zoom: rueda del mouse
 $mw->bind( '<Button-4>',   sub { $engine->zoom(-1) } );

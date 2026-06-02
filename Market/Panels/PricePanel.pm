@@ -20,43 +20,9 @@ sub new {
         scale        => undef,
         _last_close  => undef,
         _last_open   => undef,
-        _ch_vline    => undef,
-        _ch_hline    => undef,
-        _ch_label    => undef,
     };
     bless $self, $class;
-    $self->_init_crosshair_objects();
     return $self;
-}
-
-# Creates persistent crosshair canvas items (hidden initially)
-sub _init_crosshair_objects {
-    my ($self) = @_;
-    my $c = $self->{canvas};
-
-    $self->{_ch_vline} = $c->createLine(
-        0, 0, 0, 1,
-        -fill  => '#ffffff',
-        -dash  => [ 3, 3 ],
-        -state => 'hidden',
-        -tags  => ['crosshair'],
-    );
-    $self->{_ch_hline} = $c->createLine(
-        0, 0, 1, 0,
-        -fill  => '#ffffff',
-        -dash  => [ 3, 3 ],
-        -state => 'hidden',
-        -tags  => ['crosshair'],
-    );
-    $self->{_ch_label} = $c->createText(
-        0, 0,
-        -text   => '',
-        -fill   => '#ffffff',
-        -font   => [ 'Helvetica', 9 ],
-        -anchor => 'w',
-        -state  => 'hidden',
-        -tags   => ['crosshair'],
-    );
 }
 
 sub round {
@@ -169,7 +135,6 @@ sub render_last_visible_price {
     # Label box on the right edge
     my $label = sprintf( "%.2f", $price );
     my $lx    = $scale->{x_width} - 4;
-    my $pad   = 3;
 
     $canvas->createRectangle(
         $lx - 56, $y - 9, $lx + 2, $y + 9,
@@ -216,26 +181,51 @@ sub set_y_range {
     }
 }
 
-# Draw synchronized crosshair on this panel
+# Draw synchronized crosshair (delete+redraw — no stale item IDs)
+# $y puede ser undef cuando el mouse esta sobre el panel ATR: solo se dibuja la linea vertical
 sub draw_crosshair {
     my ($self, $x, $y) = @_;
     my $c     = $self->{canvas};
+    my $sc    = $self->{scale_canvas};
     my $scale = $self->{scale};
-    my $w     = $c->width();
-    my $h     = $c->height();
+    my $w     = $scale ? $scale->{x_width}       : ( $c->width()  || 900 );
+    my $h     = $scale ? $scale->{y_height} + 30 : ( $c->height() || 500 );
 
-    $c->coords( $self->{_ch_vline}, $x, 0, $x, $h );
-    $c->coords( $self->{_ch_hline}, 0, $y, $w, $y );
-    $c->itemconfigure( $self->{_ch_vline}, -state => 'normal' );
-    $c->itemconfigure( $self->{_ch_hline}, -state => 'normal' );
+    $c->delete('ch_lines');
 
-    if ($scale) {
-        my $price = $scale->y_to_value($y);
-        $c->coords( $self->{_ch_label}, $w - 68, $y - 8 );
-        $c->itemconfigure( $self->{_ch_label},
-            -text  => sprintf( "%.2f", $price ),
-            -state => 'normal',
+    # Linea vertical — siempre
+    $c->createLine( $x, 0, $x, $h,
+        -fill  => '#ffffff',
+        -width => 1.5,
+        -dash  => [ 4, 3 ],
+        -tags  => [ 'crosshair', 'ch_lines' ],
+    );
+
+    # Linea horizontal + label de precio — solo cuando el mouse esta sobre este panel
+    if ( defined $y ) {
+        $c->createLine( 0, $y, $w, $y,
+            -fill  => '#ffffff',
+            -width => 1.5,
+            -dash  => [ 4, 3 ],
+            -tags  => [ 'crosshair', 'ch_lines' ],
         );
+        if ($sc && $scale) {
+            my $price = $scale->y_to_value($y);
+            my $sw    = $sc->width() || 75;
+            $sc->delete('crosshair');
+            $sc->createRectangle( 0, $y - 9, $sw, $y + 9,
+                -fill => '#787b86', -outline => '#787b86', -tags => ['crosshair'] );
+            $sc->createText( $sw / 2, $y,
+                -text   => sprintf( "%.2f", $price ),
+                -fill   => '#ffffff',
+                -font   => [ 'Helvetica', 9, 'bold' ],
+                -anchor => 'center',
+                -tags   => ['crosshair'],
+            );
+        }
+    }
+    else {
+        $sc->delete('crosshair') if $sc;
     }
 
     $c->raise('crosshair');
@@ -243,27 +233,98 @@ sub draw_crosshair {
 
 sub hide_crosshair {
     my ($self) = @_;
-    my $c = $self->{canvas};
-    $c->itemconfigure( $self->{_ch_vline}, -state => 'hidden' );
-    $c->itemconfigure( $self->{_ch_hline}, -state => 'hidden' );
-    $c->itemconfigure( $self->{_ch_label}, -state => 'hidden' );
+    $self->{canvas}->delete('ch_lines');
+    $self->{canvas}->delete('ch_timelabel');
+    $self->{canvas}->delete('ohlc_legend');
+    $self->{scale_canvas}->delete('crosshair') if $self->{scale_canvas};
 }
 
-# Draw the time axis at the bottom of the price canvas
+# Muestra O/H/L/C + cambio en la esquina superior izquierda del canvas de precio.
+# $candle     = hashref con open/high/low/close
+# $prev_close = cierre de la vela anterior (para calcular cambio); undef → usa open
+sub draw_ohlc_legend {
+    my ($self, $candle, $prev_close) = @_;
+    my $c = $self->{canvas};
+    $c->delete('ohlc_legend');
+    return unless $candle;
+
+    my ($o, $h, $l, $cl) = @{$candle}{qw(open high low close)};
+    my $bar_color = $cl >= $o ? $COLOR_UP : $COLOR_DOWN;
+
+    my $base       = defined $prev_close ? $prev_close : $o;
+    my $change     = $cl - $base;
+    my $pct        = $base != 0 ? $change / $base * 100 : 0;
+    my $chg_color  = $change >= 0 ? $COLOR_UP : $COLOR_DOWN;
+    my $chg_text   = sprintf( "%+.2f (%+.2f%%)", $change, $pct );
+
+    my $font  = [ 'Helvetica', 10 ];
+    my $y     = 14;
+    my $x     = 8;
+    my $GAP   = 8;   # espacio entre el valor y la siguiente letra
+
+    for my $field ( ['O', $o], ['H', $h], ['L', $l], ['C', $cl] ) {
+        my ($lbl, $val) = @$field;
+        my $val_str = sprintf("%.2f", $val);
+
+        $c->createText( $x, $y, -text => $lbl, -fill => '#787b86',
+            -font => $font, -anchor => 'w', -tags => ['ohlc_legend'] );
+        $x += 14;
+        $c->createText( $x, $y, -text => $val_str, -fill => $bar_color,
+            -font => $font, -anchor => 'w', -tags => ['ohlc_legend'] );
+        # Avanzar segun longitud del texto (7px por caracter aprox en Helvetica 10)
+        $x += length($val_str) * 7 + $GAP;
+    }
+
+    $c->createText( $x, $y, -text => $chg_text, -fill => $chg_color,
+        -font => $font, -anchor => 'w', -tags => ['ohlc_legend'] );
+
+    $c->raise('ohlc_legend');
+}
+
+# Caja de fecha/hora en el time-axis (delete+redraw)
+sub draw_crosshair_time_label {
+    my ($self, $x, $ts) = @_;
+    my $scale = $self->{scale};
+    return unless $scale && defined $ts;
+
+    my @lt    = localtime($ts);
+    my $label = sprintf( "%02d/%02d %02d:%02d", $lt[4] + 1, $lt[3], $lt[2], $lt[1] );
+    my $y     = $scale->{y_height} + 14;
+    my $hw    = 44;
+
+    my $c = $self->{canvas};
+    $c->delete('ch_timelabel');
+    $c->createRectangle( $x - $hw, $y - 9, $x + $hw, $y + 9,
+        -fill    => '#131722',
+        -outline => '#787b86',
+        -tags    => [ 'crosshair', 'ch_timelabel' ],
+    );
+    $c->createText( $x, $y,
+        -text   => $label,
+        -fill   => '#b2b5be',
+        -font   => [ 'Helvetica', 8 ],
+        -anchor => 'center',
+        -tags   => [ 'crosshair', 'ch_timelabel' ],
+    );
+    $c->raise('crosshair');
+}
+
+# Draw the time axis at the bottom of the price canvas.
+# Usa scale->y_height como posicion Y para evitar el bug donde canvas->height()
+# devuelve 1 antes de que el layout este resuelto.
 sub draw_time_axis {
     my ($self, $canvas, $timestamps) = @_;
     my $scale = $self->{scale};
     return unless $scale && @$timestamps;
 
-    my $h = $canvas->height();
-    my $w = $canvas->width();
-    my $y = $h - 28;
+    my $y = $scale->{y_height};
+    my $w = $scale->{x_width};
 
     $canvas->createLine( 0, $y, $w, $y, -fill => $COLOR_AXIS, -tags => ['timeaxis'] );
 
-    # Dynamic label spacing: wider candles => allow denser labels; narrow candles => separate more
+    # Espaciado minimo entre labels: velas anchas = labels mas juntas, velas angostas = mas separadas
     my $min_px = 55;
-    if ( ($scale->{visible_bars} || 0) > 0 ) {
+    if ( ( $scale->{visible_bars} || 0 ) > 0 ) {
         my $bar_w = $scale->{x_width} / $scale->{visible_bars};
         $min_px = $bar_w > 20 ? 35 : $bar_w < 7 ? 70 : 55;
     }

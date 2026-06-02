@@ -26,10 +26,8 @@ sub add_candle {
     push @{ $self->{data}{'1'} }, $candle;
 }
 
-# Build higher-timeframe candles using MXNet tensors for:
-#   1. Bucket index computation (vectorized floor division)
-#   2. Group boundary detection (vectorized diff)
-#   3. Per-group high/low/volume reductions (tensor max/min/sum on slices)
+# Build higher-timeframe candles from 1m data using integer arithmetic for bucket boundaries.
+# (MXNet float32 pierde precision con epochs de 2026: ULP ~128seg, bucket 5m=300seg → error de asignacion)
 sub build_tf_candles {
     my ($self, $tf) = @_;
     my @base    = @{ $self->{data}{'1'} };
@@ -48,25 +46,15 @@ sub build_tf_candles {
         push @vols,   $c->{volume};
     }
 
-    # ---- Lift OHLCV to ndarrays ----
-    my $nd_high = mx->nd->array(\@highs,  ctx => mx->cpu());
-    my $nd_low  = mx->nd->array(\@lows,   ctx => mx->cpu());
-    my $nd_vol  = mx->nd->array(\@vols,   ctx => mx->cpu());
+    # ---- Bucket timestamps (enteros Perl: float32 de MXNet pierde precision en epochs 2026) ----
+    # float32 ULP para ~1.78e9 es 128 seg → velas al borde del bucket caen en el bucket equivocado.
+    my @buckets = map { int($times[$_] / $tf_secs) * $tf_secs } 0 .. $n - 1;
 
-    # ---- Bucket timestamps (vectorized floor division) ----
-    my $nd_time   = mx->nd->array(\@times, ctx => mx->cpu());
-    my $nd_bucket = ($nd_time / $tf_secs)->floor() * $tf_secs;
-    my @buckets   = @{ $nd_bucket->asarray() };
-
-    # ---- Group boundary detection (vectorized diff) ----
-    # diff[i] = bucket[i+1] - bucket[i]; nonzero means new group starts at i+1
-    my $nd_b_cur  = $nd_bucket->slice([1, $n - 1]);
-    my $nd_b_prev = $nd_bucket->slice([0, $n - 2]);
-    my $nd_diff   = $nd_b_cur - $nd_b_prev;
-    my @diff      = @{ $nd_diff->asarray() };
-
-    # Group start indices: 0, then every i+1 where diff[i] != 0
-    my @starts = (0, map { $_ + 1 } grep { $diff[$_] != 0 } 0 .. $#diff);
+    # ---- Group boundary detection (Perl integers) ----
+    my @starts = (0);
+    for my $i (0 .. $n - 2) {
+        push @starts, $i + 1 if $buckets[$i + 1] != $buckets[$i];
+    }
 
     # ---- Per-group aggregation (Perl loop over groups, Perl arrays for speed) ----
     # MXNet overhead per call is too high for 6000 tiny slices.

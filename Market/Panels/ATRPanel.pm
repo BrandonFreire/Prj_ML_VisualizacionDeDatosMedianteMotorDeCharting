@@ -16,34 +16,9 @@ sub new {
         scale_canvas => $args{scale_canvas},
         scale        => undef,
         _last_atr    => undef,
-        _ch_vline    => undef,
-        _ch_label    => undef,
     };
     bless $self, $class;
-    $self->_init_crosshair();
     return $self;
-}
-
-sub _init_crosshair {
-    my ($self) = @_;
-    my $c = $self->{canvas};
-
-    $self->{_ch_vline} = $c->createLine(
-        0, 0, 0, 1,
-        -fill  => '#ffffff',
-        -dash  => [ 3, 3 ],
-        -state => 'hidden',
-        -tags  => ['crosshair'],
-    );
-    $self->{_ch_label} = $c->createText(
-        0, 0,
-        -text   => '',
-        -fill   => $COLOR_ATR,
-        -font   => [ 'Helvetica', 9 ],
-        -anchor => 'w',
-        -state  => 'hidden',
-        -tags   => ['crosshair'],
-    );
 }
 
 sub set_scale {
@@ -179,35 +154,37 @@ sub render_last_visible_value {
     }
 }
 
-# Draw vertical crosshair line synchronized with price panel
+# Draw vertical crosshair line synchronized with price panel (delete+redraw)
 sub draw_crosshair {
-    my ($self, $x, $y) = @_;
-    my $c  = $self->{canvas};
-    my $sc = $self->{scale};
-    my $h  = $c->height();
+    my ($self, $x, $atr_val) = @_;
+    my $c = $self->{canvas};
+    my $h = $c->height() || 150;
 
-    $c->coords( $self->{_ch_vline}, $x, 0, $x, $h );
-    $c->itemconfigure( $self->{_ch_vline}, -state => 'normal' );
+    $c->delete('ch_atr_lines');
+    $c->createLine( $x, 0, $x, $h,
+        -fill  => '#ffffff',
+        -width => 1.5,
+        -dash  => [ 4, 3 ],
+        -tags  => [ 'crosshair', 'ch_atr_lines' ],
+    );
 
-    if ($sc) {
-        my $atr_val = $sc->y_to_value($y);
-        if ( $atr_val >= $sc->{y_min} && $atr_val <= $sc->{y_max} ) {
-            $c->coords( $self->{_ch_label}, 5, 5 );
-            $c->itemconfigure( $self->{_ch_label},
-                -text  => sprintf( "ATR: %.4f", $atr_val ),
-                -state => 'normal',
-            );
-        }
+    $c->delete('ch_atr_label');
+    if ( defined $atr_val ) {
+        $c->createText( 5, 12,
+            -text   => sprintf( "ATR: %.4f", $atr_val ),
+            -fill   => $COLOR_ATR,
+            -font   => [ 'Helvetica', 9 ],
+            -anchor => 'w',
+            -tags   => [ 'crosshair', 'ch_atr_label' ],
+        );
     }
-
     $c->raise('crosshair');
 }
 
 sub hide_crosshair {
     my ($self) = @_;
-    my $c = $self->{canvas};
-    $c->itemconfigure( $self->{_ch_vline}, -state => 'hidden' );
-    $c->itemconfigure( $self->{_ch_label}, -state => 'hidden' );
+    $self->{canvas}->delete('ch_atr_lines');
+    $self->{canvas}->delete('ch_atr_label');
 }
 
 1;
