@@ -85,11 +85,14 @@ sub get_nice_levels {
 sub _draw_y_scale {
     my ($self, $canvas) = @_;
     my @levels = $self->get_nice_levels();
+    my $prev_y = undef;
+    my $MIN_PX = 14;   # distancia minima en pixeles entre etiquetas consecutivas
 
     for my $v (@levels) {
         my $y = $self->value_to_y($v);
         next if $y < $self->{y_top} - 1;
         next if $y > $self->{y_top} + $self->{y_height} + 1;
+        next if defined $prev_y && abs( $y - $prev_y ) < $MIN_PX;
 
         $canvas->createLine( 0, $y, 6, $y, -fill => '#555566' );
         $canvas->createText(
@@ -99,6 +102,7 @@ sub _draw_y_scale {
             -font   => [ 'Helvetica', 9 ],
             -anchor => 'w',
         );
+        $prev_y = $y;
     }
 }
 
@@ -111,10 +115,12 @@ sub _compute_nice_levels {
 
     my $raw_step = $range / $steps;
     my $mag      = 10**floor( log($raw_step) / log(10) );
+    # Serie {1, 2.5, 5, 10} en lugar de {1, 2, 5, 10}:
+    # genera pasos de 0.25, 2.5, 25 ... necesarios para futuros con tick de 0.25 (NQ, ES).
     my $step     = $mag;
-    $step = $mag * 2  if $raw_step >= $mag * 1.5;
-    $step = $mag * 5  if $raw_step >= $mag * 3.5;
-    $step = $mag * 10 if $raw_step >= $mag * 7.5;
+    $step = $mag * 2.5 if $raw_step >= $mag * 1.581;
+    $step = $mag * 5   if $raw_step >= $mag * 3.536;
+    $step = $mag * 10  if $raw_step >= $mag * 7.071;
 
     my $first = floor( $y_min / $step ) * $step;
     $first += $step if $first < $y_min - 1e-9;

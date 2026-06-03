@@ -240,6 +240,7 @@ $mw->bind( '<minus>',   sub { $engine->zoom( 1) } );
 $mw->bind( '<KP_Add>',  sub { $engine->zoom(-1) } );   # teclado numerico
 $mw->bind( '<KP_Subtract>', sub { $engine->zoom( 1) } );
 $mw->bind( '<0>',       sub { $engine->reset_view() } );
+$mw->bind( '<End>',     sub { $engine->goto_last() } );   # ancla ultima vela al borde derecho
 
 $mw->update();    # ensure canvas dimensions are resolved
 $engine->render();

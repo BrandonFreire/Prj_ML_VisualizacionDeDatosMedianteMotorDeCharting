@@ -60,18 +60,31 @@ sub new {
     return $self;
 }
 
-# Calculates which candle indices are currently visible
+# Calculates which candle indices are currently visible.
+# offset=0 ancla la ultima vela historica en el borde derecho (pivot explicito).
+# offset<0 produce espacio vacio futuro a la derecha.
 sub compute_window {
     my ($self) = @_;
     my $last  = $self->{market}->last_index();
     my $end   = $last - $self->{offset};
-    $end = $last if $end > $last;
-    $end = 0     if $end < 0;
+    $end = 0 if $end < 0;
+    # end > last es valido: significa espacio vacio futuro (no se clampea aqui)
 
     my $start = $end - $self->{visible_bars} + 1;
     $start = 0 if $start < 0;
 
     return ($start, $end);
+}
+
+# Ancla explicitamente la ultima vela historica al borde derecho (offset=0).
+# Llamado por reset_view y por el atajo de teclado End.
+sub goto_last {
+    my ($self) = @_;
+    $self->{offset}        = 0;
+    $self->{_offset_exact} = 0.0;
+    $self->{_x_offset}     = 0.0;
+    $self->{_render_state} = undef;
+    $self->request_render();
 }
 
 sub round {
@@ -100,10 +113,16 @@ sub render {
     }
 
     my ($start, $end) = $self->compute_window();
-    my $data_slice = $self->{market}->get_slice($start, $end);
+    my $last          = $self->{market}->last_index();
+
+    # Cuando end > last hay espacio futuro vacio a la derecha.
+    # El slice de datos se limita a indices validos, pero la escala usa
+    # self->{visible_bars} para que el ancho de barra no cambie.
+    my $data_end   = $end > $last ? $last : $end;
+    my $data_slice = $self->{market}->get_slice($start, $data_end);
     return unless @$data_slice;
 
-    my $n_visible = scalar @$data_slice;
+    my $n_visible = $end > $last ? $self->{visible_bars} : scalar @$data_slice;
     my $pw  = $self->{price_canvas}->width()        || 900;
     my $ph  = $self->{price_canvas}->height()       || 500;
     my $aw  = $self->{atr_canvas}->width()          || 900;
@@ -184,6 +203,7 @@ sub _can_incremental {
     my ($self, $rs, $start, $end, $pscale, $n_visible, $pw, $ph) = @_;
 
     return 0 if $self->{_x_offset} != 0;   # x_offset sub-pixel requiere full render
+    return 0 if $self->{offset} < 0;       # espacio futuro requiere full render
     return 0 if $rs->{pw} != $pw || $rs->{ph} != $ph;
     return 0 if $rs->{visible_bars} != $n_visible;
 
@@ -435,8 +455,9 @@ sub drag_move {
     my $bar_w = ( $self->{price_canvas}->width() || 900 ) / ( $self->{visible_bars} || 100 );
     $bar_w    = 0.5 if $bar_w < 0.5;
 
-    my $new_off = $self->{_drag_start_offset} + int( $dx / $bar_w );
-    $new_off = 0                             if $new_off < 0;
+    my $new_off    = $self->{_drag_start_offset} + int( $dx / $bar_w );
+    my $max_future = int( $self->{visible_bars} * 0.3 );   # hasta 30% de espacio futuro
+    $new_off = -$max_future                  if $new_off < -$max_future;
     $new_off = $self->{market}->last_index() if $new_off > $self->{market}->last_index();
 
     my $needs_render = ( $new_off != $self->{offset} || $self->{_x_offset} != 0 );
@@ -639,9 +660,10 @@ sub _draw_crosshair_all {
     my $price_y = ( $self->{_crosshair_source} eq 'price' ) ? $self->{crosshair_y} : undef;
     $self->{price_panel}->draw_crosshair( $snapped_x, $price_y );
 
-    # Label de fecha/hora en el time-axis
+    # Label de fecha/hora en el time-axis (precio y ATR sincronizados)
     my $ts = $self->{market}->get_timestamp($ix);
     $self->{price_panel}->draw_crosshair_time_label( $snapped_x, $ts );
+    $self->{atr_panel}->draw_crosshair_time_label(   $snapped_x, $ts );
 
     # OHLC legend en la esquina superior izquierda del canvas de precio
     my $candle = $self->{market}->get_candle($ix);
@@ -655,7 +677,9 @@ sub _draw_crosshair_all {
         my $vals = $atr_obj->get_values();
         $atr_val = $vals->[$ix] if defined $vals && $ix >= 0 && $ix < scalar @$vals;
     }
-    $self->{atr_panel}->draw_crosshair( $snapped_x, $atr_val );
+    # $atr_y definido solo cuando el mouse esta sobre el panel ATR
+    my $atr_y = ( $self->{_crosshair_source} eq 'atr' ) ? $self->{crosshair_y} : undef;
+    $self->{atr_panel}->draw_crosshair( $snapped_x, $atr_val, $atr_y );
 }
 
 # Switch active timeframe, recompute indicators, reset view
@@ -671,14 +695,11 @@ sub set_timeframe {
 
 sub reset_view {
     my ($self) = @_;
-    $self->{offset}        = 0;
-    $self->{_offset_exact} = 0.0;
-    $self->{_x_offset}     = 0.0;
     $self->{visible_bars}  = 100;
     $self->{y_auto}        = 1;
     $self->{_render_state} = undef;
     $self->{on_scale_mode_change}->(1) if $self->{on_scale_mode_change};
-    $self->request_render();
+    $self->goto_last();   # ancla explicitamente la ultima vela al borde derecho
 }
 
 # Compute time labels for visible range (filtered to avoid overlap)

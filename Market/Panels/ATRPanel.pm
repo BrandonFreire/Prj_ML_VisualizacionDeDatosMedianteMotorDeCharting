@@ -154,13 +154,20 @@ sub render_last_visible_value {
     }
 }
 
-# Draw vertical crosshair line synchronized with price panel (delete+redraw)
+# Draw crosshair on ATR panel.
+# $y definido = mouse sobre ATR → dibuja linea horizontal + label en scale canvas.
+# $y undef    = mouse sobre precio → solo linea vertical sincronizada.
 sub draw_crosshair {
-    my ($self, $x, $atr_val) = @_;
-    my $c = $self->{canvas};
-    my $h = $c->height() || 150;
+    my ($self, $x, $atr_val, $y) = @_;
+    my $c     = $self->{canvas};
+    my $sc    = $self->{scale_canvas};
+    my $scale = $self->{scale};
+    my $w     = $scale ? $scale->{x_width}  : ( $c->width()  || 900 );
+    my $h     = $scale ? $scale->{y_height} : ( $c->height() || 150 );
 
     $c->delete('ch_atr_lines');
+
+    # Linea vertical — siempre
     $c->createLine( $x, 0, $x, $h,
         -fill  => '#ffffff',
         -width => 1.5,
@@ -168,6 +175,34 @@ sub draw_crosshair {
         -tags  => [ 'crosshair', 'ch_atr_lines' ],
     );
 
+    # Linea horizontal + caja de valor en scale canvas — solo cuando mouse sobre ATR
+    $sc->delete('crosshair') if $sc;
+    if ( defined $y ) {
+        $c->createLine( 0, $y, $w, $y,
+            -fill  => '#ffffff',
+            -width => 1.5,
+            -dash  => [ 4, 3 ],
+            -tags  => [ 'crosshair', 'ch_atr_lines' ],
+        );
+        if ( $sc && $scale ) {
+            my $val = $scale->y_to_value($y);
+            my $sw  = $sc->width() || 75;
+            $sc->createRectangle( 0, $y - 9, $sw, $y + 9,
+                -fill    => '#787b86',
+                -outline => '#787b86',
+                -tags    => ['crosshair'],
+            );
+            $sc->createText( $sw / 2, $y,
+                -text   => sprintf( "%.4f", $val ),
+                -fill   => '#ffffff',
+                -font   => [ 'Helvetica', 9, 'bold' ],
+                -anchor => 'center',
+                -tags   => ['crosshair'],
+            );
+        }
+    }
+
+    # Label del valor ATR de la barra bajo el cursor
     $c->delete('ch_atr_label');
     if ( defined $atr_val ) {
         $c->createText( 5, 12,
@@ -185,6 +220,36 @@ sub hide_crosshair {
     my ($self) = @_;
     $self->{canvas}->delete('ch_atr_lines');
     $self->{canvas}->delete('ch_atr_label');
+    $self->{canvas}->delete('ch_atr_timelabel');
+    $self->{scale_canvas}->delete('crosshair') if $self->{scale_canvas};
+}
+
+# Caja de fecha/hora en la parte inferior del panel ATR (sincronizada con el precio)
+sub draw_crosshair_time_label {
+    my ($self, $x, $ts) = @_;
+    my $c = $self->{canvas};
+    $c->delete('ch_atr_timelabel');
+    return unless defined $ts;
+
+    my @lt    = localtime($ts);
+    my $label = sprintf( "%02d/%02d %02d:%02d", $lt[4] + 1, $lt[3], $lt[2], $lt[1] );
+    my $scale = $self->{scale};
+    my $y     = ( $scale ? $scale->{y_height} : ( $c->height() || 150 ) ) - 5;
+    my $hw    = 44;
+
+    $c->createRectangle( $x - $hw, $y - 9, $x + $hw, $y + 9,
+        -fill    => '#131722',
+        -outline => '#787b86',
+        -tags    => [ 'crosshair', 'ch_atr_timelabel' ],
+    );
+    $c->createText( $x, $y,
+        -text   => $label,
+        -fill   => '#b2b5be',
+        -font   => [ 'Helvetica', 8 ],
+        -anchor => 'center',
+        -tags   => [ 'crosshair', 'ch_atr_timelabel' ],
+    );
+    $c->raise('crosshair');
 }
 
 1;
