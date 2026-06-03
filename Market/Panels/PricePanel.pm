@@ -288,9 +288,11 @@ sub draw_crosshair_time_label {
     return unless $scale && defined $ts;
 
     my @lt    = localtime($ts);
-    my $label = sprintf( "%02d/%02d %02d:%02d", $lt[4] + 1, $lt[3], $lt[2], $lt[1] );
+    my @meses = qw(Enero Febrero Marzo Abril Mayo Junio
+                   Julio Agosto Septiembre Octubre Noviembre Diciembre);
+    my $label = $meses[$lt[4]] . sprintf( " %d %02d:%02d", $lt[3], $lt[2], $lt[1] );
     my $y     = $scale->{y_height} + 14;
-    my $hw    = 44;
+    my $hw    = 62;
 
     my $c = $self->{canvas};
     $c->delete('ch_timelabel');

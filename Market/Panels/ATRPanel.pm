@@ -232,10 +232,12 @@ sub draw_crosshair_time_label {
     return unless defined $ts;
 
     my @lt    = localtime($ts);
-    my $label = sprintf( "%02d/%02d %02d:%02d", $lt[4] + 1, $lt[3], $lt[2], $lt[1] );
+    my @meses = qw(Enero Febrero Marzo Abril Mayo Junio
+                   Julio Agosto Septiembre Octubre Noviembre Diciembre);
+    my $label = $meses[$lt[4]] . sprintf( " %d %02d:%02d", $lt[3], $lt[2], $lt[1] );
     my $scale = $self->{scale};
     my $y     = ( $scale ? $scale->{y_height} : ( $c->height() || 150 ) ) - 5;
-    my $hw    = 44;
+    my $hw    = 62;
 
     $c->createRectangle( $x - $hw, $y - 9, $x + $hw, $y + 9,
         -fill    => '#131722',

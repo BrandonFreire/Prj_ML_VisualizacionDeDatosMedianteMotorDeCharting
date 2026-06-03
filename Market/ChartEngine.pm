@@ -67,8 +67,8 @@ sub compute_window {
     my ($self) = @_;
     my $last  = $self->{market}->last_index();
     my $end   = $last - $self->{offset};
-    $end = 0 if $end < 0;
-    # end > last es valido: significa espacio vacio futuro (no se clampea aqui)
+    $end = $last if $end > $last;
+    $end = 0     if $end < 0;
 
     my $start = $end - $self->{visible_bars} + 1;
     $start = 0 if $start < 0;
@@ -113,16 +113,10 @@ sub render {
     }
 
     my ($start, $end) = $self->compute_window();
-    my $last          = $self->{market}->last_index();
-
-    # Cuando end > last hay espacio futuro vacio a la derecha.
-    # El slice de datos se limita a indices validos, pero la escala usa
-    # self->{visible_bars} para que el ancho de barra no cambie.
-    my $data_end   = $end > $last ? $last : $end;
-    my $data_slice = $self->{market}->get_slice($start, $data_end);
+    my $data_slice = $self->{market}->get_slice($start, $end);
     return unless @$data_slice;
 
-    my $n_visible = $end > $last ? $self->{visible_bars} : scalar @$data_slice;
+    my $n_visible = scalar @$data_slice;
     my $pw  = $self->{price_canvas}->width()        || 900;
     my $ph  = $self->{price_canvas}->height()       || 500;
     my $aw  = $self->{atr_canvas}->width()          || 900;
@@ -203,7 +197,6 @@ sub _can_incremental {
     my ($self, $rs, $start, $end, $pscale, $n_visible, $pw, $ph) = @_;
 
     return 0 if $self->{_x_offset} != 0;   # x_offset sub-pixel requiere full render
-    return 0 if $self->{offset} < 0;       # espacio futuro requiere full render
     return 0 if $rs->{pw} != $pw || $rs->{ph} != $ph;
     return 0 if $rs->{visible_bars} != $n_visible;
 
@@ -455,9 +448,8 @@ sub drag_move {
     my $bar_w = ( $self->{price_canvas}->width() || 900 ) / ( $self->{visible_bars} || 100 );
     $bar_w    = 0.5 if $bar_w < 0.5;
 
-    my $new_off    = $self->{_drag_start_offset} + int( $dx / $bar_w );
-    my $max_future = int( $self->{visible_bars} * 0.3 );   # hasta 30% de espacio futuro
-    $new_off = -$max_future                  if $new_off < -$max_future;
+    my $new_off = $self->{_drag_start_offset} + int( $dx / $bar_w );
+    $new_off = 0                             if $new_off < 0;
     $new_off = $self->{market}->last_index() if $new_off > $self->{market}->last_index();
 
     my $needs_render = ( $new_off != $self->{offset} || $self->{_x_offset} != 0 );
@@ -712,6 +704,9 @@ sub _nice_step_minutes {
     return 1440;
 }
 
+my @_MESES = qw(Enero Febrero Marzo Abril Mayo Junio
+                Julio Agosto Septiembre Octubre Noviembre Diciembre);
+
 sub compute_intraday_labels {
     my ($self, $start, $end, $scale) = @_;
     my @labels;
@@ -732,24 +727,50 @@ sub compute_intraday_labels {
     my $step_min = $self->_nice_step_minutes($bars_per_label * $tf_min);
     my $step_sec = $step_min * 60;
 
-    my $prev_day_key = undef;
     my $prev_bucket  = undef;
+    my $prev_day_key = undef;
 
     for my $i ($start .. $end) {
         my $ts = $self->{market}->get_timestamp($i);
         next unless defined $ts;
 
-        my @lt = localtime($ts);
+        my @lt      = localtime($ts);
+        my $hour    = $lt[2];
+        my $min     = $lt[1];
         my $day_key = sprintf("%04d-%02d-%02d", $lt[5] + 1900, $lt[4] + 1, $lt[3]);
 
-        if (!defined $prev_day_key || $day_key ne $prev_day_key) {
+        # --- Pivote 1: Medianoche (00:00) — frontera del dia calendario ---
+        # Siempre visible, independiente del nivel de zoom.
+        if ($hour == 0 && $min == 0) {
             push @labels, {
                 index => $i,
-                label => sprintf("%02d/%02d", $lt[4] + 1, $lt[3]),
+                label => $_MESES[$lt[4]] . ' ' . $lt[3],
                 time  => $ts,
             };
             $prev_day_key = $day_key;
             $prev_bucket  = int($ts / $step_sec);
+            next;
+        }
+
+        # --- Pivote 2: 17:00 — apertura de sesion de futuros NQ (5 PM CDT) ---
+        # Siempre visible, independiente del nivel de zoom.
+        if ($hour == 17 && $min == 0) {
+            push @labels, { index => $i, label => '17:00', time => $ts };
+            $prev_bucket = int($ts / $step_sec);
+            next;
+        }
+
+        # --- Etiquetas adaptativas al zoom ---
+        # Si es el primer bar de un dia nuevo y su 00:00 no estaba en rango visible,
+        # agregar la fecha como contexto.
+        if (!defined $prev_day_key || $day_key ne $prev_day_key) {
+            $prev_day_key = $day_key;
+            push @labels, {
+                index => $i,
+                label => $_MESES[$lt[4]] . ' ' . $lt[3] . sprintf(" %02d:%02d", $hour, $min),
+                time  => $ts,
+            };
+            $prev_bucket = int($ts / $step_sec);
             next;
         }
 
@@ -758,8 +779,8 @@ sub compute_intraday_labels {
         $prev_bucket = $bucket;
 
         my $label = $step_min < 60
-            ? sprintf("%02d:%02d", $lt[2], $lt[1])
-            : sprintf("%02d:00", $lt[2]);
+            ? sprintf("%02d:%02d", $hour, $min)
+            : sprintf("%02d:00", $hour);
 
         push @labels, { index => $i, label => $label, time => $ts };
     }
