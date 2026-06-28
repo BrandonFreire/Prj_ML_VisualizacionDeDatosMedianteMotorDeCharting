@@ -41,6 +41,12 @@ sub new {
 
         on_scale_mode_change => undef,
 
+        # ATR independent Y scale
+        y_auto_atr         => 1,
+        y_min_atr          => 0,
+        y_max_atr          => 1,
+        _atr_vy_drag_start => undef,
+
         price_panel => undef,
         atr_panel   => undef,
         price_scale => undef,
@@ -60,20 +66,28 @@ sub new {
     return $self;
 }
 
-# Calculates which candle indices are currently visible.
-# offset=0 ancla la ultima vela historica en el borde derecho (pivot explicito).
-# offset<0 produce espacio vacio futuro a la derecha.
+# Calcula la ventana virtual y los indices de datos reales visibles.
+# Retorna: (v_start, v_end, d_start, d_end)
+#   v_start/v_end = indices virtuales (pueden ser negativos o > last para espacio vacio)
+#   d_start/d_end = indices reales con datos, clampeados a [0, last]
+# Cuando v_start < 0 se ve espacio vacio a la izquierda (antes de la primera vela).
+# Cuando v_end > last se ve espacio vacio a la derecha (despues de la ultima vela).
 sub compute_window {
     my ($self) = @_;
-    my $last  = $self->{market}->last_index();
-    my $end   = $last - $self->{offset};
-    $end = $last if $end > $last;
-    $end = 0     if $end < 0;
+    my $last    = $self->{market}->last_index();
+    my $n       = $self->{visible_bars};
+    my $v_end   = $last - $self->{offset};
+    my $v_start = $v_end - $n + 1;
 
-    my $start = $end - $self->{visible_bars} + 1;
-    $start = 0 if $start < 0;
+    my $d_start = $v_start < 0     ? 0     : $v_start;
+    my $d_end   = $v_end   > $last ? $last : $v_end;
 
-    return ($start, $end);
+    # Rango vacio cuando la ventana esta completamente fuera de los datos
+    if ( $d_end < 0 || $d_start > $last ) {
+        $d_end = $d_start - 1;
+    }
+
+    return ( $v_start, $v_end, $d_start, $d_end );
 }
 
 # Ancla explicitamente la ultima vela historica al borde derecho (offset=0).
@@ -112,27 +126,34 @@ sub render {
         $cv->configure( -scrollregion => [ 0, 0, $w, $h ] );
     }
 
-    my ($start, $end) = $self->compute_window();
-    my $data_slice = $self->{market}->get_slice($start, $end);
+    # v_start/v_end = ventana virtual (puede salir del rango de datos → espacio vacio)
+    # d_start/d_end = indices reales con datos [0, last]
+    my ( $v_start, $v_end, $d_start, $d_end ) = $self->compute_window();
+    my $data_slice = $d_end >= $d_start
+        ? $self->{market}->get_slice( $d_start, $d_end )
+        : [];
     return unless @$data_slice;
 
-    my $n_visible = scalar @$data_slice;
-    my $pw  = $self->{price_canvas}->width()        || 900;
-    my $ph  = $self->{price_canvas}->height()       || 500;
-    my $aw  = $self->{atr_canvas}->width()          || 900;
-    my $ah  = $self->{atr_canvas}->height()         || 150;
+    my $n_visible = $self->{visible_bars};   # siempre el ancho completo de la ventana
+    my $pw = $self->{price_canvas}->width()  || 900;
+    my $ph = $self->{price_canvas}->height() || 500;
+    my $aw = $self->{atr_canvas}->width()    || 900;
+    my $ah = $self->{atr_canvas}->height()   || 150;
 
-    # Build price scale
+    # La escala usa v_start como origen: index_to_center_x posiciona correctamente
+    # las velas reales (con indice >= 0) dejando espacio vacio donde no hay datos.
     my $price_scale = Market::Panels::Scales->new(
         x_left       => 0,
         x_width      => $pw,
-        start_index  => $start,
-        visible_bars => $n_visible,
+        start_index  => $v_start,   # virtual — puede ser negativo
+        visible_bars => $n_visible, # siempre el ancho completo
         y_top        => 0,
         y_height     => $ph - $TIME_AXIS_H,
         y_min        => 0,
         y_max        => 1,
     );
+    # data_start_index indica donde empieza el slice de datos dentro de la ventana virtual
+    $price_scale->{data_start_index} = $d_start;
 
     if ( $self->{y_auto} ) {
         my ( $p_min, $p_max ) = $self->{price_panel}->get_y_range($data_slice);
@@ -146,38 +167,48 @@ sub render {
     $price_scale->{x_offset} = $self->{_x_offset} // 0;
     $self->{price_scale} = $price_scale;
 
-    # Build ATR scale
-    my $atr_slice = $self->{indicators}->slice_array( 'ATR', $start, $end );
+    # ATR scale — misma logica de ventana virtual
+    my $atr_slice = $self->{indicators}->slice_array( 'ATR', $d_start, $d_end );
 
     my $atr_scale = Market::Panels::Scales->new(
         x_left       => 0,
         x_width      => $aw,
-        start_index  => $start,
+        start_index  => $v_start,
         visible_bars => $n_visible,
         y_top        => 0,
         y_height     => $ah,
         y_min        => 0,
         y_max        => 1,
     );
-    my ( $a_min, $a_max ) = $self->{atr_panel}->get_y_range($atr_slice);
-    $atr_scale->{y_min} = $a_min;
-    $atr_scale->{y_max} = $a_max;
+    $atr_scale->{data_start_index} = $d_start;
+
+    if ( $self->{y_auto_atr} ) {
+        my ( $a_min, $a_max ) = $self->{atr_panel}->get_y_range($atr_slice);
+        $atr_scale->{y_min} = $a_min;
+        $atr_scale->{y_max} = $a_max;
+    }
+    else {
+        $atr_scale->{y_min} = $self->{y_min_atr};
+        $atr_scale->{y_max} = $self->{y_max_atr};
+    }
     $atr_scale->{x_offset} = $self->{_x_offset} // 0;
     $self->{atr_scale} = $atr_scale;
 
     # Dispatch to incremental or full render
     my $rs = $self->{_render_state};
-    if ( $rs && $self->_can_incremental( $rs, $start, $end, $price_scale, $n_visible, $pw, $ph ) ) {
-        $self->_incremental_pan( $start, $end, $data_slice, $price_scale, $atr_slice, $atr_scale, $rs );
+    if ( $rs && $self->_can_incremental( $rs, $v_start, $v_end, $d_start, $d_end, $price_scale, $n_visible, $pw, $ph ) ) {
+        $self->_incremental_pan( $v_start, $v_end, $d_start, $d_end, $data_slice, $price_scale, $atr_slice, $atr_scale, $rs );
     }
     else {
-        $self->_full_render( $start, $end, $data_slice, $price_scale, $atr_slice, $atr_scale );
+        $self->_full_render( $d_start, $d_end, $data_slice, $price_scale, $atr_slice, $atr_scale );
     }
 
     # Save state for next incremental check
     $self->{_render_state} = {
-        start        => $start,
-        end          => $end,
+        v_start      => $v_start,
+        v_end        => $v_end,
+        d_start      => $d_start,
+        d_end        => $d_end,
         y_min        => $price_scale->{y_min},
         y_max        => $price_scale->{y_max},
         a_min        => $atr_scale->{y_min},
@@ -194,17 +225,16 @@ sub render {
 
 # Returns true when an incremental pan is safe (no Y rescale, no zoom, no resize)
 sub _can_incremental {
-    my ($self, $rs, $start, $end, $pscale, $n_visible, $pw, $ph) = @_;
+    my ($self, $rs, $v_start, $v_end, $d_start, $d_end, $pscale, $n_visible, $pw, $ph) = @_;
 
-    return 0 if $self->{_x_offset} != 0;   # x_offset sub-pixel requiere full render
+    return 0 if $self->{_x_offset} != 0;
     return 0 if $rs->{pw} != $pw || $rs->{ph} != $ph;
     return 0 if $rs->{visible_bars} != $n_visible;
 
-    my $delta = abs( $start - $rs->{start} );
+    my $delta = abs( $v_start - $rs->{v_start} );
     return 0 if $delta == 0;
     return 0 if $delta >= $n_visible;
 
-    # Reject if Y range shifted by more than 1% (candle Y-positions would be wrong)
     my $p_range = $rs->{y_max} - $rs->{y_min};
     return 0 if $p_range <= 0;
     my $p_diff = abs( $pscale->{y_max} - $rs->{y_max} )
@@ -216,7 +246,7 @@ sub _can_incremental {
 
 # Complete redraw of all panels and scales
 sub _full_render {
-    my ($self, $start, $end, $data_slice, $pscale, $atr_slice, $ascale) = @_;
+    my ($self, $d_start, $d_end, $data_slice, $pscale, $atr_slice, $ascale) = @_;
 
     my $pc  = $self->{price_canvas};
     my $psc = $self->{price_scale_canvas};
@@ -227,7 +257,7 @@ sub _full_render {
     $pc->delete('all');
     $self->{price_panel}->set_scale($pscale);
     $self->{price_panel}->render( $pc, $data_slice, $pscale );
-    my $ts = $self->compute_intraday_labels( $start, $end, $pscale );
+    my $ts = $self->compute_intraday_labels( $d_start, $d_end, $pscale );
     $self->{price_panel}->draw_time_axis( $pc, $ts );
 
     # --- Price scale (must come after candles so lastprice draws on ready canvas) ---
@@ -248,9 +278,10 @@ sub _full_render {
 
 # O(1) horizontal pan: move existing candles, add/delete only the edge bars
 sub _incremental_pan {
-    my ($self, $start, $end, $data_slice, $pscale, $atr_slice, $ascale, $rs) = @_;
+    my ($self, $v_start, $v_end, $d_start, $d_end, $data_slice, $pscale, $atr_slice, $ascale, $rs) = @_;
 
-    my $delta = $start - $rs->{start};
+    # El delta virtual determina cuantos pixeles se desplazan las velas existentes
+    my $delta = $v_start - $rs->{v_start};
     my $bar_w = $pscale->{x_width} / ( $pscale->{visible_bars} || 1 );
     my $dx    = -$delta * $bar_w;
 
@@ -262,34 +293,34 @@ sub _incremental_pan {
     $self->{price_panel}->set_scale($pscale);
     $self->{atr_panel}->set_scale($ascale);
 
-    # --- Shift all candles O(1) ---
+    # Shift all candles O(1)
     $pc->move( 'candles', $dx, 0 );
 
     if ( $delta > 0 ) {
-        # Panned left (newer data visible on right)
-        $pc->delete("ci_$_") for $rs->{start} .. $start - 1;
+        # Panned left: eliminar velas que salieron por la izquierda, agregar a la derecha
+        $pc->delete("ci_$_") for $rs->{d_start} .. $d_start - 1;
         for my $i ( 0 .. $#$data_slice ) {
-            my $ix = $start + $i;
+            my $ix = $d_start + $i;
             $self->{price_panel}->render_candle( $pc, $data_slice->[$i], $ix, $pscale )
-                if $ix > $rs->{end};
+                if $ix > $rs->{d_end};
         }
     }
     else {
-        # Panned right (older data visible on left)
-        $pc->delete("ci_$_") for $end + 1 .. $rs->{end};
+        # Panned right: eliminar velas que salieron por la derecha, agregar a la izquierda
+        $pc->delete("ci_$_") for ( $d_end + 1 ) .. $rs->{d_end};
         for my $i ( 0 .. $#$data_slice ) {
-            my $ix = $start + $i;
+            my $ix = $d_start + $i;
             $self->{price_panel}->render_candle( $pc, $data_slice->[$i], $ix, $pscale )
-                if $ix < $rs->{start};
+                if $ix < $rs->{d_start};
         }
     }
 
     # Update last candle info for render_last_visible_price
-    my $last = $data_slice->[-1];
-    $self->{price_panel}{_last_close} = $last->{close};
-    $self->{price_panel}{_last_open}  = $last->{open};
+    my $last_c = $data_slice->[-1];
+    $self->{price_panel}{_last_close} = $last_c->{close};
+    $self->{price_panel}{_last_open}  = $last_c->{open};
 
-    # --- Redraw price grid ---
+    # Redraw price grid
     $pc->delete('grid');
     for my $v ( $pscale->get_nice_levels() ) {
         my $y = $pscale->value_to_y($v);
@@ -299,18 +330,18 @@ sub _incremental_pan {
     }
     $pc->lower( 'grid', 'candles' ) if $pc->find( 'withtag', 'candles' );
 
-    # --- Redraw time axis ---
+    # Redraw time axis
     $pc->delete('timeaxis');
-    my $ts = $self->compute_intraday_labels( $start, $end, $pscale );
+    my $ts = $self->compute_intraday_labels( $d_start, $d_end, $pscale );
     $self->{price_panel}->draw_time_axis( $pc, $ts );
 
-    # --- Redraw last price label ---
+    # Redraw last price label
     $pc->delete('lastprice');
     $psc->delete('all');
     $pscale->_draw_y_scale($psc);
     $self->{price_panel}->render_last_visible_price($pc);
 
-    # --- Redraw ATR (full, fast) ---
+    # Redraw ATR (full, fast)
     $ac->delete('grid');
     $ac->delete('atr');
     $self->{atr_panel}->render( $ac, $atr_slice, $ascale );
@@ -321,13 +352,12 @@ sub _incremental_pan {
         }
     }
 
-    # --- Redraw ATR scale + last ATR label ---
+    # Redraw ATR scale + last ATR label
     $ac->delete('lastatr');
     $asc->delete('all');
     $ascale->_draw_y_scale($asc);
     $self->{atr_panel}->render_last_visible_value($ac);
 
-    # Keep crosshair on top
     $pc->raise('crosshair');
     $ac->raise('crosshair');
 }
@@ -338,17 +368,58 @@ sub bind_events {
     $self->_bind_all_canvas( $self->{price_canvas} );
     $self->_bind_all_canvas( $self->{atr_canvas} );
 
-    # Vertical drag on price scale canvas (manual Y zoom)
+    # --- Escala Y del precio: drag vertical + zoom con rueda ---
+    # Tk::break() impide que los bindings del MainWindow (pan horizontal) también disparen.
+    # Sin break, al hacer click en la escala Y se iniciaría TAMBIÉN el pan horizontal.
     $self->{price_scale_canvas}->bind( '<ButtonPress-1>', sub {
         my $e = $self->{price_scale_canvas}->XEvent();
         $self->{_vy_drag_start} = $e->y;
         $self->{_vy_min_start}  = $self->{price_scale}{y_min} // 0;
         $self->{_vy_max_start}  = $self->{price_scale}{y_max} // 1;
+        Tk::break();   # Feature 3: evitar conflicto con pan horizontal del MainWindow
     });
     $self->{price_scale_canvas}->bind( '<B1-Motion>', sub {
         my $e  = $self->{price_scale_canvas}->XEvent();
         $self->_vertical_drag( $e->y - ( $self->{_vy_drag_start} // $e->y ) );
         $self->{_vy_drag_start} = $e->y;
+        Tk::break();
+    });
+    $self->{price_scale_canvas}->bind( '<ButtonRelease-1>', sub {
+        $self->{_vy_drag_start} = undef;
+    });
+    # Feature 4: rueda del mouse sobre escala Y hace zoom vertical (no horizontal)
+    # Scroll arriba (Button-4) = zoom in = rango mas chico = velas mas altas
+    $self->{price_scale_canvas}->bind( '<Button-4>', sub {
+        $self->_vertical_zoom(0.85);
+        Tk::break();
+    });
+    $self->{price_scale_canvas}->bind( '<Button-5>', sub {
+        $self->_vertical_zoom(1 / 0.85);
+        Tk::break();
+    });
+
+    # --- Feature 7: Escala Y del ATR — zoom vertical independiente ---
+    $self->{atr_scale_canvas}->bind( '<ButtonPress-1>', sub {
+        my $e = $self->{atr_scale_canvas}->XEvent();
+        $self->{_atr_vy_drag_start} = $e->y;
+        Tk::break();
+    });
+    $self->{atr_scale_canvas}->bind( '<B1-Motion>', sub {
+        my $e = $self->{atr_scale_canvas}->XEvent();
+        $self->_vertical_drag_atr( $e->y - ( $self->{_atr_vy_drag_start} // $e->y ) );
+        $self->{_atr_vy_drag_start} = $e->y;
+        Tk::break();
+    });
+    $self->{atr_scale_canvas}->bind( '<ButtonRelease-1>', sub {
+        $self->{_atr_vy_drag_start} = undef;
+    });
+    $self->{atr_scale_canvas}->bind( '<Button-4>', sub {
+        $self->_vertical_zoom_atr(0.85);
+        Tk::break();
+    });
+    $self->{atr_scale_canvas}->bind( '<Button-5>', sub {
+        $self->_vertical_zoom_atr(1 / 0.85);
+        Tk::break();
     });
 
     # Crosshair via MainWindow: <Motion> en canvas-level no dispara de forma confiable
@@ -449,8 +520,12 @@ sub drag_move {
     $bar_w    = 0.5 if $bar_w < 0.5;
 
     my $new_off = $self->{_drag_start_offset} + int( $dx / $bar_w );
-    $new_off = 0                             if $new_off < 0;
-    $new_off = $self->{market}->last_index() if $new_off > $self->{market}->last_index();
+    # Permitir padding de un ancho de ventana en cada extremo para espacio vacio
+    my $pad     = $self->{visible_bars};
+    my $max_off = $self->{market}->last_index() + $pad;
+    my $min_off = -$pad;
+    $new_off = $min_off if $new_off < $min_off;
+    $new_off = $max_off if $new_off > $max_off;
 
     my $needs_render = ( $new_off != $self->{offset} || $self->{_x_offset} != 0 );
 
@@ -573,21 +648,22 @@ sub _vertical_drag {
 
     my $scale  = $self->{price_scale};
     my $range  = $scale->{y_max} - $scale->{y_min};
-    my $factor = 1 + $dy / ( $scale->{y_height} || 400 );
+    # Feature 5: dy > 0 = arrastrar hacia abajo = zoom IN (rango se achica)
+    # Esto coincide con el comportamiento de TradingView en el eje Y.
+    my $factor = 1 - $dy / ( $scale->{y_height} || 400 );
     $factor = 0.1  if $factor < 0.1;
     $factor = 10.0 if $factor > 10.0;
 
     my $mid      = ( $scale->{y_max} + $scale->{y_min} ) / 2;
     my $new_half = ( $range / 2 ) * $factor;
 
-    my $was_auto       = $self->{y_auto};
+    my $was_auto = $self->{y_auto};
     $self->{y_auto}        = 0;
     $self->{y_min_manual}  = $mid - $new_half;
     $self->{y_max_manual}  = $mid + $new_half;
     $self->{_render_state} = undef;
 
-    # Notificar cambio de modo solo si cambia (de auto a manual)
-    if ($was_auto && $self->{on_scale_mode_change}) {
+    if ( $was_auto && $self->{on_scale_mode_change} ) {
         $self->{on_scale_mode_change}->(0);
     }
 
@@ -616,12 +692,47 @@ sub set_scale_mode_callback {
 sub _vertical_zoom {
     my ($self, $factor) = @_;
     return unless defined $self->{price_scale};
-    my $scale = $self->{price_scale};
-    my $mid   = ( $scale->{y_max} + $scale->{y_min} ) / 2;
-    my $half  = ( $scale->{y_max} - $scale->{y_min} ) / 2 * $factor;
+    my $scale    = $self->{price_scale};
+    my $mid      = ( $scale->{y_max} + $scale->{y_min} ) / 2;
+    my $half     = ( $scale->{y_max} - $scale->{y_min} ) / 2 * $factor;
+    my $was_auto = $self->{y_auto};
     $self->{y_auto}        = 0;
     $self->{y_min_manual}  = $mid - $half;
     $self->{y_max_manual}  = $mid + $half;
+    $self->{_render_state} = undef;
+    if ( $was_auto && $self->{on_scale_mode_change} ) {
+        $self->{on_scale_mode_change}->(0);
+    }
+    $self->request_render();
+}
+
+# Feature 7: zoom vertical independiente del panel ATR
+sub _vertical_drag_atr {
+    my ($self, $dy) = @_;
+    return unless defined $self->{atr_scale};
+    my $scale    = $self->{atr_scale};
+    my $range    = $scale->{y_max} - $scale->{y_min};
+    my $factor   = 1 - $dy / ( $scale->{y_height} || 150 );
+    $factor = 0.1  if $factor < 0.1;
+    $factor = 10.0 if $factor > 10.0;
+    my $mid      = ( $scale->{y_max} + $scale->{y_min} ) / 2;
+    my $new_half = ( $range / 2 ) * $factor;
+    $self->{y_auto_atr}    = 0;
+    $self->{y_min_atr}     = $mid - $new_half;
+    $self->{y_max_atr}     = $mid + $new_half;
+    $self->{_render_state} = undef;
+    $self->request_render();
+}
+
+sub _vertical_zoom_atr {
+    my ($self, $factor) = @_;
+    return unless defined $self->{atr_scale};
+    my $scale = $self->{atr_scale};
+    my $mid   = ( $scale->{y_max} + $scale->{y_min} ) / 2;
+    my $half  = ( $scale->{y_max} - $scale->{y_min} ) / 2 * $factor;
+    $self->{y_auto_atr}    = 0;
+    $self->{y_min_atr}     = $mid - $half;
+    $self->{y_max_atr}     = $mid + $half;
     $self->{_render_state} = undef;
     $self->request_render();
 }
@@ -640,10 +751,13 @@ sub _draw_crosshair_all {
 
     my $scale = $self->{price_scale};
 
-    # Snap la linea vertical al centro de la barra mas cercana
+    # Snap la linea vertical al centro de la barra mas cercana.
+    # Clampear al rango de datos reales (no al virtual) para que en el espacio
+    # vacio el crosshair siempre apunte a una vela existente.
     my $ix = $scale->x_to_index( $self->{crosshair_x} );
-    my $lo = $scale->{start_index};
-    my $hi = $scale->{start_index} + $scale->{visible_bars} - 1;
+    my $lo = $scale->{data_start_index} // $scale->{start_index};
+    $lo    = 0 if $lo < 0;
+    my $hi = $self->{market}->last_index();
     $ix    = $lo if $ix < $lo;
     $ix    = $hi if $ix > $hi;
     my $snapped_x = int( $scale->index_to_center_x($ix) + 0.5 );
@@ -689,9 +803,10 @@ sub reset_view {
     my ($self) = @_;
     $self->{visible_bars}  = 100;
     $self->{y_auto}        = 1;
+    $self->{y_auto_atr}    = 1;
     $self->{_render_state} = undef;
     $self->{on_scale_mode_change}->(1) if $self->{on_scale_mode_change};
-    $self->goto_last();   # ancla explicitamente la ultima vela al borde derecho
+    $self->goto_last();
 }
 
 # Compute time labels for visible range (filtered to avoid overlap)
@@ -790,8 +905,8 @@ sub compute_intraday_labels {
 
 sub get_all_timestamps {
     my ($self) = @_;
-    my ($start, $end) = $self->compute_window();
-    return $self->compute_intraday_labels( $start, $end, $self->{price_scale} );
+    my ( $v_start, $v_end, $d_start, $d_end ) = $self->compute_window();
+    return $self->compute_intraday_labels( $d_start, $d_end, $self->{price_scale} );
 }
 
 1;

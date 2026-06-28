@@ -73,10 +73,11 @@ sub render {
     }
 
     # ATR line: draw individual segments with per-index tags
+    my $d_start  = $scale->{data_start_index} // $scale->{start_index};
     my ($prev_x, $prev_y, $prev_ix);
     for my $i ( 0 .. $#$values ) {
         next unless defined $values->[$i];
-        my $ix = $scale->{start_index} + $i;
+        my $ix = $d_start + $i;
         my $x  = int( $scale->index_to_center_x($ix) + 0.5 );
         my $y  = int( $scale->value_to_y( $values->[$i] ) + 0.5 );
 

@@ -100,9 +100,12 @@ sub render {
     }
 
     # Candles
+    # data_start_index es el indice real del primer elemento del slice;
+    # puede diferir de start_index (virtual) cuando hay espacio vacio a la izquierda.
+    my $d_start = $scale->{data_start_index} // $scale->{start_index};
     for my $i ( 0 .. $#$data ) {
         my $c  = $data->[$i];
-        my $ix = $scale->{start_index} + $i;
+        my $ix = $d_start + $i;
         $self->render_candle( $canvas, $c, $ix, $scale );
     }
 
