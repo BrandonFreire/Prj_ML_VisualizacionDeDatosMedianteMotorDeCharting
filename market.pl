@@ -88,14 +88,33 @@ my $mw = MainWindow->new();
 $mw->title("Market Chart  |  1m");
 $mw->configure( -bg => $BG );
 $mw->resizable( 1, 1 );
-$mw->attributes( -fullscreen => 1 );
+$mw->geometry("1200x800");   # ventana normal redimensionable; F11 activa pantalla completa
 
-# Escape para salir de pantalla completa
-$mw->bind( '<Escape>', sub { $mw->attributes( -fullscreen => 0 ) } );
-$mw->bind( '<F11>',    sub {
-    my $fs = $mw->attributes('-fullscreen');
-    $mw->attributes( -fullscreen => !$fs );
+# Declarar antes de usarse en los subs/bindings de teclado
+my $fs_btn;
+my $engine;
+sub _toggle_fullscreen {
+    my $is_fs = $mw->attributes('-fullscreen');
+    $mw->attributes( -fullscreen => !$is_fs );
+    if ( !$is_fs ) {
+        $fs_btn->configure( -text => '[ # ]', -fg => '#f6c90e' );
+    } else {
+        $fs_btn->configure( -text => '[  ]',  -fg => '#b2b5be' );
+    }
+    # Esperar 50ms a que el gestor de ventanas termine el resize,
+    # luego anclar la ultima vela al borde derecho.
+    # Sin esto el canvas crece pero el offset queda donde estaba,
+    # dejando espacio vacio a la derecha.
+    $mw->after( 50, sub { $engine->goto_last() if defined $engine } );
+}
+
+# F11 y Escape sincronizan el mismo boton del toolbar
+$mw->bind( '<Escape>', sub {
+    $mw->attributes( -fullscreen => 0 );
+    $fs_btn->configure( -text => '[  ]', -fg => '#b2b5be' ) if defined $fs_btn;
+    $mw->after( 50, sub { $engine->goto_last() if defined $engine } );
 });
+$mw->bind( '<F11>', sub { _toggle_fullscreen() } );
 
 # Cerrar ventana o Ctrl+Q mata el proceso
 $mw->protocol( 'WM_DELETE_WINDOW', sub { exit 0 } );
@@ -140,7 +159,7 @@ my $atr_scale_canvas = $atr_row->Canvas(
 )->pack( -side => 'right', -fill => 'y' );
 
 # ---- 5. Chart engine ----
-my $engine = Market::ChartEngine->new(
+$engine = Market::ChartEngine->new(
     market             => $market,
     indicators         => $indicators,
     price_canvas       => $price_canvas,
@@ -217,6 +236,23 @@ $toolbar->Button(
     -font             => ['Helvetica', 10, 'bold'],
     -command          => sub { exit 0 },
 )->pack( -side => 'right', -padx => 4, -pady => 2 );
+
+# Boton pantalla completa — muestra el estado actual y lo alterna al hacer click.
+# El texto cambia entre "[  ]" (ventana normal) y "[ # ]" (pantalla completa).
+# Los canvas se adaptan solos porque <Configure> llama a request_render() al
+# cambiar el tamanio de la ventana.
+$fs_btn = $toolbar->Button(
+    -text             => '[  ]',
+    -bg               => '#2a2d3e',
+    -fg               => '#b2b5be',
+    -relief           => 'flat',
+    -padx             => 10,
+    -pady             => 3,
+    -activebackground => '#3a3d4e',
+    -activeforeground => '#ffffff',
+    -font             => ['Helvetica', 10],
+    -command          => \&_toggle_fullscreen,
+)->pack( -side => 'right', -padx => 2, -pady => 2 );
 
 # ---- 6. Bind events and first render ----
 $engine->set_scale_mode_callback( \&_update_mode_btn );

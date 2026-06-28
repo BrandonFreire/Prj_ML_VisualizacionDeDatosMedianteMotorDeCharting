@@ -368,59 +368,96 @@ sub bind_events {
     $self->_bind_all_canvas( $self->{price_canvas} );
     $self->_bind_all_canvas( $self->{atr_canvas} );
 
-    # --- Escala Y del precio: drag vertical + zoom con rueda ---
-    # Tk::break() impide que los bindings del MainWindow (pan horizontal) también disparen.
-    # Sin break, al hacer click en la escala Y se iniciaría TAMBIÉN el pan horizontal.
-    $self->{price_scale_canvas}->bind( '<ButtonPress-1>', sub {
-        my $e = $self->{price_scale_canvas}->XEvent();
-        $self->{_vy_drag_start} = $e->y;
-        $self->{_vy_min_start}  = $self->{price_scale}{y_min} // 0;
-        $self->{_vy_max_start}  = $self->{price_scale}{y_max} // 1;
-        Tk::break();   # Feature 3: evitar conflicto con pan horizontal del MainWindow
+    # ---------------------------------------------------------------
+    # Escala Y del PRECIO — drag vertical + rueda para zoom vertical
+    # ---------------------------------------------------------------
+    # Por que usamos pointery() en lugar de XEvent()->y:
+    #   XEvent() puede devolver coordenadas relativas al canvas, que dejan de
+    #   ser utiles cuando el mouse sale del canvas durante el drag (la diferencia
+    #   entre movimientos consecutivos se distorsiona). pointery() da la Y
+    #   absoluta de pantalla, que siempre es continua durante todo el arrastre.
+    #
+    # Por que Tk::break():
+    #   Los eventos se propagan en cadena de bind-tags:
+    #     canvas → Canvas (clase) → "." (toplevel/MainWindow) → "all"
+    #   Sin break, el MainWindow veria el ButtonPress y llamaria drag_start(),
+    #   activando el pan horizontal al mismo tiempo que el zoom vertical.
+    #   Tk::break() corta la cadena despues del binding del canvas.
+    # ---------------------------------------------------------------
+    my $psc = $self->{price_scale_canvas};
+
+    $psc->bind( '<ButtonPress-1>', sub {
+        # Guardar Y absoluta de pantalla como referencia de inicio del drag
+        $self->{_vy_drag_start} = $psc->pointery();
+
+        # Si estabamos en auto, pasar a manual antes del primer arrastre
+        if ( $self->{y_auto} ) {
+            if ( $self->{price_scale} ) {
+                $self->{y_min_manual} = $self->{price_scale}{y_min};
+                $self->{y_max_manual} = $self->{price_scale}{y_max};
+            }
+            $self->{y_auto} = 0;
+            $self->{on_scale_mode_change}->(0) if $self->{on_scale_mode_change};
+        }
+
+        Tk::break();   # impide que MainWindow procese este click como pan horizontal
     });
-    $self->{price_scale_canvas}->bind( '<B1-Motion>', sub {
-        my $e  = $self->{price_scale_canvas}->XEvent();
-        $self->_vertical_drag( $e->y - ( $self->{_vy_drag_start} // $e->y ) );
-        $self->{_vy_drag_start} = $e->y;
-        Tk::break();
-    });
-    $self->{price_scale_canvas}->bind( '<ButtonRelease-1>', sub {
-        $self->{_vy_drag_start} = undef;
-    });
-    # Feature 4: rueda del mouse sobre escala Y hace zoom vertical (no horizontal)
-    # Scroll arriba (Button-4) = zoom in = rango mas chico = velas mas altas
-    $self->{price_scale_canvas}->bind( '<Button-4>', sub {
-        $self->_vertical_zoom(0.85);
-        Tk::break();
-    });
-    $self->{price_scale_canvas}->bind( '<Button-5>', sub {
-        $self->_vertical_zoom(1 / 0.85);
+
+    $psc->bind( '<B1-Motion>', sub {
+        my $current_y = $psc->pointery();
+        my $dy = $current_y - ( $self->{_vy_drag_start} // $current_y );
+        if ( $dy != 0 ) {
+            $self->_vertical_drag($dy);
+            $self->{_vy_drag_start} = $current_y;
+        }
         Tk::break();
     });
 
-    # --- Feature 7: Escala Y del ATR — zoom vertical independiente ---
-    $self->{atr_scale_canvas}->bind( '<ButtonPress-1>', sub {
-        my $e = $self->{atr_scale_canvas}->XEvent();
-        $self->{_atr_vy_drag_start} = $e->y;
+    $psc->bind( '<ButtonRelease-1>', sub {
+        $self->{_vy_drag_start} = undef;
+    });
+
+    # Rueda del mouse sobre escala Y → zoom vertical (no horizontal)
+    # Button-4 = scroll arriba = zoom IN (rango mas chico, velas mas grandes)
+    # Button-5 = scroll abajo  = zoom OUT (rango mas grande, velas mas chicas)
+    $psc->bind( '<Button-4>', sub { $self->_vertical_zoom(0.85);     Tk::break() });
+    $psc->bind( '<Button-5>', sub { $self->_vertical_zoom(1 / 0.85); Tk::break() });
+
+    # ---------------------------------------------------------------
+    # Escala Y del ATR — zoom vertical INDEPENDIENTE del de precio
+    # ---------------------------------------------------------------
+    my $asc = $self->{atr_scale_canvas};
+
+    $asc->bind( '<ButtonPress-1>', sub {
+        $self->{_atr_vy_drag_start} = $asc->pointery();
+
+        if ( $self->{y_auto_atr} ) {
+            if ( $self->{atr_scale} ) {
+                $self->{y_min_atr} = $self->{atr_scale}{y_min};
+                $self->{y_max_atr} = $self->{atr_scale}{y_max};
+            }
+            $self->{y_auto_atr} = 0;
+        }
+
         Tk::break();
     });
-    $self->{atr_scale_canvas}->bind( '<B1-Motion>', sub {
-        my $e = $self->{atr_scale_canvas}->XEvent();
-        $self->_vertical_drag_atr( $e->y - ( $self->{_atr_vy_drag_start} // $e->y ) );
-        $self->{_atr_vy_drag_start} = $e->y;
+
+    $asc->bind( '<B1-Motion>', sub {
+        my $current_y = $asc->pointery();
+        my $dy = $current_y - ( $self->{_atr_vy_drag_start} // $current_y );
+        if ( $dy != 0 ) {
+            $self->_vertical_drag_atr($dy);
+            $self->{_atr_vy_drag_start} = $current_y;
+        }
         Tk::break();
     });
-    $self->{atr_scale_canvas}->bind( '<ButtonRelease-1>', sub {
+
+    $asc->bind( '<ButtonRelease-1>', sub {
         $self->{_atr_vy_drag_start} = undef;
     });
-    $self->{atr_scale_canvas}->bind( '<Button-4>', sub {
-        $self->_vertical_zoom_atr(0.85);
-        Tk::break();
-    });
-    $self->{atr_scale_canvas}->bind( '<Button-5>', sub {
-        $self->_vertical_zoom_atr(1 / 0.85);
-        Tk::break();
-    });
+
+    $asc->bind( '<Button-4>', sub { $self->_vertical_zoom_atr(0.85);     Tk::break() });
+    $asc->bind( '<Button-5>', sub { $self->_vertical_zoom_atr(1 / 0.85); Tk::break() });
 
     # Crosshair via MainWindow: <Motion> en canvas-level no dispara de forma confiable
     # en X11/Linux. Se usan coords de pantalla (X,Y mayusculas) y se convierten a canvas-local
@@ -646,15 +683,28 @@ sub _vertical_drag {
     my ($self, $dy) = @_;
     return unless defined $self->{price_scale};
 
-    my $scale  = $self->{price_scale};
-    my $range  = $scale->{y_max} - $scale->{y_min};
-    # Feature 5: dy > 0 = arrastrar hacia abajo = zoom IN (rango se achica)
-    # Esto coincide con el comportamiento de TradingView en el eje Y.
-    my $factor = 1 - $dy / ( $scale->{y_height} || 400 );
+    # IMPORTANTE: leer de y_min_manual/y_max_manual (no de price_scale) cuando ya estamos
+    # en modo manual. price_scale refleja el ultimo RENDER completado; si B1-Motion llega
+    # varias veces antes del siguiente render (16 ms), cada llamada tomaría el mismo
+    # valor obsoleto y el zoom no acumularia. Con y_min_manual leemos el valor ya
+    # actualizado por la llamada anterior, aunque el canvas todavia no redibujó.
+    my ($y_min, $y_max);
+    if ( $self->{y_auto} ) {
+        $y_min = $self->{price_scale}{y_min};
+        $y_max = $self->{price_scale}{y_max};
+    } else {
+        $y_min = $self->{y_min_manual};
+        $y_max = $self->{y_max_manual};
+    }
+    my $range  = $y_max - $y_min;
+    my $h      = $self->{price_scale}{y_height} || 400;
+
+    # dy > 0 = arrastrar hacia abajo = zoom IN (rango se achica) — igual que TradingView
+    my $factor = 1 - $dy / $h;
     $factor = 0.1  if $factor < 0.1;
     $factor = 10.0 if $factor > 10.0;
 
-    my $mid      = ( $scale->{y_max} + $scale->{y_min} ) / 2;
+    my $mid      = ( $y_max + $y_min ) / 2;
     my $new_half = ( $range / 2 ) * $factor;
 
     my $was_auto = $self->{y_auto};
@@ -692,9 +742,17 @@ sub set_scale_mode_callback {
 sub _vertical_zoom {
     my ($self, $factor) = @_;
     return unless defined $self->{price_scale};
-    my $scale    = $self->{price_scale};
-    my $mid      = ( $scale->{y_max} + $scale->{y_min} ) / 2;
-    my $half     = ( $scale->{y_max} - $scale->{y_min} ) / 2 * $factor;
+    # Mismo principio: leer de y_min_manual si ya estamos en modo manual
+    my ($y_min, $y_max);
+    if ( $self->{y_auto} ) {
+        $y_min = $self->{price_scale}{y_min};
+        $y_max = $self->{price_scale}{y_max};
+    } else {
+        $y_min = $self->{y_min_manual};
+        $y_max = $self->{y_max_manual};
+    }
+    my $mid      = ( $y_max + $y_min ) / 2;
+    my $half     = ( $y_max - $y_min ) / 2 * $factor;
     my $was_auto = $self->{y_auto};
     $self->{y_auto}        = 0;
     $self->{y_min_manual}  = $mid - $half;
@@ -706,16 +764,24 @@ sub _vertical_zoom {
     $self->request_render();
 }
 
-# Feature 7: zoom vertical independiente del panel ATR
+# Zoom vertical independiente del panel ATR
 sub _vertical_drag_atr {
     my ($self, $dy) = @_;
     return unless defined $self->{atr_scale};
-    my $scale    = $self->{atr_scale};
-    my $range    = $scale->{y_max} - $scale->{y_min};
-    my $factor   = 1 - $dy / ( $scale->{y_height} || 150 );
+    my ($y_min, $y_max);
+    if ( $self->{y_auto_atr} ) {
+        $y_min = $self->{atr_scale}{y_min};
+        $y_max = $self->{atr_scale}{y_max};
+    } else {
+        $y_min = $self->{y_min_atr};
+        $y_max = $self->{y_max_atr};
+    }
+    my $range  = $y_max - $y_min;
+    my $h      = $self->{atr_scale}{y_height} || 150;
+    my $factor = 1 - $dy / $h;
     $factor = 0.1  if $factor < 0.1;
     $factor = 10.0 if $factor > 10.0;
-    my $mid      = ( $scale->{y_max} + $scale->{y_min} ) / 2;
+    my $mid      = ( $y_max + $y_min ) / 2;
     my $new_half = ( $range / 2 ) * $factor;
     $self->{y_auto_atr}    = 0;
     $self->{y_min_atr}     = $mid - $new_half;
@@ -727,9 +793,16 @@ sub _vertical_drag_atr {
 sub _vertical_zoom_atr {
     my ($self, $factor) = @_;
     return unless defined $self->{atr_scale};
-    my $scale = $self->{atr_scale};
-    my $mid   = ( $scale->{y_max} + $scale->{y_min} ) / 2;
-    my $half  = ( $scale->{y_max} - $scale->{y_min} ) / 2 * $factor;
+    my ($y_min, $y_max);
+    if ( $self->{y_auto_atr} ) {
+        $y_min = $self->{atr_scale}{y_min};
+        $y_max = $self->{atr_scale}{y_max};
+    } else {
+        $y_min = $self->{y_min_atr};
+        $y_max = $self->{y_max_atr};
+    }
+    my $mid  = ( $y_max + $y_min ) / 2;
+    my $half = ( $y_max - $y_min ) / 2 * $factor;
     $self->{y_auto_atr}    = 0;
     $self->{y_min_atr}     = $mid - $half;
     $self->{y_max_atr}     = $mid + $half;
