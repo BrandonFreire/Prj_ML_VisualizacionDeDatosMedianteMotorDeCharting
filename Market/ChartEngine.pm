@@ -42,7 +42,8 @@ sub new {
         on_scale_mode_change => undef,
 
         # --- Overlays SMC y Liquidez ---
-        overlays => [],   # lista de objetos overlay (respond a ->render(...))
+        overlays        => [],   # lista de objetos overlay
+        _lq_indicator   => undef,  # Market::Indicators::Liquidity
 
         # --- Sistema Replay ---
         replay_mode    => 0,       # 1 = en modo replay
@@ -781,6 +782,11 @@ sub set_smc_indicator {
     $self->{_smc_indicator} = $ind;
 }
 
+sub set_lq_indicator {
+    my ($self, $ind) = @_;
+    $self->{_lq_indicator} = $ind;
+}
+
 sub set_replay_callback {
     my ($self, $cb) = @_;
     $self->{on_replay_state_change} = $cb;
@@ -1051,7 +1057,11 @@ sub set_timeframe {
     $self->{indicators}->reset_all();
     $self->{indicators}->compute_all( $self->{market} );
 
-    # Recomputar SMC al cambiar timeframe (swing points cambian con cada TF)
+    # Recomputar Liquidity y SMC al cambiar timeframe
+    if ( $self->{_lq_indicator} ) {
+        $self->{_lq_indicator}->reset();
+        $self->{_lq_indicator}->compute_all( $self->{market} );
+    }
     if ( $self->{_smc_indicator} ) {
         $self->{_smc_indicator}->reset();
         $self->{_smc_indicator}->compute_all( $self->{market} );

@@ -9,17 +9,25 @@ use warnings;
 sub new {
     my ($class, %args) = @_;
     return bless {
-        depth => $args{depth} // 3,   # k: barras de vecindad para swing points
-        _sh   => [],   # swing highs: [{index, price, swept}]
-        _sl   => [],   # swing lows:  [{index, price, swept}]
-        _bos  => [],   # BOS events:  [{index, level, from, direction}]
-        _fvg  => [],   # FVG zones:   [{index, top, bottom, direction}]
+        depth        => $args{depth} // 3,
+        _sh          => [],   # swing highs
+        _sl          => [],   # swing lows
+        _bos         => [],   # BOS events  [{index,level,from,direction}]
+        _choch       => [],   # CHoCH events [{index,level,from,direction}]
+        _fvg         => [],   # FVG zones
+        _lq_ref      => undef, # referencia opcional al indicador Liquidity
     }, $class;
+}
+
+# Permite vincular el indicador Liquidity para ajustar probabilidades BOS/CHoCH
+sub set_liquidity_indicator {
+    my ($self, $lq) = @_;
+    $self->{_lq_ref} = $lq;
 }
 
 sub reset {
     my ($self) = @_;
-    $self->{$_} = [] for qw(_sh _sl _bos _fvg);
+    $self->{$_} = [] for qw(_sh _sl _bos _choch _fvg);
 }
 
 sub compute_all {
@@ -51,15 +59,31 @@ sub compute_all {
     $self->{_sl} = \@sl;
 
     # ----------------------------------------------------------------
-    # 2. BOS (Break of Structure)
-    #    Se registra cuando el cierre supera el ultimo swing no barrido.
-    #    Algoritmo O(n): pointer al ultimo swing confirmado (i-k barras atras).
+    # 2. BOS y CHoCH con vinculacion a vectores de liquidez
+    #
+    # BOS  = ruptura en la MISMA direccion que la tendencia actual
+    # CHoCH = ruptura en direccion CONTRARIA (cambio de caracter)
+    #
+    # Segun especificacion: si ocurrio un SWEEP de liquidez reciente,
+    # se incrementa la probabilidad de CHoCH en la direccion opuesta.
+    # Implementamos esto marcando choch_boosted=1 cuando hay un SWEEP
+    # previo que coincide con la direccion del CHoCH detectado.
     # ----------------------------------------------------------------
-    my ($last_sh, $last_sl) = (undef, undef);
-    my ($shi, $sli) = (0, 0);   # punteros sobre @sh y @sl
+    my ($last_sh, $last_sl)   = (undef, undef);
+    my ($shi, $sli)           = (0, 0);
+    my $trend = 0;   # 0=neutral, 1=bullish, -1=bearish
+
+    # Construir lookup de SWEEP events del indicador Liquidity (si esta vinculado)
+    my %sweep_at_index;
+    if ( $self->{_lq_ref} ) {
+        for my $ev ( @{ $self->{_lq_ref}->get_resolved() } ) {
+            next unless ($ev->{classification}//'') eq 'SWEEP'
+                     || ($ev->{classification}//'') eq 'GRAB';
+            $sweep_at_index{ $ev->{resolved_at} // 0 } = $ev;
+        }
+    }
 
     for my $i ( $k .. $n - 1 ) {
-        # Avanzar punteros: usar solo swings cuya ventana ya cerro (index + k <= i)
         while ($shi < @sh && $sh[$shi]{index} + $k <= $i) {
             $last_sh = $sh[$shi] unless $sh[$shi]{swept};
             $shi++;
@@ -69,27 +93,39 @@ sub compute_all {
             $sli++;
         }
 
-        # BOS Alcista: cierre supera el ultimo swing high no barrido
+        # Ruptura alcista (cierre > ultimo swing high)
         if ( $last_sh && !$last_sh->{swept} && $arr->[$i]{close} > $last_sh->{price} ) {
             $last_sh->{swept} = 1;
-            push @{ $self->{_bos} }, {
+            my $is_choch = ($trend == -1);   # tendencia bajista previa → cambio de caracter
+            my $boosted  = $is_choch && _recent_sweep(\%sweep_at_index, $i, 'sl', 10);
+            my $event = {
                 index     => $i,
                 level     => $last_sh->{price},
                 from      => $last_sh->{index},
                 direction => 'bull',
+                boosted   => $boosted // 0,
             };
+            if ($is_choch) { push @{ $self->{_choch} }, $event }
+            else           { push @{ $self->{_bos}   }, $event }
+            $trend   = 1;
             $last_sh = undef;
         }
 
-        # BOS Bajista: cierre perfora el ultimo swing low no barrido
+        # Ruptura bajista (cierre < ultimo swing low)
         if ( $last_sl && !$last_sl->{swept} && $arr->[$i]{close} < $last_sl->{price} ) {
             $last_sl->{swept} = 1;
-            push @{ $self->{_bos} }, {
+            my $is_choch = ($trend == 1);    # tendencia alcista previa → cambio de caracter
+            my $boosted  = $is_choch && _recent_sweep(\%sweep_at_index, $i, 'sh', 10);
+            my $event = {
                 index     => $i,
                 level     => $last_sl->{price},
                 from      => $last_sl->{index},
                 direction => 'bear',
+                boosted   => $boosted // 0,
             };
+            if ($is_choch) { push @{ $self->{_choch} }, $event }
+            else           { push @{ $self->{_bos}   }, $event }
+            $trend   = -1;
             $last_sl = undef;
         }
     }
@@ -119,9 +155,22 @@ sub compute_all {
     }
 }
 
-sub get_swing_highs { return $_[0]->{_sh}  }
-sub get_swing_lows  { return $_[0]->{_sl}  }
-sub get_bos_events  { return $_[0]->{_bos} }
-sub get_fvg_zones   { return $_[0]->{_fvg} }
+sub get_swing_highs  { return $_[0]->{_sh}    }
+sub get_swing_lows   { return $_[0]->{_sl}    }
+sub get_bos_events   { return $_[0]->{_bos}   }
+sub get_choch_events { return $_[0]->{_choch} }
+sub get_fvg_zones    { return $_[0]->{_fvg}   }
+
+# Devuelve true si hay un evento SWEEP/GRAB en el indicador Liquidity
+# dentro de las ultimas $window barras antes de $bar_i, del tipo $side (sh/sl).
+sub _recent_sweep {
+    my ($lookup, $bar_i, $side_filter, $window) = @_;
+    for my $idx (keys %$lookup) {
+        next if $idx > $bar_i || $idx < $bar_i - $window;
+        my $ev = $lookup->{$idx};
+        return 1 if ($ev->{side}//'') eq $side_filter;
+    }
+    return 0;
+}
 
 1;

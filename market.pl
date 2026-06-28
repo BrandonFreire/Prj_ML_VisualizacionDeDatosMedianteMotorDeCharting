@@ -34,6 +34,7 @@ use Market::MarketData;
 use Market::IndicatorManager;
 use Market::Indicators::ATR;
 use Market::Indicators::SMC_Structures;
+use Market::Indicators::Liquidity;
 use Market::Overlays::SMC_Structures;
 use Market::Overlays::Liquidity;
 use Market::ChartEngine;
@@ -88,14 +89,30 @@ $indicators->compute_all($market);
 print "Done.\n";
 
 # ---- 3b. Computar indicador SMC (Swing Points, BOS, FVG) ----
-print "Computing SMC Structures (swing points, BOS, FVG)...\n";
+# ---- 3b. Maquina de estados de Liquidez (SWEEP / GRAB / RUN) ----
+print "Computing Liquidity state machine (SWEEP/GRAB/RUN)...\n";
+my $lq_ind = Market::Indicators::Liquidity->new( depth => 3, atr_period => $ATR_PERIOD );
+$lq_ind->compute_all($market);
+my $lq_res = $lq_ind->get_resolved();
+printf "  Niveles detectados: %d  Resueltos: %d  (SWEEP=%d GRAB=%d RUN=%d)\n",
+    scalar @{ $lq_ind->get_levels() },
+    scalar @$lq_res,
+    scalar( grep { ($_->{classification}//'') eq 'SWEEP' } @$lq_res ),
+    scalar( grep { ($_->{classification}//'') eq 'GRAB'  } @$lq_res ),
+    scalar( grep { ($_->{classification}//'') eq 'RUN'   } @$lq_res );
+print "Done.\n";
+
+# ---- 3c. SMC Structures vinculado con Liquidity ----
+print "Computing SMC Structures (BOS, CHoCH, FVG)...\n";
 my $smc_ind = Market::Indicators::SMC_Structures->new( depth => 3 );
+$smc_ind->set_liquidity_indicator($lq_ind);   # vincula para boosted CHoCH
 $smc_ind->compute_all($market);
-printf "  Swing Highs: %d  Swing Lows: %d  BOS: %d  FVG: %d\n",
-    scalar @{ $smc_ind->get_swing_highs() },
-    scalar @{ $smc_ind->get_swing_lows()  },
-    scalar @{ $smc_ind->get_bos_events()  },
-    scalar @{ $smc_ind->get_fvg_zones()   };
+printf "  SH: %d  SL: %d  BOS: %d  CHoCH: %d  FVG: %d\n",
+    scalar @{ $smc_ind->get_swing_highs()  },
+    scalar @{ $smc_ind->get_swing_lows()   },
+    scalar @{ $smc_ind->get_bos_events()   },
+    scalar @{ $smc_ind->get_choch_events() },
+    scalar @{ $smc_ind->get_fvg_zones()    };
 print "Done.\n";
 
 # ---- 4. Build Tk window ----
@@ -372,9 +389,10 @@ $fs_btn = $toolbar->Button(
 
 # ---- 6. Bind events and first render ----
 # Registrar overlays SMC y Liquidez
+$engine->set_lq_indicator($lq_ind);
 $engine->set_smc_indicator($smc_ind);
 $engine->add_overlay( Market::Overlays::SMC_Structures->new( indicator => $smc_ind ) );
-$engine->add_overlay( Market::Overlays::Liquidity->new(      indicator => $smc_ind ) );
+$engine->add_overlay( Market::Overlays::Liquidity->new(      indicator => $lq_ind  ) );
 
 $engine->set_scale_mode_callback( \&_update_mode_btn );
 $engine->set_replay_callback( \&_update_replay_ui );

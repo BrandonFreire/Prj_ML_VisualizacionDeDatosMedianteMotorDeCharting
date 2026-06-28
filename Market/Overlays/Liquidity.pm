@@ -31,19 +31,28 @@ sub render {
 
     $canvas->delete('lq_overlay');
 
-    $self->_render_levels( $canvas, $d_start, $d_end, $scale, $current_bar,
-        $ind->get_swing_highs(), $COLOR_BSL, 'BSL' ) if $self->{show_bsl};
+    # Market::Indicators::Liquidity usa get_bsl_levels/get_ssl_levels
+    # Market::Indicators::SMC_Structures usa get_swing_highs/get_swing_lows
+    my $bsl = $ind->can('get_bsl_levels') ? $ind->get_bsl_levels() : $ind->get_swing_highs();
+    my $ssl = $ind->can('get_ssl_levels') ? $ind->get_ssl_levels() : $ind->get_swing_lows();
 
     $self->_render_levels( $canvas, $d_start, $d_end, $scale, $current_bar,
-        $ind->get_swing_lows(),  $COLOR_SSL, 'SSL' ) if $self->{show_ssl};
+        $bsl, $COLOR_BSL, 'BSL' ) if $self->{show_bsl};
+
+    $self->_render_levels( $canvas, $d_start, $d_end, $scale, $current_bar,
+        $ssl, $COLOR_SSL, 'SSL' ) if $self->{show_ssl};
 }
 
 sub _render_levels {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar, $levels, $color, $tag) = @_;
 
-    # Filtrar: solo niveles formados antes de current_bar y aun no barridos
+    # Filtrar niveles no barridos formados antes de current_bar.
+    # SMC_Structures usa campo 'swept' (0/1); Liquidity usa 'state' (DETECTED/SWEPT/RESOLVED).
     my @active = grep {
-        $_->{index} <= $current_bar - 1 && !$_->{swept}
+        $_->{index} <= $current_bar - 1
+        && ( exists $_->{swept}
+             ? !$_->{swept}
+             : (($_->{state}//'DETECTED') eq 'DETECTED') )
     } @$levels;
 
     # Tomar solo los N mas recientes (los mas relevantes)
