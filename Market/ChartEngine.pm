@@ -41,6 +41,17 @@ sub new {
 
         on_scale_mode_change => undef,
 
+        # --- Overlays SMC y Liquidez ---
+        overlays => [],   # lista de objetos overlay (respond a ->render(...))
+
+        # --- Sistema Replay ---
+        replay_mode    => 0,       # 1 = en modo replay
+        replay_cursor  => undef,   # indice de la ultima vela visible (barrera temporal)
+        replay_playing => 0,       # 1 = avanzando automaticamente
+        replay_speed   => 400,     # ms entre pasos en modo play normal
+        _replay_timer  => undef,   # ID del after() activo
+        on_replay_state_change => undef,  # callback(state) para actualizar UI
+
         # ATR independent Y scale
         y_auto_atr         => 1,
         y_min_atr          => 0,
@@ -78,6 +89,11 @@ sub compute_window {
     my $n       = $self->{visible_bars};
     my $v_end   = $last - $self->{offset};
     my $v_start = $v_end - $n + 1;
+
+    # Replay: nunca mostrar velas mas alla del cursor temporal
+    if ( $self->{replay_mode} && defined $self->{replay_cursor} ) {
+        $v_end = $self->{replay_cursor} if $v_end > $self->{replay_cursor};
+    }
 
     my $d_start = $v_start < 0     ? 0     : $v_start;
     my $d_end   = $v_end   > $last ? $last : $v_end;
@@ -260,6 +276,13 @@ sub _full_render {
     my $ts = $self->compute_intraday_labels( $d_start, $d_end, $pscale );
     $self->{price_panel}->draw_time_axis( $pc, $ts );
 
+    # --- Overlays SMC y Liquidez (encima de las velas, debajo del precio final) ---
+    my $cur_bar = $self->{replay_mode} && defined $self->{replay_cursor}
+                  ? $self->{replay_cursor} : $d_end;
+    for my $ov ( @{ $self->{overlays} } ) {
+        $ov->render( $pc, $d_start, $d_end, $pscale, $cur_bar );
+    }
+
     # --- Price scale (must come after candles so lastprice draws on ready canvas) ---
     $psc->delete('all');
     $pscale->_draw_y_scale($psc);
@@ -334,6 +357,13 @@ sub _incremental_pan {
     $pc->delete('timeaxis');
     my $ts = $self->compute_intraday_labels( $d_start, $d_end, $pscale );
     $self->{price_panel}->draw_time_axis( $pc, $ts );
+
+    # Redraw overlays
+    my $cur_bar2 = $self->{replay_mode} && defined $self->{replay_cursor}
+                   ? $self->{replay_cursor} : $d_end;
+    for my $ov ( @{ $self->{overlays} } ) {
+        $ov->render( $pc, $d_start, $d_end, $pscale, $cur_bar2 );
+    }
 
     # Redraw last price label
     $pc->delete('lastprice');
@@ -609,7 +639,7 @@ sub zoom {
     $self->{visible_bars} = $new_bars;
     $self->{_render_state} = undef;    # force full render after zoom
     my $tf = $self->{market}{current_tf};
-    $self->{price_canvas}->toplevel->title("Market Chart | ${tf}m  [velas: $new_bars]");
+    $self->{price_canvas}->toplevel->title("Market Chart | " . $self->tf_label($tf) . "  [velas: $new_bars]");
     $self->request_render();
 }
 
@@ -673,7 +703,7 @@ sub zoom_at {
     $self->{offset}        = $new_off;
     $self->{_render_state} = undef;
     my $tf = $self->{market}{current_tf};
-    $self->{price_canvas}->toplevel->title("Market Chart | ${tf}m  [velas: $new_bars]");
+    $self->{price_canvas}->toplevel->title("Market Chart | " . $self->tf_label($tf) . "  [velas: $new_bars]");
     $self->request_render();
 }
 
@@ -737,6 +767,159 @@ sub toggle_auto_scale {
 sub set_scale_mode_callback {
     my ($self, $cb) = @_;
     $self->{on_scale_mode_change} = $cb;
+}
+
+# Registra un overlay; debe responder a ->render($canvas,$d_start,$d_end,$scale,$cur_bar)
+sub add_overlay {
+    my ($self, $overlay) = @_;
+    push @{ $self->{overlays} }, $overlay;
+}
+
+# Registra el indicador SMC para recomputarlo al cambiar timeframe
+sub set_smc_indicator {
+    my ($self, $ind) = @_;
+    $self->{_smc_indicator} = $ind;
+}
+
+sub set_replay_callback {
+    my ($self, $cb) = @_;
+    $self->{on_replay_state_change} = $cb;
+}
+
+# ================================================================
+# SISTEMA REPLAY — Seccion 3 de la especificacion
+# ================================================================
+# El cursor de replay es la "barrera temporal": ninguna vela con
+# indice > replay_cursor se mostrara en pantalla ni en indicadores.
+# compute_window() aplica este clamp en cada render.
+# Los indicadores ya estan precomputados para todo el historico;
+# el slice los limita al rango visible.
+# ================================================================
+
+sub start_replay {
+    my ($self) = @_;
+    # Tomar el borde derecho actual de la vista como punto de inicio del replay
+    my ($v_start, $v_end, $d_start, $d_end) = $self->compute_window();
+    $self->{replay_mode}    = 1;
+    $self->{replay_cursor}  = $d_end;
+    $self->{replay_playing} = 0;
+    $self->{replay_speed}   = 400;
+    $self->{_render_state}  = undef;
+    $self->{on_replay_state_change}->('started') if $self->{on_replay_state_change};
+    $self->request_render();
+}
+
+sub exit_replay {
+    my ($self) = @_;
+    $self->_stop_replay_timer();
+    $self->{replay_mode}    = 0;
+    $self->{replay_playing} = 0;
+    $self->{replay_cursor}  = undef;
+    $self->{_render_state}  = undef;
+    $self->{on_replay_state_change}->('exited') if $self->{on_replay_state_change};
+    $self->goto_last();
+}
+
+# Avanza el cursor una barra hacia el futuro y actualiza el offset
+# para que el cursor quede visible en el borde derecho de la vista.
+sub step_forward {
+    my ($self) = @_;
+    return unless $self->{replay_mode};
+    my $real_last = $self->{market}->last_index();
+    return if $self->{replay_cursor} >= $real_last;
+    $self->{replay_cursor}++;
+    $self->_anchor_cursor_to_right_edge();
+    $self->{_render_state} = undef;
+    $self->request_render();
+}
+
+sub step_backward {
+    my ($self) = @_;
+    return unless $self->{replay_mode};
+    return if $self->{replay_cursor} <= 0;
+    $self->{replay_cursor}--;
+    $self->_anchor_cursor_to_right_edge();
+    $self->{_render_state} = undef;
+    $self->request_render();
+}
+
+sub play_replay {
+    my ($self, $speed) = @_;
+    return unless $self->{replay_mode};
+    $self->_stop_replay_timer();
+    $self->{replay_speed}   = $speed // 400;
+    $self->{replay_playing} = 1;
+    $self->{on_replay_state_change}->('playing') if $self->{on_replay_state_change};
+    $self->_tick_replay();
+}
+
+sub pause_replay {
+    my ($self) = @_;
+    $self->_stop_replay_timer();
+    $self->{replay_playing} = 0;
+    $self->{on_replay_state_change}->('paused') if $self->{on_replay_state_change};
+}
+
+sub toggle_play_replay {
+    my ($self) = @_;
+    return unless $self->{replay_mode};
+    if ( $self->{replay_playing} ) {
+        $self->pause_replay();
+    } else {
+        $self->play_replay( $self->{replay_speed} );
+    }
+}
+
+sub fast_forward_replay {
+    my ($self) = @_;
+    $self->play_replay(50);   # 50 ms por barra = velocidad alta
+}
+
+sub _tick_replay {
+    my ($self) = @_;
+    return unless $self->{replay_playing} && $self->{replay_mode};
+
+    my $real_last = $self->{market}->last_index();
+    if ( $self->{replay_cursor} >= $real_last ) {
+        $self->{replay_playing} = 0;
+        $self->{_replay_timer}  = undef;
+        $self->{on_replay_state_change}->('end') if $self->{on_replay_state_change};
+        return;
+    }
+
+    $self->{replay_cursor}++;
+    $self->_anchor_cursor_to_right_edge();
+    $self->{_render_state} = undef;
+    $self->request_render();
+
+    $self->{_replay_timer} = $self->{price_canvas}->after(
+        $self->{replay_speed},
+        sub { $self->_tick_replay() }
+    );
+}
+
+sub _stop_replay_timer {
+    my ($self) = @_;
+    if ( defined $self->{_replay_timer} ) {
+        eval { $self->{price_canvas}->after_cancel( $self->{_replay_timer} ) };
+        $self->{_replay_timer} = undef;
+    }
+}
+
+# Ajusta el offset para que replay_cursor quede en el borde derecho visible.
+# Si el cursor retrocede mas alla del borde izquierdo, ajusta en esa direccion.
+sub _anchor_cursor_to_right_edge {
+    my ($self) = @_;
+    my $cursor    = $self->{replay_cursor};
+    my $real_last = $self->{market}->last_index();
+
+    # offset tal que v_end = cursor
+    my $new_off = $real_last - $cursor;
+    $new_off = 0 if $new_off < 0;
+
+    $self->{offset}        = $new_off;
+    $self->{_offset_exact} = $new_off * 1.0;
+    $self->{_x_offset}     = 0.0;
 }
 
 sub _vertical_zoom {
@@ -866,8 +1049,13 @@ sub set_timeframe {
     my ($self, $tf) = @_;
     $self->{market}->set_timeframe($tf);
     $self->{indicators}->reset_all();
-
     $self->{indicators}->compute_all( $self->{market} );
+
+    # Recomputar SMC al cambiar timeframe (swing points cambian con cada TF)
+    if ( $self->{_smc_indicator} ) {
+        $self->{_smc_indicator}->reset();
+        $self->{_smc_indicator}->compute_all( $self->{market} );
+    }
 
     $self->reset_view();
 }
@@ -885,19 +1073,58 @@ sub reset_view {
 # Compute time labels for visible range (filtered to avoid overlap)
 sub _nice_step_minutes {
     my ($self, $raw) = @_;
-    my @steps = (1, 2, 3, 5, 10, 15, 20, 30, 60, 120, 180, 240, 360, 720, 1440);
+    my @steps = (1, 2, 3, 5, 10, 15, 20, 30, 60, 120, 180, 240, 360, 720, 1440, 4320, 10080);
     for my $s (@steps) {
         return $s if $raw <= $s;
     }
-    return 1440;
+    return 10080;
 }
 
 my @_MESES = qw(Enero Febrero Marzo Abril Mayo Junio
                 Julio Agosto Septiembre Octubre Noviembre Diciembre);
 
+# Mapa de etiquetas legibles para cada clave de timeframe
+my %_TF_LABEL = (
+    '1'     => '1m',  '5'    => '5m',  '15'   => '15m',
+    '60'    => '1h',  '120'  => '2h',  '240'  => '4h',
+    '1440'  => 'D',   '10080'=> 'W',
+);
+
+sub tf_label {
+    my ($self, $tf) = @_;
+    $tf //= $self->{market}{current_tf} // '1';
+    return $_TF_LABEL{$tf} // "${tf}m";
+}
+
 sub compute_intraday_labels {
     my ($self, $start, $end, $scale) = @_;
     my @labels;
+
+    my $tf_min = $self->{market}{current_tf} || 1;
+    $tf_min += 0;
+    $tf_min = 1 if $tf_min <= 0;
+
+    # --- Temporalidades D y W: una etiqueta de fecha por barra ---
+    if ( $tf_min >= 1440 ) {
+        my $prev_week = '';
+        for my $i ($start .. $end) {
+            my $ts = $self->{market}->get_timestamp($i);
+            next unless defined $ts;
+            my @lt = localtime($ts);
+            my $label;
+            if ( $tf_min >= 10080 ) {
+                # Semanal: mostrar mes + dia del lunes
+                my $week_key = sprintf("%04d-W%02d", $lt[5]+1900, int(($lt[7]+6)/7));
+                next if $week_key eq $prev_week;
+                $prev_week = $week_key;
+                $label = $_MESES[$lt[4]] . ' ' . $lt[3];
+            } else {
+                $label = $_MESES[$lt[4]] . ' ' . $lt[3];
+            }
+            push @labels, { index => $i, label => $label, time => $ts };
+        }
+        return \@labels;
+    }
 
     my $bar_w = 8;
     if ($scale && ($scale->{visible_bars} || 0) > 0) {
@@ -907,10 +1134,6 @@ sub compute_intraday_labels {
     my $target_px      = 90;
     my $bars_per_label = int($target_px / ($bar_w || 1) + 0.999);
     $bars_per_label = 1 if $bars_per_label < 1;
-
-    my $tf_min = $self->{market}{current_tf} || 1;
-    $tf_min += 0;
-    $tf_min = 1 if $tf_min <= 0;
 
     my $step_min = $self->_nice_step_minutes($bars_per_label * $tf_min);
     my $step_sec = $step_min * 60;
@@ -927,37 +1150,31 @@ sub compute_intraday_labels {
         my $min     = $lt[1];
         my $day_key = sprintf("%04d-%02d-%02d", $lt[5] + 1900, $lt[4] + 1, $lt[3]);
 
-        # --- Pivote 1: Medianoche (00:00) — frontera del dia calendario ---
-        # Siempre visible, independiente del nivel de zoom.
-        if ($hour == 0 && $min == 0) {
-            push @labels, {
-                index => $i,
-                label => $_MESES[$lt[4]] . ' ' . $lt[3],
-                time  => $ts,
-            };
-            $prev_day_key = $day_key;
-            $prev_bucket  = int($ts / $step_sec);
-            next;
+        # Para timeframes >= 1h los pivotes de 00:00 y 17:00 no aplican;
+        # usar solo el cambio de dia como frontera principal.
+        if ( $tf_min < 60 ) {
+            # --- Pivote 1: Medianoche (00:00) ---
+            if ($hour == 0 && $min == 0) {
+                push @labels, { index=>$i, label=>$_MESES[$lt[4]].' '.$lt[3], time=>$ts };
+                $prev_day_key = $day_key;
+                $prev_bucket  = int($ts / $step_sec);
+                next;
+            }
+            # --- Pivote 2: 17:00 apertura NQ ---
+            if ($hour == 17 && $min == 0) {
+                push @labels, { index => $i, label => '17:00', time => $ts };
+                $prev_bucket = int($ts / $step_sec);
+                next;
+            }
         }
 
-        # --- Pivote 2: 17:00 — apertura de sesion de futuros NQ (5 PM CDT) ---
-        # Siempre visible, independiente del nivel de zoom.
-        if ($hour == 17 && $min == 0) {
-            push @labels, { index => $i, label => '17:00', time => $ts };
-            $prev_bucket = int($ts / $step_sec);
-            next;
-        }
-
-        # --- Etiquetas adaptativas al zoom ---
-        # Si es el primer bar de un dia nuevo y su 00:00 no estaba en rango visible,
-        # agregar la fecha como contexto.
+        # --- Frontera de dia (primer bar de un dia nuevo) ---
         if (!defined $prev_day_key || $day_key ne $prev_day_key) {
             $prev_day_key = $day_key;
-            push @labels, {
-                index => $i,
-                label => $_MESES[$lt[4]] . ' ' . $lt[3] . sprintf(" %02d:%02d", $hour, $min),
-                time  => $ts,
-            };
+            my $lbl = $tf_min >= 60
+                ? $_MESES[$lt[4]] . ' ' . $lt[3]
+                : $_MESES[$lt[4]] . ' ' . $lt[3] . sprintf(" %02d:%02d", $hour, $min);
+            push @labels, { index => $i, label => $lbl, time => $ts };
             $prev_bucket = int($ts / $step_sec);
             next;
         }

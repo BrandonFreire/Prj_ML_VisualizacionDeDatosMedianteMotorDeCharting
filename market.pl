@@ -33,6 +33,9 @@ sub parse_ts {
 use Market::MarketData;
 use Market::IndicatorManager;
 use Market::Indicators::ATR;
+use Market::Indicators::SMC_Structures;
+use Market::Overlays::SMC_Structures;
+use Market::Overlays::Liquidity;
 use Market::ChartEngine;
 
 # ---- Configuration ----
@@ -70,10 +73,11 @@ close $fh;
 
 # ---- 2. Build higher timeframes (5m, 15m) ----
 $market->build_timeframes();
-printf "Loaded: 1m=%d  5m=%d  15m=%d candles\n",
-    scalar @{ $market->get_data()->{'1'}  },
-    scalar @{ $market->get_data()->{'5'}  },
-    scalar @{ $market->get_data()->{'15'} };
+my $d = $market->get_data();
+printf "Loaded: 1m=%d  5m=%d  15m=%d  1h=%d  4h=%d  D=%d  W=%d candles\n",
+    scalar @{ $d->{'1'} }, scalar @{ $d->{'5'} }, scalar @{ $d->{'15'} },
+    scalar @{ $d->{'60'} }, scalar @{ $d->{'240'} },
+    scalar @{ $d->{'1440'} }, scalar @{ $d->{'10080'} };
 
 # ---- 3. Compute indicators for 1m timeframe ----
 my $indicators = Market::IndicatorManager->new();
@@ -81,6 +85,17 @@ $indicators->register( 'ATR', Market::Indicators::ATR->new($ATR_PERIOD) );
 
 print "Computing ATR($ATR_PERIOD) with MXNet tensors...\n";
 $indicators->compute_all($market);
+print "Done.\n";
+
+# ---- 3b. Computar indicador SMC (Swing Points, BOS, FVG) ----
+print "Computing SMC Structures (swing points, BOS, FVG)...\n";
+my $smc_ind = Market::Indicators::SMC_Structures->new( depth => 3 );
+$smc_ind->compute_all($market);
+printf "  Swing Highs: %d  Swing Lows: %d  BOS: %d  FVG: %d\n",
+    scalar @{ $smc_ind->get_swing_highs() },
+    scalar @{ $smc_ind->get_swing_lows()  },
+    scalar @{ $smc_ind->get_bos_events()  },
+    scalar @{ $smc_ind->get_fvg_zones()   };
 print "Done.\n";
 
 # ---- 4. Build Tk window ----
@@ -169,23 +184,34 @@ $engine = Market::ChartEngine->new(
     visible_bars       => $INITIAL_BARS,
 );
 
-# ---- Timeframe buttons ----
-for my $tf ( '1', '5', '15' ) {
-    my $btn;
-    $btn = $toolbar->Button(
-        -text             => "${tf}m",
+# ---- Timeframe buttons (1m → W) ----
+my @TIMEFRAMES = (
+    { tf => '1',     label => '1m'  },
+    { tf => '5',     label => '5m'  },
+    { tf => '15',    label => '15m' },
+    { tf => '60',    label => '1h'  },
+    { tf => '120',   label => '2h'  },
+    { tf => '240',   label => '4h'  },
+    { tf => '1440',  label => 'D'   },
+    { tf => '10080', label => 'W'   },
+);
+for my $entry ( @TIMEFRAMES ) {
+    my $tf  = $entry->{tf};
+    my $lbl = $entry->{label};
+    $toolbar->Button(
+        -text             => $lbl,
         -bg               => '#2a2d3e',
         -fg               => '#b2b5be',
         -relief           => 'flat',
-        -padx             => 10,
+        -padx             => 8,
         -pady             => 3,
         -activebackground => '#3a3d4e',
         -activeforeground => '#ffffff',
         -command          => sub {
-            $mw->title("Market Chart  |  ${tf}m");
+            $mw->title("Market Chart  |  $lbl");
             $engine->set_timeframe($tf);
         },
-    )->pack( -side => 'left', -padx => 2, -pady => 2 );
+    )->pack( -side => 'left', -padx => 1, -pady => 2 );
 }
 
 $toolbar->Button(
@@ -223,6 +249,96 @@ $mode_btn = $toolbar->Button(
     -command          => sub { $engine->toggle_auto_scale() },
 )->pack( -side => 'left', -padx => 2, -pady => 2 );
 
+# ---- Separador visual ----
+$toolbar->Label( -text => '|', -bg => '#1e222d', -fg => '#3a3d4e' )
+    ->pack( -side => 'left', -padx => 4 );
+
+# ---- Controles de Replay (Seccion 3) ----
+# Boton para entrar/salir de modo Replay
+my $replay_btn;
+my $play_btn;
+
+sub _update_replay_ui {
+    my ($state) = @_;
+    return unless defined $replay_btn;
+    if ( $state eq 'exited' ) {
+        $replay_btn->configure( -text => 'Replay', -fg => '#b2b5be' );
+        $play_btn->configure(   -text => '>',       -fg => '#b2b5be' ) if defined $play_btn;
+    } elsif ( $state eq 'started' ) {
+        $replay_btn->configure( -text => 'EXIT RP', -fg => '#f6c90e' );
+        $play_btn->configure(   -text => '>',        -fg => '#26a69a' ) if defined $play_btn;
+    } elsif ( $state eq 'playing' ) {
+        $play_btn->configure( -text => '| |', -fg => '#f6c90e' ) if defined $play_btn;
+    } elsif ( $state eq 'paused' || $state eq 'end' ) {
+        $play_btn->configure( -text => '>',   -fg => '#26a69a' ) if defined $play_btn;
+    }
+}
+
+$replay_btn = $toolbar->Button(
+    -text             => 'Replay',
+    -bg               => '#2a2d3e',
+    -fg               => '#b2b5be',
+    -relief           => 'flat',
+    -padx             => 8,
+    -pady             => 3,
+    -activebackground => '#3a3d4e',
+    -command          => sub {
+        if ( $engine->{replay_mode} ) {
+            $engine->exit_replay();
+        } else {
+            $engine->start_replay();
+        }
+    },
+)->pack( -side => 'left', -padx => 1, -pady => 2 );
+
+# Retroceder una barra
+$toolbar->Button(
+    -text             => '|<',
+    -bg               => '#2a2d3e',
+    -fg               => '#b2b5be',
+    -relief           => 'flat',
+    -padx             => 6,
+    -pady             => 3,
+    -activebackground => '#3a3d4e',
+    -command          => sub { $engine->step_backward() },
+)->pack( -side => 'left', -padx => 1, -pady => 2 );
+
+# Play / Pause (toggle)
+$play_btn = $toolbar->Button(
+    -text             => '>',
+    -bg               => '#2a2d3e',
+    -fg               => '#26a69a',
+    -relief           => 'flat',
+    -padx             => 8,
+    -pady             => 3,
+    -activebackground => '#3a3d4e',
+    -command          => sub { $engine->toggle_play_replay() },
+)->pack( -side => 'left', -padx => 1, -pady => 2 );
+
+# Avanzar una barra
+$toolbar->Button(
+    -text             => '>|',
+    -bg               => '#2a2d3e',
+    -fg               => '#b2b5be',
+    -relief           => 'flat',
+    -padx             => 6,
+    -pady             => 3,
+    -activebackground => '#3a3d4e',
+    -command          => sub { $engine->step_forward() },
+)->pack( -side => 'left', -padx => 1, -pady => 2 );
+
+# Fast Forward
+$toolbar->Button(
+    -text             => '>>',
+    -bg               => '#2a2d3e',
+    -fg               => '#b2b5be',
+    -relief           => 'flat',
+    -padx             => 6,
+    -pady             => 3,
+    -activebackground => '#3a3d4e',
+    -command          => sub { $engine->fast_forward_replay() },
+)->pack( -side => 'left', -padx => 1, -pady => 2 );
+
 # Boton cerrar (siempre visible en pantalla completa)
 $toolbar->Button(
     -text             => '  X  ',
@@ -255,7 +371,13 @@ $fs_btn = $toolbar->Button(
 )->pack( -side => 'right', -padx => 2, -pady => 2 );
 
 # ---- 6. Bind events and first render ----
+# Registrar overlays SMC y Liquidez
+$engine->set_smc_indicator($smc_ind);
+$engine->add_overlay( Market::Overlays::SMC_Structures->new( indicator => $smc_ind ) );
+$engine->add_overlay( Market::Overlays::Liquidity->new(      indicator => $smc_ind ) );
+
 $engine->set_scale_mode_callback( \&_update_mode_btn );
+$engine->set_replay_callback( \&_update_replay_ui );
 $engine->bind_events();
 
 # Pan horizontal + vertical (Ev('X','Y') = coords globales de pantalla)
