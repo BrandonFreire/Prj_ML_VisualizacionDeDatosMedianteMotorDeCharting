@@ -15,6 +15,7 @@ sub new {
         _bos         => [],   # BOS events  [{index,level,from,direction}]
         _choch       => [],   # CHoCH events [{index,level,from,direction}]
         _fvg         => [],   # FVG zones
+        _candles     => undef, # referencia al arreglo activo para mitigacion visual de FVG
         _lq_ref      => undef, # referencia opcional al indicador Liquidity
     }, $class;
 }
@@ -35,6 +36,7 @@ sub compute_all {
     $self->reset();
 
     my $arr = $market->_active_array();
+    $self->{_candles} = $arr;
     my $n   = scalar @$arr;
     my $k   = $self->{depth};
     return if $n < 2 * $k + 2;

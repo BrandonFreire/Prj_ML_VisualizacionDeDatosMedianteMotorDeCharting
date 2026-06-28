@@ -10,6 +10,8 @@ use warnings;
 
 my $COLOR_BSL = '#ef5350';   # rojo  — Buy Side Liquidity (stops de vendedores cortos)
 my $COLOR_SSL = '#26a69a';   # verde — Sell Side Liquidity (stops de compradores)
+my $COLOR_GRAB = '#ff9800';  # naranja — Liquidity Grab
+my $COLOR_RUN  = '#2196f3';  # azul — Liquidity Run
 
 sub new {
     my ($class, %args) = @_;
@@ -31,63 +33,100 @@ sub render {
 
     $canvas->delete('lq_overlay');
 
-    # Market::Indicators::Liquidity usa get_bsl_levels/get_ssl_levels
-    # Market::Indicators::SMC_Structures usa get_swing_highs/get_swing_lows
-    my $bsl = $ind->can('get_bsl_levels') ? $ind->get_bsl_levels() : $ind->get_swing_highs();
-    my $ssl = $ind->can('get_ssl_levels') ? $ind->get_ssl_levels() : $ind->get_swing_lows();
+    # Liquidity expone todos los niveles para poder dibujar lineas historicas cortadas
+    # en swept_at y etiquetas finales en resolved_at. Fallback: swings simples de SMC.
+    my ($bsl, $ssl);
+    if ( $ind->can('get_levels') ) {
+        my $levels = $ind->get_levels();
+        $bsl = [ grep { ($_->{side}//'') eq 'sh' || ($_->{type}//'') eq 'BSL' } @$levels ];
+        $ssl = [ grep { ($_->{side}//'') eq 'sl' || ($_->{type}//'') eq 'SSL' } @$levels ];
+    } else {
+        $bsl = $ind->get_swing_highs();
+        $ssl = $ind->get_swing_lows();
+    }
 
     $self->_render_levels( $canvas, $d_start, $d_end, $scale, $current_bar,
-        $bsl, $COLOR_BSL, 'BSL' ) if $self->{show_bsl};
+        $bsl, $COLOR_BSL, 'BSL', 'sh' ) if $self->{show_bsl};
 
     $self->_render_levels( $canvas, $d_start, $d_end, $scale, $current_bar,
-        $ssl, $COLOR_SSL, 'SSL' ) if $self->{show_ssl};
+        $ssl, $COLOR_SSL, 'SSL', 'sl' ) if $self->{show_ssl};
 }
 
 sub _render_levels {
-    my ($self, $canvas, $d_start, $d_end, $scale, $current_bar, $levels, $color, $tag) = @_;
+    my ($self, $canvas, $d_start, $d_end, $scale, $current_bar, $levels, $color, $tag, $side) = @_;
 
-    # Filtrar niveles no barridos formados antes de current_bar.
-    # SMC_Structures usa campo 'swept' (0/1); Liquidity usa 'state' (DETECTED/SWEPT/RESOLVED).
-    my @active = grep {
-        $_->{index} <= $current_bar - 1
-        && ( exists $_->{swept}
-             ? !$_->{swept}
-             : (($_->{state}//'DETECTED') eq 'DETECTED') )
-    } @$levels;
+    for my $lvl (@$levels) {
+        my $start_idx = $lvl->{start_index} // $lvl->{index};
+        next unless defined $start_idx;
+        next if $start_idx > $current_bar;
 
-    # Tomar solo los N mas recientes (los mas relevantes)
-    my $max = $self->{max_levels};
-    @active = @active[ -$max .. -1 ] if @active > $max;
-
-    for my $lvl (@active) {
         my $price = $lvl->{price};
         my $y     = $scale->value_to_y($price);
         next if $y < 0 || $y > $scale->{y_height};
 
-        # Linea discontinua que arranca desde la barra del swing hasta el borde derecho
-        my $x1 = $scale->index_to_center_x(
-            $lvl->{index} < $d_start ? $d_start : $lvl->{index}
-        );
-        my $x2 = $scale->{x_width};
+        my $swept_now = defined $lvl->{swept_at} && $lvl->{swept_at} <= $current_bar;
+        my $line_end  = $swept_now ? $lvl->{swept_at} : $current_bar;
+        $line_end = $d_end if $line_end > $d_end;
 
-        next if $x1 > $x2;
+        if ( $line_end >= $d_start && $start_idx <= $d_end ) {
+            my $draw_start = $start_idx < $d_start ? $d_start : $start_idx;
+            my $x1 = $scale->index_to_center_x($draw_start);
+            my $x2 = $scale->index_to_center_x($line_end);
 
-        $canvas->createLine( $x1, $y, $x2, $y,
-            -fill  => $color,
-            -width => 1,
-            -dash  => [6, 4],
-            -tags  => ['lq_overlay', "lq_$tag"],
-        );
+            if ( $x1 <= $scale->{x_width} && $x2 >= 0 && $x1 <= $x2 ) {
+                $canvas->createLine( $x1, $y, $x2, $y,
+                    -fill  => $color,
+                    -width => 1,
+                    -dash  => [6, 4],
+                    -tags  => ['lq_overlay', "lq_$tag"],
+                );
 
-        # Etiqueta "BSL" o "SSL" pegada al borde derecho
-        $canvas->createText( $x2 - 4, $y - 6,
-            -text   => $tag,
-            -fill   => $color,
-            -font   => ['Helvetica', 7, 'bold'],
-            -anchor => 'e',
-            -tags   => ['lq_overlay', "lq_$tag"],
+                if (!$swept_now) {
+                    $canvas->createText( $x2 - 4, $y - 6,
+                        -text   => $tag,
+                        -fill   => $color,
+                        -font   => ['Helvetica', 7, 'bold'],
+                        -anchor => 'e',
+                        -tags   => ['lq_overlay', "lq_$tag"],
+                    );
+                }
+            }
+        }
+
+        next unless defined $lvl->{classification};
+        next unless defined $lvl->{resolved_at} && $lvl->{resolved_at} <= $current_bar;
+        next if $lvl->{resolved_at} < $d_start || $lvl->{resolved_at} > $d_end;
+
+        my ($text, $label_color) = _resolution_label($lvl, $side);
+        next unless defined $text;
+
+        my $lx = $scale->index_to_center_x($lvl->{resolved_at});
+        my $ly = ($side eq 'sh') ? $y - 14 : $y + 14;
+        $ly = 8 if $ly < 8;
+        $ly = $scale->{y_height} - 8 if $ly > $scale->{y_height} - 8;
+
+        $canvas->createText( $lx, $ly,
+            -text   => $text,
+            -fill   => $label_color,
+            -font   => ['Helvetica', 8, 'bold'],
+            -anchor => 'center',
+            -tags   => ['lq_overlay', 'lq_resolved'],
         );
     }
+}
+
+sub _resolution_label {
+    my ($lvl, $side) = @_;
+    my $class = $lvl->{classification} // return;
+
+    if ($class eq 'SWEEP') {
+        return $side eq 'sh'
+            ? ('SWEEP ↑', $COLOR_BSL)
+            : ('SWEEP ↓', $COLOR_SSL);
+    }
+    return ('LQ GRAB', $COLOR_GRAB) if $class eq 'GRAB';
+    return ('LQ RUN',  $COLOR_RUN)  if $class eq 'RUN';
+    return;
 }
 
 1;

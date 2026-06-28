@@ -21,7 +21,7 @@ sub new {
         indicator   => $args{indicator},
         show_bos    => $args{show_bos}   // 1,
         show_fvg    => $args{show_fvg}   // 1,
-        fvg_max_age => $args{fvg_max_age} // 60,  # barras antes de ocultar un FVG
+        fvg_max_age => $args{fvg_max_age} // 20,  # barras maximas hacia futuro si no hay mitigacion
     }, $class;
 }
 
@@ -62,60 +62,46 @@ sub _render_fvg {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar, $recent_sweeps) = @_;
     $recent_sweeps //= {};
     my $fvgs = $self->{indicator}->get_fvg_zones();
+    my $candles = $self->{indicator}{_candles} // [];
+    my $bar_w = $scale->{x_width} / ( $scale->{visible_bars} || 1 );
 
     for my $fvg (@$fvgs) {
         my $idx = $fvg->{index};
-        next if $idx > $current_bar;          # no mostrar FVGs futuros (Replay)
-        next if $idx < $d_start - 1;         # totalmente fuera de la vista
+        my $formed_at = $fvg->{formed_at} // ($idx + 1);
+        next if $formed_at > $current_bar;     # no mostrar FVGs aun no confirmados en Replay
 
-        my $age = $current_bar - $idx;
-        next if $age > $self->{fvg_max_age}; # FVG expirado
+        my $max_end = $idx + $self->{fvg_max_age};
+        my $end_idx = $current_bar < $max_end ? $current_bar : $max_end;
+        my $mitigated_at = _fvg_mitigated_at($fvg, $candles, $formed_at + 1, $end_idx);
+        $end_idx = $mitigated_at if defined $mitigated_at && $mitigated_at < $end_idx;
 
-        # Verificar si el FVG fue "llenado" (precio entro en la zona)
-        # Comprobar las barras entre idx y current_bar
-        my $filled = 0;
-        # (omitimos la verificacion exhaustiva para eficiencia; el stipple es suficiente para la demo)
+        next if $end_idx < $d_start;           # el bloque ya termino antes de la vista
+        next if $idx > $d_end;                 # empieza despues de la vista
 
-        # Desvanecimiento progresivo mediante stipple de Tk:
-        #   0-10  barras → solido (mas reciente)
-        #   11-25        → gray75 (25% del fondo se ve)
-        #   26-45        → gray50
-        #   46+          → gray25 (casi desaparecido)
-        my $stipple = '';
-        if    ($age <= 10) { $stipple = ''       }
-        elsif ($age <= 25) { $stipple = 'gray75' }
-        elsif ($age <= 45) { $stipple = 'gray50' }
-        else               { $stipple = 'gray25' }
+        my $age = $end_idx - $idx;
+        my $stipple = $age <= 6  ? 'gray75'
+                    : $age <= 12 ? 'gray50'
+                    :              'gray25';
 
-        # Coordenadas en pantalla
         my $x1 = $scale->index_to_center_x($idx);
-        # El FVG se extiende hasta el borde derecho visible o hasta current_bar
-        my $x2 = $scale->index_to_center_x( $d_end < $current_bar ? $d_end : $current_bar ) + 8;
-
-        my $y1 = $scale->value_to_y( $fvg->{top} );
-        my $y2 = $scale->value_to_y( $fvg->{bottom} );
-
-        next if $x1 > $scale->{x_width};   # fuera de pantalla a la derecha
-        next if $x2 < 0;                   # fuera de pantalla a la izquierda
+        my $x2 = $scale->index_to_center_x($end_idx) + ($bar_w * 0.5);
+        next if $x1 > $scale->{x_width} || $x2 < 0;
         $x1 = 0 if $x1 < 0;
+        $x2 = $scale->{x_width} if $x2 > $scale->{x_width};
+
+        my $yt = $scale->value_to_y( $fvg->{top} );
+        my $yb = $scale->value_to_y( $fvg->{bottom} );
+        my $y1 = $yt < $yb ? $yt : $yb;
+        my $y2 = $yt < $yb ? $yb : $yt;
 
         my $color = $fvg->{direction} eq 'bull' ? $COLOR_FVG_BULL : $COLOR_FVG_BEAR;
 
-        if ($stipple ne '') {
-            $canvas->createRectangle( $x1, $y1, $x2, $y2,
-                -fill    => $color,
-                -outline => '',
-                -stipple => $stipple,
-                -tags    => ['smc_overlay', 'fvg'],
-            );
-        } else {
-            $canvas->createRectangle( $x1, $y1, $x2, $y2,
-                -fill    => $color,
-                -outline => '',
-                -stipple => 'gray75',   # siempre semi-transparente para no tapar velas
-                -tags    => ['smc_overlay', 'fvg'],
-            );
-        }
+        $canvas->createRectangle( $x1, $y1, $x2, $y2,
+            -fill    => $color,
+            -outline => '',
+            -stipple => $stipple,
+            -tags    => ['smc_overlay', 'fvg'],
+        );
 
         # Verificar si este FVG coincide con un Sweep/Grab reciente (ventana de 5 barras)
         my $is_zone = 0;
@@ -135,6 +121,24 @@ sub _render_fvg {
             -tags   => ['smc_overlay', 'fvg'],
         );
     }
+}
+
+sub _fvg_mitigated_at {
+    my ($fvg, $candles, $from, $to) = @_;
+    return undef unless $candles && @$candles;
+    $from = 0 if $from < 0;
+    $to = $#$candles if $to > $#$candles;
+    return undef if $from > $to;
+
+    for my $i ($from .. $to) {
+        my $c = $candles->[$i] // next;
+        if ( ($fvg->{direction}//'') eq 'bull' ) {
+            return $i if defined $c->{low} && $c->{low} <= $fvg->{bottom};
+        } else {
+            return $i if defined $c->{high} && $c->{high} >= $fvg->{top};
+        }
+    }
+    return undef;
 }
 
 # ----------------------------------------------------------------
