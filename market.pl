@@ -217,7 +217,6 @@ my %overlay_visibility = (
     show_bos           => 1,
     show_fvg           => 1,
     show_market_regime => 0,
-    show_fibonacci     => 1,
     show_manual_fibonacci => 1,
 
     liquidity_enabled  => 1,
@@ -321,8 +320,6 @@ my %overlay_parent_for = (
     show_bos           => 'smc_enabled',
     show_fvg           => 'smc_enabled',
     show_market_regime => 'smc_enabled',
-    show_fibonacci     => 'smc_enabled',
-
     show_bsl           => 'liquidity_enabled',
     show_ssl           => 'liquidity_enabled',
     show_eqh           => 'liquidity_enabled',
@@ -520,7 +517,6 @@ $build_overlay_detail = sub {
         $add_overlay_toggle->( 'BOS',           'show_bos', 0 );
         $add_overlay_toggle->( 'FVG fade',      'show_fvg', 0 );
         $add_overlay_toggle->( 'Market Regime', 'show_market_regime', 0 );
-        $add_overlay_toggle->( 'Fibonacci',     'show_fibonacci', 0 );
     } elsif ( $group eq 'liquidity' ) {
         $add_overlay_toggle->( 'Modulo completo', 'liquidity_enabled', 1 );
         $add_overlay_separator->();
