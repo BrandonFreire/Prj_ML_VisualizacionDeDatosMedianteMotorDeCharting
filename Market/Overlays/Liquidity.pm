@@ -2,6 +2,7 @@ package Market::Overlays::Liquidity;
 
 use strict;
 use warnings;
+use utf8;
 
 # Módulo de Liquidez — renderiza BSL y SSL segun la especificacion Tabla 2:
 #   BSL (Buy Side Liquidity):  linea horizontal discontinua ROJA por encima de swing highs
@@ -32,17 +33,18 @@ sub render {
     return unless $ind;
 
     $canvas->delete('lq_overlay');
+    $self->{_label_slots} = {};
 
     # Liquidity expone todos los niveles para poder dibujar lineas historicas cortadas
     # en swept_at y etiquetas finales en resolved_at. Fallback: swings simples de SMC.
     my ($bsl, $ssl);
     if ( $ind->can('get_levels') ) {
-        my $levels = $ind->get_levels();
+        my $levels = $ind->get_levels() // [];
         $bsl = [ grep { ($_->{side}//'') eq 'sh' || ($_->{type}//'') eq 'BSL' } @$levels ];
         $ssl = [ grep { ($_->{side}//'') eq 'sl' || ($_->{type}//'') eq 'SSL' } @$levels ];
     } else {
-        $bsl = $ind->get_swing_highs();
-        $ssl = $ind->get_swing_lows();
+        $bsl = $ind->can('get_swing_highs') ? $ind->get_swing_highs() : [];
+        $ssl = $ind->can('get_swing_lows')  ? $ind->get_swing_lows()  : [];
     }
 
     $self->_render_levels( $canvas, $d_start, $d_end, $scale, $current_bar,
@@ -61,17 +63,22 @@ sub _render_levels {
         next if $start_idx > $current_bar;
 
         my $price = $lvl->{price};
+        next unless defined $price;
         my $y     = $scale->value_to_y($price);
-        next if $y < 0 || $y > $scale->{y_height};
+        next if defined $scale->{y_height} && ($y < 0 || $y > $scale->{y_height});
+
+        $self->_render_eq_connector(
+            $canvas, $d_start, $d_end, $scale, $current_bar, $lvl, $color, $side, $y
+        );
 
         my $swept_now = defined $lvl->{swept_at} && $lvl->{swept_at} <= $current_bar;
         my $line_end  = $swept_now ? $lvl->{swept_at} : $current_bar;
-        $line_end = $d_end if $line_end > $d_end;
+        my $draw_start = $start_idx < $d_start ? $d_start : $start_idx;
+        my $draw_end   = $line_end  > $d_end   ? $d_end   : $line_end;
 
-        if ( $line_end >= $d_start && $start_idx <= $d_end ) {
-            my $draw_start = $start_idx < $d_start ? $d_start : $start_idx;
+        if ( $draw_end >= $d_start && $draw_start <= $d_end && $draw_start <= $draw_end ) {
             my $x1 = $scale->index_to_center_x($draw_start);
-            my $x2 = $scale->index_to_center_x($line_end);
+            my $x2 = $scale->index_to_center_x($draw_end);
 
             if ( $x1 <= $scale->{x_width} && $x2 >= 0 && $x1 <= $x2 ) {
                 $canvas->createLine( $x1, $y, $x2, $y,
@@ -81,13 +88,17 @@ sub _render_levels {
                     -tags  => ['lq_overlay', "lq_$tag"],
                 );
 
-                if (!$swept_now) {
+                my $level_label = _level_label($lvl, $tag, $side);
+                if (
+                    ( !$swept_now || $level_label eq 'EQH' || $level_label eq 'EQL' )
+                    && $self->_claim_label_slot( $x2 - 4, $y - 6 )
+                ) {
                     $canvas->createText( $x2 - 4, $y - 6,
-                        -text   => $tag,
+                        -text   => $level_label,
                         -fill   => $color,
                         -font   => ['Helvetica', 7, 'bold'],
                         -anchor => 'e',
-                        -tags   => ['lq_overlay', "lq_$tag"],
+                        -tags   => ['lq_overlay', "lq_$tag", "lq_$level_label"],
                     );
                 }
             }
@@ -103,7 +114,9 @@ sub _render_levels {
         my $lx = $scale->index_to_center_x($lvl->{resolved_at});
         my $ly = ($side eq 'sh') ? $y - 14 : $y + 14;
         $ly = 8 if $ly < 8;
-        $ly = $scale->{y_height} - 8 if $ly > $scale->{y_height} - 8;
+        $ly = $scale->{y_height} - 8
+            if defined $scale->{y_height} && $ly > $scale->{y_height} - 8;
+        next unless $self->_claim_label_slot( $lx, $ly );
 
         $canvas->createText( $lx, $ly,
             -text   => $text,
@@ -113,6 +126,66 @@ sub _render_levels {
             -tags   => ['lq_overlay', 'lq_resolved'],
         );
     }
+}
+
+sub _render_eq_connector {
+    my ($self, $canvas, $d_start, $d_end, $scale, $current_bar, $lvl, $color, $side, $y) = @_;
+
+    my $is_eq = ($side eq 'sh' && $lvl->{is_eqh}) || ($side eq 'sl' && $lvl->{is_eql});
+    return unless $is_eq;
+
+    my $pair_idx  = $lvl->{eq_pair};
+    my $start_idx = $lvl->{start_index} // $lvl->{index};
+    return unless defined $pair_idx && defined $start_idx;
+    return if $pair_idx > $current_bar || $start_idx > $current_bar;
+
+    my $from = $pair_idx < $start_idx ? $pair_idx : $start_idx;
+    my $to   = $pair_idx < $start_idx ? $start_idx : $pair_idx;
+    $to = $current_bar if $to > $current_bar;
+
+    my $draw_start = $from < $d_start ? $d_start : $from;
+    my $draw_end   = $to   > $d_end   ? $d_end   : $to;
+    return if $draw_start > $draw_end;
+
+    my $x1 = $scale->index_to_center_x($draw_start);
+    my $x2 = $scale->index_to_center_x($draw_end);
+    return if $x1 > $scale->{x_width} || $x2 < 0 || $x1 > $x2;
+
+    my $label = $side eq 'sh' ? 'EQH' : 'EQL';
+    $canvas->createLine( $x1, $y, $x2, $y,
+        -fill  => $color,
+        -width => 1,
+        -dash  => [2, 2],
+        -tags  => ['lq_overlay', "lq_$label"],
+    );
+
+    my $lx = ($x1 + $x2) / 2;
+    my $ly = $side eq 'sh' ? $y - 8 : $y + 8;
+    return unless $self->_claim_label_slot( $lx, $ly );
+    $canvas->createText( $lx, $ly,
+        -text   => $label,
+        -fill   => $color,
+        -font   => ['Helvetica', 7, 'bold'],
+        -anchor => 'center',
+        -tags   => ['lq_overlay', "lq_$label"],
+    );
+}
+
+sub _claim_label_slot {
+    my ($self, $x, $y) = @_;
+    my $slot_x = int( ($x // 0) / 46 );
+    my $slot_y = int( ($y // 0) / 16 );
+    my $key = "$slot_x:$slot_y";
+    return 0 if $self->{_label_slots}{$key};
+    $self->{_label_slots}{$key} = 1;
+    return 1;
+}
+
+sub _level_label {
+    my ($lvl, $tag, $side) = @_;
+    return 'EQH' if $side eq 'sh' && $lvl->{is_eqh};
+    return 'EQL' if $side eq 'sl' && $lvl->{is_eql};
+    return $tag;
 }
 
 sub _resolution_label {

@@ -51,8 +51,8 @@ sub render {
 
     $self->_render_fvg( $canvas, $d_start, $d_end, $scale, $current_bar, \%recent_sweeps )
         if $self->{show_fvg};
-    $self->_render_bos(   $canvas, $d_start, $d_end, $scale ) if $self->{show_bos};
-    $self->_render_choch( $canvas, $d_start, $d_end, $scale );
+    $self->_render_bos(   $canvas, $d_start, $d_end, $scale, $current_bar ) if $self->{show_bos};
+    $self->_render_choch( $canvas, $d_start, $d_end, $scale, $current_bar );
 }
 
 # ----------------------------------------------------------------
@@ -61,30 +61,37 @@ sub render {
 sub _render_fvg {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar, $recent_sweeps) = @_;
     $recent_sweeps //= {};
-    my $fvgs = $self->{indicator}->get_fvg_zones();
+    my $fvgs = $self->{indicator}->get_fvg_zones() // [];
     my $candles = $self->{indicator}{_candles} // [];
     my $bar_w = $scale->{x_width} / ( $scale->{visible_bars} || 1 );
 
     for my $fvg (@$fvgs) {
         my $idx = $fvg->{index};
-        my $formed_at = $fvg->{formed_at} // ($idx + 1);
+        my $formed_at = $fvg->{formed_at} // $idx;
+        next unless defined $formed_at;
+        next unless defined $fvg->{top} && defined $fvg->{bottom};
         next if $formed_at > $current_bar;     # no mostrar FVGs aun no confirmados en Replay
 
-        my $max_end = $idx + $self->{fvg_max_age};
+        my $max_age = $self->{fvg_max_age} // 20;
+        my $max_end = $formed_at + $max_age;
         my $end_idx = $current_bar < $max_end ? $current_bar : $max_end;
         my $mitigated_at = _fvg_mitigated_at($fvg, $candles, $formed_at + 1, $end_idx);
         $end_idx = $mitigated_at if defined $mitigated_at && $mitigated_at < $end_idx;
 
         next if $end_idx < $d_start;           # el bloque ya termino antes de la vista
-        next if $idx > $d_end;                 # empieza despues de la vista
+        next if $formed_at > $d_end;           # empieza despues de la vista
 
-        my $age = $end_idx - $idx;
-        my $stipple = $age <= 6  ? 'gray75'
-                    : $age <= 12 ? 'gray50'
-                    :              'gray25';
+        my $draw_start = $formed_at < $d_start ? $d_start : $formed_at;
+        my $draw_end   = $end_idx   > $d_end   ? $d_end   : $end_idx;
+        next if $draw_start > $draw_end;
 
-        my $x1 = $scale->index_to_center_x($idx);
-        my $x2 = $scale->index_to_center_x($end_idx) + ($bar_w * 0.5);
+        my $age = $end_idx - $formed_at;
+        my $stipple = $age <= 6  ? 'gray50'
+                    : $age <= 12 ? 'gray25'
+                    :              'gray12';
+
+        my $x1 = $scale->index_to_center_x($draw_start);
+        my $x2 = $scale->index_to_center_x($draw_end) + ($bar_w * 0.5);
         next if $x1 > $scale->{x_width} || $x2 < 0;
         $x1 = 0 if $x1 < 0;
         $x2 = $scale->{x_width} if $x2 > $scale->{x_width};
@@ -106,7 +113,7 @@ sub _render_fvg {
         # Verificar si este FVG coincide con un Sweep/Grab reciente (ventana de 5 barras)
         my $is_zone = 0;
         for my $si (keys %$recent_sweeps) {
-            $is_zone = 1 if abs($si - $idx) <= 5;
+            $is_zone = 1 if abs($si - $formed_at) <= 5;
         }
 
         # Etiqueta: "FVG" normal o "ZAR" (Zona de Alta Reaccion) si coincide con Sweep
@@ -126,6 +133,7 @@ sub _render_fvg {
 sub _fvg_mitigated_at {
     my ($fvg, $candles, $from, $to) = @_;
     return undef unless $candles && @$candles;
+    return undef unless defined $fvg->{top} && defined $fvg->{bottom};
     $from = 0 if $from < 0;
     $to = $#$candles if $to > $#$candles;
     return undef if $from > $to;
@@ -145,21 +153,25 @@ sub _fvg_mitigated_at {
 # BOS — linea horizontal + etiqueta "BOS" en la barra de ruptura
 # ----------------------------------------------------------------
 sub _render_bos {
-    my ($self, $canvas, $d_start, $d_end, $scale) = @_;
+    my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
+    $current_bar //= $d_end;
     my $bos_list = $self->{indicator}->get_bos_events();
 
     for my $bos (@$bos_list) {
         my $idx  = $bos->{index};
         my $from = $bos->{from};
-        next if $idx  < $d_start && $from < $d_start;  # completamente fuera
-        next if $from > $d_end;                         # aun no ocurrio
+        next unless defined $idx && defined $from && defined $bos->{level};
+        next if $idx > $current_bar;                    # evento futuro en Replay
+        my $line_end = $idx < $current_bar ? $idx : $current_bar;
+        next if $line_end < $d_start && $from < $d_start;  # completamente fuera
+        next if $from > $d_end;                            # aun no ocurrio
 
         my $color = $bos->{direction} eq 'bull' ? $COLOR_BOS_BULL : $COLOR_BOS_BEAR;
         my $y     = $scale->value_to_y( $bos->{level} );
 
         # Linea horizontal desde el swing original hasta la barra de ruptura
         my $x1 = $scale->index_to_center_x( $from < $d_start ? $d_start : $from );
-        my $x2 = $scale->index_to_center_x( $idx  > $d_end   ? $d_end   : $idx  );
+        my $x2 = $scale->index_to_center_x( $line_end > $d_end ? $d_end : $line_end );
 
         next if $x1 > $scale->{x_width} || $x2 < 0;
 
@@ -171,7 +183,7 @@ sub _render_bos {
         );
 
         # Etiqueta "BOS ▲" o "BOS ▼" en la barra de ruptura
-        if ( $idx >= $d_start && $idx <= $d_end ) {
+        if ( $idx >= $d_start && $idx <= $d_end && $idx <= $current_bar ) {
             my $arrow = $bos->{direction} eq 'bull' ? 'BOS ^' : 'BOS v';
             my $xa    = $scale->index_to_center_x($idx);
             my $offset = $bos->{direction} eq 'bull' ? -12 : 12;
@@ -190,7 +202,8 @@ sub _render_bos {
 # CHoCH — misma estructura que BOS pero colores distintos
 # ----------------------------------------------------------------
 sub _render_choch {
-    my ($self, $canvas, $d_start, $d_end, $scale) = @_;
+    my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
+    $current_bar //= $d_end;
     return unless $self->{indicator}->can('get_choch_events');
     my $list = $self->{indicator}->get_choch_events();
     return unless $list && @$list;
@@ -198,14 +211,17 @@ sub _render_choch {
     for my $ev (@$list) {
         my $idx  = $ev->{index};
         my $from = $ev->{from};
-        next if $idx < $d_start && $from < $d_start;
+        next unless defined $idx && defined $from && defined $ev->{level};
+        next if $idx > $current_bar;
+        my $line_end = $idx < $current_bar ? $idx : $current_bar;
+        next if $line_end < $d_start && $from < $d_start;
         next if $from > $d_end;
 
         my $color = $ev->{direction} eq 'bull' ? $COLOR_CHOCH_BULL : $COLOR_CHOCH_BEAR;
         my $width = ($ev->{boosted}//0) ? 2 : 1;
         my $y  = $scale->value_to_y( $ev->{level} );
         my $x1 = $scale->index_to_center_x( $from < $d_start ? $d_start : $from );
-        my $x2 = $scale->index_to_center_x( $idx  > $d_end   ? $d_end   : $idx  );
+        my $x2 = $scale->index_to_center_x( $line_end > $d_end ? $d_end : $line_end );
         next if $x1 > $scale->{x_width} || $x2 < 0;
 
         $canvas->createLine( $x1, $y, $x2, $y,
@@ -213,7 +229,7 @@ sub _render_choch {
             -tags => ['smc_overlay', 'choch'],
         );
 
-        if ( $idx >= $d_start && $idx <= $d_end ) {
+        if ( $idx >= $d_start && $idx <= $d_end && $idx <= $current_bar ) {
             my $xa   = $scale->index_to_center_x($idx);
             my $lbl  = $ev->{direction} eq 'bull' ? 'CHoCH ^' : 'CHoCH v';
             my $yoff = $ev->{direction} eq 'bull' ? -14 : 14;

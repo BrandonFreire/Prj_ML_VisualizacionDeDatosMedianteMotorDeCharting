@@ -3,12 +3,20 @@ package Market::MarketData;
 use strict;
 use warnings;
 use POSIX qw(floor);
-use AI::MXNet qw(mx);
 
 sub new {
     my ($class) = @_;
     my $self = {
-        data       => { '1' => [], '5' => [], '15' => [] },
+        data       => {
+            '1'     => [],
+            '5'     => [],
+            '15'    => [],
+            '60'    => [],
+            '120'   => [],
+            '240'   => [],
+            '1440'  => [],
+            '10080' => [],
+        },
         current_tf => '1',
         _cursor    => undef,
     };
@@ -27,7 +35,7 @@ sub add_candle {
 }
 
 # Build higher-timeframe candles from 1m data using integer arithmetic for bucket boundaries.
-# (MXNet float32 pierde precision con epochs de 2026: ULP ~128seg, bucket 5m=300seg → error de asignacion)
+# Evita float32 para epochs de 2026; los buckets se calculan con enteros Perl.
 sub build_tf_candles {
     my ($self, $tf) = @_;
     my @base    = @{ $self->{data}{'1'} };
@@ -46,8 +54,8 @@ sub build_tf_candles {
         push @vols,   $c->{volume};
     }
 
-    # ---- Bucket timestamps (enteros Perl: float32 de MXNet pierde precision en epochs 2026) ----
-    # float32 ULP para ~1.78e9 es 128 seg → velas al borde del bucket caen en el bucket equivocado.
+    # ---- Bucket timestamps (enteros Perl para evitar perdida de precision) ----
+    # float32 ULP para ~1.78e9 es 128 seg: velas al borde caerian en el bucket equivocado.
     my @buckets = map { int($times[$_] / $tf_secs) * $tf_secs } 0 .. $n - 1;
 
     # ---- Group boundary detection (Perl integers) ----
@@ -57,8 +65,7 @@ sub build_tf_candles {
     }
 
     # ---- Per-group aggregation (Perl loop over groups, Perl arrays for speed) ----
-    # MXNet overhead per call is too high for 6000 tiny slices.
-    # Tensor work is done above (bucket computation + boundary detection on 30k elements).
+    # Evita overhead innecesario para miles de slices pequenos.
     my @result;
     for my $gi (0 .. $#starts) {
         my $s  = $starts[$gi];
@@ -89,13 +96,34 @@ sub build_tf_candles {
 
 sub build_timeframes {
     my ($self) = @_;
-    $self->build_tf_candles(5);
-    $self->build_tf_candles(15);
+    for my $tf (qw(5 15 60 120 240 1440 10080)) {
+        $self->build_tf_candles($tf);
+    }
 }
 
 sub set_timeframe {
     my ($self, $tf) = @_;
     $self->{current_tf} = $tf;
+}
+
+sub clone_upto {
+    my ($self, $last_index) = @_;
+    my $tf  = $self->{current_tf};
+    my $src = $self->{data}{$tf} // [];
+
+    $last_index = $#$src unless defined $last_index;
+    $last_index = $#$src if $last_index > $#$src;
+    $last_index = -1    if $last_index < 0;
+
+    my %data = map { $_ => [] } keys %{ $self->{data} };
+    my @slice = $last_index >= 0 ? @{$src}[ 0 .. $last_index ] : ();
+    $data{$tf} = \@slice;
+
+    return bless {
+        data       => \%data,
+        current_tf => $tf,
+        _cursor    => undef,
+    }, ref($self);
 }
 
 sub _active_array {

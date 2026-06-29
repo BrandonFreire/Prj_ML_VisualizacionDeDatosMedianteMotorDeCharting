@@ -2,6 +2,7 @@ package Market::ChartEngine;
 
 use strict;
 use warnings;
+use lib '.';
 use Market::Panels::Scales;
 use Market::Panels::PricePanel;
 use Market::Panels::ATRPanel;
@@ -93,7 +94,10 @@ sub compute_window {
 
     # Replay: nunca mostrar velas mas alla del cursor temporal
     if ( $self->{replay_mode} && defined $self->{replay_cursor} ) {
-        $v_end = $self->{replay_cursor} if $v_end > $self->{replay_cursor};
+        if ( $v_end > $self->{replay_cursor} ) {
+            $v_end   = $self->{replay_cursor};
+            $v_start = $v_end - $n + 1;
+        }
     }
 
     my $d_start = $v_start < 0     ? 0     : $v_start;
@@ -792,14 +796,38 @@ sub set_replay_callback {
     $self->{on_replay_state_change} = $cb;
 }
 
+sub _indicator_market {
+    my ($self) = @_;
+    return $self->{market}->clone_upto( $self->{replay_cursor} )
+        if $self->{replay_mode} && defined $self->{replay_cursor};
+    return $self->{market};
+}
+
+sub _recompute_indicators_for_view {
+    my ($self) = @_;
+    my $calc_market = $self->_indicator_market();
+
+    $self->{indicators}->reset_all();
+    $self->{indicators}->compute_all($calc_market);
+
+    if ( $self->{_lq_indicator} ) {
+        $self->{_lq_indicator}->reset();
+        $self->{_lq_indicator}->compute_all($calc_market);
+    }
+    if ( $self->{_smc_indicator} ) {
+        $self->{_smc_indicator}->reset();
+        $self->{_smc_indicator}->compute_all($calc_market);
+    }
+}
+
 # ================================================================
 # SISTEMA REPLAY — Seccion 3 de la especificacion
 # ================================================================
 # El cursor de replay es la "barrera temporal": ninguna vela con
 # indice > replay_cursor se mostrara en pantalla ni en indicadores.
 # compute_window() aplica este clamp en cada render.
-# Los indicadores ya estan precomputados para todo el historico;
-# el slice los limita al rango visible.
+# En Replay, los indicadores se recomputan contra un MarketData truncado
+# hasta replay_cursor para evitar filtracion analitica de velas futuras.
 # ================================================================
 
 sub start_replay {
@@ -811,6 +839,7 @@ sub start_replay {
     $self->{replay_playing} = 0;
     $self->{replay_speed}   = 400;
     $self->{_render_state}  = undef;
+    $self->_recompute_indicators_for_view();
     $self->{on_replay_state_change}->('started') if $self->{on_replay_state_change};
     $self->request_render();
 }
@@ -822,6 +851,7 @@ sub exit_replay {
     $self->{replay_playing} = 0;
     $self->{replay_cursor}  = undef;
     $self->{_render_state}  = undef;
+    $self->_recompute_indicators_for_view();
     $self->{on_replay_state_change}->('exited') if $self->{on_replay_state_change};
     $self->goto_last();
 }
@@ -835,6 +865,7 @@ sub step_forward {
     return if $self->{replay_cursor} >= $real_last;
     $self->{replay_cursor}++;
     $self->_anchor_cursor_to_right_edge();
+    $self->_recompute_indicators_for_view();
     $self->{_render_state} = undef;
     $self->request_render();
 }
@@ -845,6 +876,7 @@ sub step_backward {
     return if $self->{replay_cursor} <= 0;
     $self->{replay_cursor}--;
     $self->_anchor_cursor_to_right_edge();
+    $self->_recompute_indicators_for_view();
     $self->{_render_state} = undef;
     $self->request_render();
 }
@@ -895,6 +927,7 @@ sub _tick_replay {
 
     $self->{replay_cursor}++;
     $self->_anchor_cursor_to_right_edge();
+    $self->_recompute_indicators_for_view();
     $self->{_render_state} = undef;
     $self->request_render();
 
@@ -1054,19 +1087,16 @@ sub _draw_crosshair_all {
 sub set_timeframe {
     my ($self, $tf) = @_;
     $self->{market}->set_timeframe($tf);
-    $self->{indicators}->reset_all();
-    $self->{indicators}->compute_all( $self->{market} );
 
-    # Recomputar Liquidity y SMC al cambiar timeframe
-    if ( $self->{_lq_indicator} ) {
-        $self->{_lq_indicator}->reset();
-        $self->{_lq_indicator}->compute_all( $self->{market} );
-    }
-    if ( $self->{_smc_indicator} ) {
-        $self->{_smc_indicator}->reset();
-        $self->{_smc_indicator}->compute_all( $self->{market} );
+    if ( $self->{replay_mode} ) {
+        my $last = $self->{market}->last_index();
+        $self->{replay_cursor} = $last
+            if defined $self->{replay_cursor} && $self->{replay_cursor} > $last;
+        $self->{replay_cursor} //= $last;
+        $self->_anchor_cursor_to_right_edge();
     }
 
+    $self->_recompute_indicators_for_view();
     $self->reset_view();
 }
 
@@ -1077,7 +1107,12 @@ sub reset_view {
     $self->{y_auto_atr}    = 1;
     $self->{_render_state} = undef;
     $self->{on_scale_mode_change}->(1) if $self->{on_scale_mode_change};
-    $self->goto_last();
+    if ( $self->{replay_mode} && defined $self->{replay_cursor} ) {
+        $self->_anchor_cursor_to_right_edge();
+        $self->request_render();
+    } else {
+        $self->goto_last();
+    }
 }
 
 # Compute time labels for visible range (filtered to avoid overlap)

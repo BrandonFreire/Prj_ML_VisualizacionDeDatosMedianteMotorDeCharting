@@ -72,13 +72,18 @@ while ( my $line = <$fh> ) {
 }
 close $fh;
 
-# ---- 2. Build higher timeframes (5m, 15m) ----
+# ---- 2. Build higher timeframes (5m, 15m, 1h, 2h, 4h, D, W) ----
 $market->build_timeframes();
 my $d = $market->get_data();
-printf "Loaded: 1m=%d  5m=%d  15m=%d  1h=%d  4h=%d  D=%d  W=%d candles\n",
-    scalar @{ $d->{'1'} }, scalar @{ $d->{'5'} }, scalar @{ $d->{'15'} },
-    scalar @{ $d->{'60'} }, scalar @{ $d->{'240'} },
-    scalar @{ $d->{'1440'} }, scalar @{ $d->{'10080'} };
+printf "Loaded: 1m=%d  5m=%d  15m=%d  1h=%d  2h=%d  4h=%d  D=%d  W=%d candles\n",
+    scalar @{ $d->{'1'}     // [] },
+    scalar @{ $d->{'5'}     // [] },
+    scalar @{ $d->{'15'}    // [] },
+    scalar @{ $d->{'60'}    // [] },
+    scalar @{ $d->{'120'}   // [] },
+    scalar @{ $d->{'240'}   // [] },
+    scalar @{ $d->{'1440'}  // [] },
+    scalar @{ $d->{'10080'} // [] };
 
 # ---- 3. Compute indicators for 1m timeframe ----
 my $indicators = Market::IndicatorManager->new();
