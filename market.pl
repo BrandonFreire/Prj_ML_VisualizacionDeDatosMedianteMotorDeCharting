@@ -218,6 +218,7 @@ my %overlay_visibility = (
     show_fvg           => 1,
     show_market_regime => 0,
     show_fibonacci     => 1,
+    show_manual_fibonacci => 1,
 
     liquidity_enabled  => 1,
     show_bsl           => 1,
@@ -346,6 +347,7 @@ my (
     $update_overlay_menu_state,
     $add_overlay_separator,
     $add_overlay_toggle,
+    $add_overlay_action,
     $build_overlay_detail,
     $show_overlay_group,
     $hide_overlay_menu,
@@ -427,6 +429,9 @@ $add_overlay_toggle = sub {
     my $toggle = sub {
         return unless $is_overlay_key_enabled->($key);
         $overlay_visibility{$key} = $overlay_visibility{$key} ? 0 : 1;
+        if ( $key eq 'show_manual_fibonacci' && defined $engine ) {
+            $engine->set_manual_fibonacci_visible( $overlay_visibility{$key} );
+        }
         $update_overlay_menu_state->();
         $refresh_overlays->();
     };
@@ -455,6 +460,49 @@ $add_overlay_toggle = sub {
     };
 };
 
+$add_overlay_action = sub {
+    my ($label, $command) = @_;
+    my $row = $overlay_detail_panel->Frame(
+        -bg     => $MENU_DETAIL_BG,
+        -height => 34,
+    )->pack( -fill => 'x' );
+    $row->packPropagate(0);
+
+    my $spacer = $row->Label(
+        -text   => ' ',
+        -width  => 3,
+        -bg     => $MENU_DETAIL_BG,
+        -fg     => $MENU_CHECK_FG,
+        -font   => [ 'Helvetica', 12, 'bold' ],
+        -anchor => 'center',
+    )->pack( -side => 'left', -fill => 'y' );
+
+    my $txt = $row->Label(
+        -text   => $label,
+        -bg     => $MENU_DETAIL_BG,
+        -fg     => $MENU_FG,
+        -font   => [ 'Helvetica', 10 ],
+        -anchor => 'w',
+    )->pack( -side => 'left', -fill => 'both', -expand => 1 );
+
+    my $run = sub { $command->() if $command };
+
+    for my $w ($row, $spacer, $txt) {
+        $w->configure( -cursor => 'hand2' );
+        $w->bind( '<Button-1>', $run );
+        $w->bind( '<Enter>', sub {
+            $row->configure( -bg => $MENU_HOVER_BG );
+            $spacer->configure( -bg => $MENU_HOVER_BG );
+            $txt->configure( -bg => $MENU_HOVER_BG );
+        });
+        $w->bind( '<Leave>', sub {
+            $row->configure( -bg => $MENU_DETAIL_BG );
+            $spacer->configure( -bg => $MENU_DETAIL_BG );
+            $txt->configure( -bg => $MENU_DETAIL_BG );
+        });
+    }
+};
+
 $build_overlay_detail = sub {
     my ($group) = @_;
     $_->destroy for $overlay_detail_panel->children;
@@ -473,7 +521,7 @@ $build_overlay_detail = sub {
         $add_overlay_toggle->( 'FVG fade',      'show_fvg', 0 );
         $add_overlay_toggle->( 'Market Regime', 'show_market_regime', 0 );
         $add_overlay_toggle->( 'Fibonacci',     'show_fibonacci', 0 );
-    } else {
+    } elsif ( $group eq 'liquidity' ) {
         $add_overlay_toggle->( 'Modulo completo', 'liquidity_enabled', 1 );
         $add_overlay_separator->();
         $add_overlay_toggle->( 'BSL',             'show_bsl', 0 );
@@ -484,6 +532,24 @@ $build_overlay_detail = sub {
         $add_overlay_toggle->( 'Liquidity Grab',  'show_grab', 0 );
         $add_overlay_toggle->( 'Sweep',           'show_sweep', 0 );
         $add_overlay_toggle->( 'Run',             'show_run', 0 );
+    } else {
+        $add_overlay_action->( 'Seleccionar zona', sub {
+            $overlay_visibility{show_manual_fibonacci} = 1;
+            $engine->set_manual_fibonacci_visible(1) if defined $engine;
+            $update_overlay_menu_state->();
+            $hide_overlay_menu->() if defined $hide_overlay_menu;
+            $mw->after( 50, sub {
+                $engine->start_manual_fibonacci_selection() if defined $engine;
+            });
+        });
+        $add_overlay_separator->();
+        $add_overlay_toggle->( 'Mostrar manual', 'show_manual_fibonacci', 0 );
+        $add_overlay_separator->();
+        $add_overlay_action->( 'Quitar manual', sub {
+            $engine->clear_manual_fibonacci() if defined $engine;
+            $overlay_visibility{show_manual_fibonacci} = 1;
+            $update_overlay_menu_state->();
+        });
     }
 
     $update_overlay_menu_state->();
@@ -574,8 +640,9 @@ my $add_overlay_category = sub {
     };
 };
 
-$add_overlay_category->( 'SMC',      'smc' );
-$add_overlay_category->( 'Liquidez', 'liquidity' );
+$add_overlay_category->( 'SMC',       'smc' );
+$add_overlay_category->( 'Liquidez',  'liquidity' );
+$add_overlay_category->( 'Fibonacci', 'fibonacci' );
 
 $hide_overlay_menu = sub {
     return unless $overlay_menu_visible;

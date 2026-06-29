@@ -681,7 +681,7 @@ sub _manual_fib_point_from_global {
 sub _set_manual_fib_cursor {
     my ($self) = @_;
     return unless $self->{price_canvas};
-    my $cursor = $self->{manual_fib_selecting} ? 'crosshair' : '';
+    my $cursor = $self->{manual_fib_selecting} ? 'crosshair' : 'arrow';
     $self->{price_canvas}->configure( -cursor => $cursor );
 }
 
@@ -799,7 +799,7 @@ sub _draw_manual_fib_set {
 
     if ( $zone_bot > $zone_top ) {
         $canvas->createRectangle( $draw_left, $zone_top, $draw_right, $zone_bot,
-            -fill => '#2f4051', -outline => '',
+            -fill => '#2f4051', -outline => '#2f4051',
             -stipple => $is_preview ? 'gray12' : 'gray25',
             -tags => \@tags,
         );
@@ -832,9 +832,10 @@ sub _draw_manual_fib_set {
         $canvas->createLine( $draw_left, $y, $draw_right, $y, %line_opts );
 
         my $label = sprintf('%.3g  %.2f', $ratio, $price);
+        my $font = $ratio == 0.618 ? ['Helvetica', 7, 'bold'] : ['Helvetica', 7];
         $canvas->createText( $draw_right - 4, $y - 6,
             -text => $label, -fill => $color,
-            -font => ['Helvetica', 7, ($ratio == 0.618 ? 'bold' : 'normal')],
+            -font => $font,
             -anchor => 'e', -tags => \@tags,
         );
     }
@@ -866,7 +867,10 @@ sub drag_start {
 
 sub drag_end {
     my ($self) = @_;
-    if ( $self->{manual_fib_selecting} || $self->{manual_fib_preview} ) {
+    if ( $self->{manual_fib_selecting} && !$self->{manual_fib_preview} ) {
+        return;
+    }
+    if ( $self->{manual_fib_preview} ) {
         $self->_manual_fib_finish();
         return;
     }
