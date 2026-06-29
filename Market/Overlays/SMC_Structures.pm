@@ -88,7 +88,9 @@ sub _render_swing_labels {
     my $show_hl = $self->_visible('show_hl', 0);
     my $show_lh = $self->_visible('show_lh', 0);
     my $show_ll = $self->_visible('show_ll', 0);
-    return unless $show_hh || $show_hl || $show_lh || $show_ll;
+    my $show_sh = $self->_visible('show_sh', 0);
+    my $show_sl = $self->_visible('show_sl', 0);
+    return unless $show_hh || $show_hl || $show_lh || $show_ll || $show_sh || $show_sl;
 
     my $last_high;
     for my $sh ( @{ $self->{indicator}->get_swing_highs() // [] } ) {
@@ -100,13 +102,24 @@ sub _render_swing_labels {
         my $label = defined $last_high && $price > $last_high ? 'HH' : 'LH';
         $last_high = $price;
         next if $idx < $d_start || $idx > $d_end;
-        next if ($label eq 'HH' && !$show_hh) || ($label eq 'LH' && !$show_lh);
+        my $x = $scale->index_to_center_x($idx);
+        my $y = $scale->value_to_y($price);
+        my $scope_color = ($sh->{scope}//'') eq 'external' ? '#f6c90e' : '#b2b5be';
 
-        $canvas->createText( $scale->index_to_center_x($idx), $scale->value_to_y($price) - 10,
-            -text => $label, -fill => '#b2b5be',
-            -font => ['Helvetica', 7, 'bold'], -anchor => 'center',
-            -tags => ['smc_overlay', lc($label)],
-        );
+        if (($label eq 'HH' && $show_hh) || ($label eq 'LH' && $show_lh)) {
+            $canvas->createText( $x, $y - 10,
+                -text => $label, -fill => '#b2b5be',
+                -font => ['Helvetica', 7, 'bold'], -anchor => 'center',
+                -tags => ['smc_overlay', 'smc_label', lc($label)],
+            );
+        }
+        if ($show_sh) {
+            $canvas->createText( $x, $y - 22,
+                -text => 'SH', -fill => $scope_color,
+                -font => ['Helvetica', 7, 'bold'], -anchor => 'center',
+                -tags => ['smc_overlay', 'smc_label', 'sh'],
+            );
+        }
     }
 
     my $last_low;
@@ -119,13 +132,24 @@ sub _render_swing_labels {
         my $label = defined $last_low && $price > $last_low ? 'HL' : 'LL';
         $last_low = $price;
         next if $idx < $d_start || $idx > $d_end;
-        next if ($label eq 'HL' && !$show_hl) || ($label eq 'LL' && !$show_ll);
+        my $x = $scale->index_to_center_x($idx);
+        my $y = $scale->value_to_y($price);
+        my $scope_color = ($sl->{scope}//'') eq 'external' ? '#f6c90e' : '#b2b5be';
 
-        $canvas->createText( $scale->index_to_center_x($idx), $scale->value_to_y($price) + 10,
-            -text => $label, -fill => '#b2b5be',
-            -font => ['Helvetica', 7, 'bold'], -anchor => 'center',
-            -tags => ['smc_overlay', lc($label)],
-        );
+        if (($label eq 'HL' && $show_hl) || ($label eq 'LL' && $show_ll)) {
+            $canvas->createText( $x, $y + 10,
+                -text => $label, -fill => '#b2b5be',
+                -font => ['Helvetica', 7, 'bold'], -anchor => 'center',
+                -tags => ['smc_overlay', 'smc_label', lc($label)],
+            );
+        }
+        if ($show_sl) {
+            $canvas->createText( $x, $y + 22,
+                -text => 'SL', -fill => $scope_color,
+                -font => ['Helvetica', 7, 'bold'], -anchor => 'center',
+                -tags => ['smc_overlay', 'smc_label', 'sl'],
+            );
+        }
     }
 }
 
@@ -180,7 +204,7 @@ sub _render_fibonacci {
         $canvas->createText( $x2 - 3, $y - 5,
             -text => sprintf('Fib %.3g', $ratio),
             -fill => '#b2b5be', -font => ['Helvetica', 7],
-            -anchor => 'e', -tags => ['smc_overlay', 'fibonacci'],
+            -anchor => 'e', -tags => ['smc_overlay', 'smc_label', 'fibonacci'],
         );
     }
 }
@@ -206,7 +230,7 @@ sub _render_market_regime {
         -fill   => $color,
         -font   => ['Helvetica', 8, 'bold'],
         -anchor => 'w',
-        -tags   => ['smc_overlay', 'market_regime'],
+        -tags   => ['smc_overlay', 'smc_label', 'market_regime'],
     );
 }
 
@@ -277,7 +301,7 @@ sub _render_fvg {
             -fill   => $lbl_clr,
             -font   => ['Helvetica', 7, $is_zone ? 'bold' : 'normal'],
             -anchor => 'w',
-            -tags   => ['smc_overlay', 'fvg'],
+            -tags   => ['smc_overlay', 'smc_label', 'fvg'],
         );
     }
 }
@@ -313,6 +337,7 @@ sub _render_bos {
         my $idx  = $bos->{index};
         my $from = $bos->{from};
         next unless defined $idx && defined $from && defined $bos->{level};
+        next unless $self->_show_structure_scope($bos);
         next if $idx > $current_bar;                    # evento futuro en Replay
         my $line_end = $idx < $current_bar ? $idx : $current_bar;
         next if $line_end < $d_start && $from < $d_start;  # completamente fuera
@@ -336,7 +361,8 @@ sub _render_bos {
 
         # Etiqueta "BOS ▲" o "BOS ▼" en la barra de ruptura
         if ( $idx >= $d_start && $idx <= $d_end && $idx <= $current_bar ) {
-            my $arrow = $bos->{direction} eq 'bull' ? 'BOS ^' : 'BOS v';
+            my $scope = ($bos->{scope}//'internal') eq 'external' ? 'e' : 'i';
+            my $arrow = $bos->{direction} eq 'bull' ? "BOS-$scope ^" : "BOS-$scope v";
             my $xa    = $scale->index_to_center_x($idx);
             my $offset = $bos->{direction} eq 'bull' ? -12 : 12;
             $canvas->createText( $xa, $y + $offset,
@@ -344,7 +370,7 @@ sub _render_bos {
                 -fill   => $color,
                 -font   => ['Helvetica', 8, 'bold'],
                 -anchor => 'center',
-                -tags   => ['smc_overlay', 'bos'],
+                -tags   => ['smc_overlay', 'smc_label', 'bos'],
             );
         }
     }
@@ -364,6 +390,7 @@ sub _render_choch {
         my $idx  = $ev->{index};
         my $from = $ev->{from};
         next unless defined $idx && defined $from && defined $ev->{level};
+        next unless $self->_show_structure_scope($ev);
         next if $idx > $current_bar;
         my $line_end = $idx < $current_bar ? $idx : $current_bar;
         next if $line_end < $d_start && $from < $d_start;
@@ -383,15 +410,24 @@ sub _render_choch {
 
         if ( $idx >= $d_start && $idx <= $d_end && $idx <= $current_bar ) {
             my $xa   = $scale->index_to_center_x($idx);
-            my $lbl  = $ev->{direction} eq 'bull' ? 'CHoCH ^' : 'CHoCH v';
+            my $scope = ($ev->{scope}//'internal') eq 'external' ? 'e' : 'i';
+            my $lbl  = $ev->{direction} eq 'bull' ? "CHoCH-$scope ^" : "CHoCH-$scope v";
             my $yoff = $ev->{direction} eq 'bull' ? -14 : 14;
             $canvas->createText( $xa, $y + $yoff,
                 -text => $lbl, -fill => $color,
                 -font => ['Helvetica', 8, 'bold'], -anchor => 'center',
-                -tags => ['smc_overlay', 'choch'],
+                -tags => ['smc_overlay', 'smc_label', 'choch'],
             );
         }
     }
+}
+
+sub _show_structure_scope {
+    my ($self, $event) = @_;
+    my $scope = ($event->{scope}//'internal') eq 'external' ? 'external' : 'internal';
+    return $scope eq 'external'
+        ? $self->_visible('show_external_structure', 1)
+        : $self->_visible('show_internal_structure', 1);
 }
 
 1;

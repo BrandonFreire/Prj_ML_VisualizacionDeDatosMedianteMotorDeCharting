@@ -276,6 +276,14 @@ sub _can_incremental {
     return 1;
 }
 
+sub _raise_overlay_labels {
+    my ($self, $canvas) = @_;
+    return unless $canvas;
+
+    $canvas->raise('lq_label')  if $canvas->find( 'withtag', 'lq_label' );
+    $canvas->raise('smc_label') if $canvas->find( 'withtag', 'smc_label' );
+}
+
 # Complete redraw of all panels and scales
 sub _full_render {
     my ($self, $d_start, $d_end, $data_slice, $pscale, $atr_slice, $ascale, $volume_max) = @_;
@@ -299,6 +307,7 @@ sub _full_render {
         $ov->render( $pc, $d_start, $d_end, $pscale, $cur_bar );
     }
     $self->_render_manual_fibonacci( $pc, $pscale, $cur_bar );
+    $self->_raise_overlay_labels($pc);
 
     # --- Price scale (must come after candles so lastprice draws on ready canvas) ---
     $psc->delete('all');
@@ -388,6 +397,7 @@ sub _incremental_pan {
         $ov->render( $pc, $d_start, $d_end, $pscale, $cur_bar2 );
     }
     $self->_render_manual_fibonacci( $pc, $pscale, $cur_bar2 );
+    $self->_raise_overlay_labels($pc);
 
     # Redraw last price label
     $pc->delete('lastprice');

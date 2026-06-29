@@ -61,6 +61,9 @@ sub render {
         $ssl = $ind->can('get_swing_lows')  ? $ind->get_swing_lows()  : [];
     }
 
+    $self->_render_resolution_candles( $canvas, $d_start, $d_end, $scale, $current_bar )
+        if $ind->can('get_resolved');
+
     $self->_render_levels( $canvas, $d_start, $d_end, $scale, $current_bar,
         $bsl, $COLOR_BSL, 'BSL', 'sh' )
         if $self->{show_bsl} || $self->_visible('show_eqh', 1);
@@ -68,6 +71,44 @@ sub render {
     $self->_render_levels( $canvas, $d_start, $d_end, $scale, $current_bar,
         $ssl, $COLOR_SSL, 'SSL', 'sl' )
         if $self->{show_ssl} || $self->_visible('show_eql', 1);
+}
+
+sub _render_resolution_candles {
+    my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
+    my $candles = $self->{indicator}{_candles} // [];
+    return unless $candles && @$candles;
+
+    my $bar_w = $scale->{x_width} / ( $scale->{visible_bars} || 1 );
+    my $half  = $bar_w * 0.42;
+    $half = 1 if $half < 1;
+
+    for my $lvl ( @{ $self->{indicator}->get_resolved() // [] } ) {
+        next unless $self->_show_resolution($lvl);
+        my $idx = $lvl->{resolved_at};
+        next unless defined $idx;
+        next if $idx > $current_bar || $idx < $d_start || $idx > $d_end;
+        my $c = $candles->[$idx] // next;
+        next unless defined $c->{high} && defined $c->{low};
+
+        my $x = $scale->index_to_center_x($idx);
+        my $y1 = $scale->value_to_y($c->{high});
+        my $y2 = $scale->value_to_y($c->{low});
+        ($y1, $y2) = ($y2, $y1) if $y2 < $y1;
+
+        my $class = $lvl->{classification} // '';
+        my $color = $class eq 'RUN' ? $COLOR_RUN
+                  : $class eq 'GRAB' ? $COLOR_GRAB
+                  : (($lvl->{side}//'') eq 'sh' ? $COLOR_BSL : $COLOR_SSL);
+
+        $canvas->createRectangle(
+            $x - $half, $y1, $x + $half, $y2,
+            -fill => $color, -outline => $color, -stipple => 'gray25',
+            -tags => ['lq_overlay', 'lq_event_candle'],
+        );
+    }
+
+    $canvas->lower( 'lq_event_candle', 'candles' )
+        if $canvas->find( 'withtag', 'candles' );
 }
 
 sub _render_levels {
@@ -123,7 +164,7 @@ sub _render_levels {
                         -fill   => $color,
                         -font   => ['Helvetica', 7, 'bold'],
                         -anchor => 'e',
-                        -tags   => ['lq_overlay', "lq_$tag", "lq_$level_label"],
+                        -tags   => ['lq_overlay', 'lq_label', "lq_$tag", "lq_$level_label"],
                     );
                 }
             }
@@ -149,7 +190,7 @@ sub _render_levels {
             -fill   => $label_color,
             -font   => ['Helvetica', 8, 'bold'],
             -anchor => 'center',
-            -tags   => ['lq_overlay', 'lq_resolved'],
+            -tags   => ['lq_overlay', 'lq_label', 'lq_resolved'],
         );
     }
 }
@@ -193,7 +234,7 @@ sub _render_eq_connector {
         -fill   => $color,
         -font   => ['Helvetica', 7, 'bold'],
         -anchor => 'center',
-        -tags   => ['lq_overlay', "lq_$label"],
+        -tags   => ['lq_overlay', 'lq_label', "lq_$label"],
     );
 }
 

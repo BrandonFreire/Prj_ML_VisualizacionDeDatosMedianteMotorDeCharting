@@ -213,8 +213,12 @@ my %overlay_visibility = (
     show_hl            => 0,
     show_lh            => 0,
     show_ll            => 0,
+    show_sh            => 0,
+    show_sl            => 0,
     show_choch         => 1,
     show_bos           => 1,
+    show_internal_structure => 1,
+    show_external_structure => 1,
     show_fvg           => 1,
     show_market_regime => 0,
     show_manual_fibonacci => 1,
@@ -308,7 +312,7 @@ my $MENU_MUTED_FG  = '#8b929e';
 my $MENU_CHECK_FG  = '#83a9ff';
 my $CHECK_MARK     = "\x{2713}";
 my $OVERLAY_MENU_W = 560;
-my $OVERLAY_MENU_H = 390;
+my $OVERLAY_MENU_H = 490;
 my $OVERLAY_COL_W  = int( $OVERLAY_MENU_W / 2 );
 
 my %overlay_parent_for = (
@@ -316,8 +320,12 @@ my %overlay_parent_for = (
     show_hl            => 'smc_enabled',
     show_lh            => 'smc_enabled',
     show_ll            => 'smc_enabled',
+    show_sh            => 'smc_enabled',
+    show_sl            => 'smc_enabled',
     show_choch         => 'smc_enabled',
     show_bos           => 'smc_enabled',
+    show_internal_structure => 'smc_enabled',
+    show_external_structure => 'smc_enabled',
     show_fvg           => 'smc_enabled',
     show_market_regime => 'smc_enabled',
     show_bsl           => 'liquidity_enabled',
@@ -512,9 +520,13 @@ $build_overlay_detail = sub {
         $add_overlay_toggle->( 'HL',            'show_hl', 0 );
         $add_overlay_toggle->( 'LH',            'show_lh', 0 );
         $add_overlay_toggle->( 'LL',            'show_ll', 0 );
+        $add_overlay_toggle->( 'SH',            'show_sh', 0 );
+        $add_overlay_toggle->( 'SL',            'show_sl', 0 );
         $add_overlay_separator->();
         $add_overlay_toggle->( 'CHoCH',         'show_choch', 0 );
         $add_overlay_toggle->( 'BOS',           'show_bos', 0 );
+        $add_overlay_toggle->( 'Internal',      'show_internal_structure', 0 );
+        $add_overlay_toggle->( 'External',      'show_external_structure', 0 );
         $add_overlay_toggle->( 'FVG fade',      'show_fvg', 0 );
         $add_overlay_toggle->( 'Market Regime', 'show_market_regime', 0 );
     } elsif ( $group eq 'liquidity' ) {

@@ -31,6 +31,7 @@ sub new {
         atr_period => $args{atr_period} // 14,  # para tolerancia EQH/EQL
         _levels    => [],
         _atr       => [],
+        _candles   => undef,
     }, $class;
 }
 
@@ -41,6 +42,7 @@ sub compute_all {
     $self->reset();
 
     my $arr = $market->_active_array();
+    $self->{_candles} = $arr;
     my $n   = scalar @$arr;
     my $k   = $self->{depth};
     return if $n < 2 * $k + 2;

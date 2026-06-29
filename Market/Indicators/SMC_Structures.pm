@@ -10,6 +10,7 @@ sub new {
     my ($class, %args) = @_;
     return bless {
         depth        => $args{depth} // 3,
+        external_depth => $args{external_depth},
         _sh          => [],   # swing highs
         _sl          => [],   # swing lows
         _bos         => [],   # BOS events  [{index,level,from,direction}]
@@ -40,6 +41,8 @@ sub compute_all {
     my $n   = scalar @$arr;
     my $k   = $self->{depth};
     return if $n < 2 * $k + 2;
+    my $external_k = $self->{external_depth} // ($k * 3);
+    $external_k = $k + 2 if $external_k <= $k;
 
     # ----------------------------------------------------------------
     # 1. Swing Highs y Swing Lows (condicion estricta de vecindad)
@@ -57,6 +60,23 @@ sub compute_all {
         push @sh, { index => $i, price => $arr->[$i]{high}, swept => 0 } if $is_sh;
         push @sl, { index => $i, price => $arr->[$i]{low},  swept => 0 } if $is_sl;
     }
+
+    my (%external_sh, %external_sl);
+    if ( $n >= 2 * $external_k + 2 ) {
+        for my $i ( $external_k .. $n - $external_k - 1 ) {
+            my ($is_sh, $is_sl) = (1, 1);
+            for my $j (1 .. $external_k) {
+                $is_sh = 0 if $arr->[$i]{high} <= $arr->[$i-$j]{high}
+                           || $arr->[$i]{high} <= $arr->[$i+$j]{high};
+                $is_sl = 0 if $arr->[$i]{low}  >= $arr->[$i-$j]{low}
+                           || $arr->[$i]{low}  >= $arr->[$i+$j]{low};
+            }
+            $external_sh{$i} = 1 if $is_sh;
+            $external_sl{$i} = 1 if $is_sl;
+        }
+    }
+    $_->{scope} = $external_sh{ $_->{index} } ? 'external' : 'internal' for @sh;
+    $_->{scope} = $external_sl{ $_->{index} } ? 'external' : 'internal' for @sl;
     $self->{_sh} = \@sh;
     $self->{_sl} = \@sl;
 
@@ -105,6 +125,7 @@ sub compute_all {
                 level     => $last_sh->{price},
                 from      => $last_sh->{index},
                 direction => 'bull',
+                scope     => $last_sh->{scope} // 'internal',
                 boosted   => $boosted // 0,
             };
             if ($is_choch) { push @{ $self->{_choch} }, $event }
@@ -123,6 +144,7 @@ sub compute_all {
                 level     => $last_sl->{price},
                 from      => $last_sl->{index},
                 direction => 'bear',
+                scope     => $last_sl->{scope} // 'internal',
                 boosted   => $boosted // 0,
             };
             if ($is_choch) { push @{ $self->{_choch} }, $event }
