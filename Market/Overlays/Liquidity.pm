@@ -17,11 +17,24 @@ my $COLOR_RUN  = '#2196f3';  # azul — Liquidity Run
 sub new {
     my ($class, %args) = @_;
     return bless {
-        indicator => $args{indicator},
+        indicator  => $args{indicator},
+        visibility => $args{visibility},
         max_levels => $args{max_levels} // 5,   # cuantos niveles mostrar como maximo
         show_bsl   => $args{show_bsl}   // 1,
         show_ssl   => $args{show_ssl}   // 1,
     }, $class;
+}
+
+sub set_visibility {
+    my ($self, $visibility) = @_;
+    $self->{visibility} = $visibility;
+}
+
+sub _visible {
+    my ($self, $key, $default) = @_;
+    my $v = $self->{visibility};
+    return $default unless $v && exists $v->{$key};
+    return $v->{$key} ? 1 : 0;
 }
 
 # Renderiza los niveles de liquidez sobre el canvas de precio.
@@ -34,6 +47,7 @@ sub render {
 
     $canvas->delete('lq_overlay');
     $self->{_label_slots} = {};
+    return unless $self->_visible('liquidity_enabled', 1);
 
     # Liquidity expone todos los niveles para poder dibujar lineas historicas cortadas
     # en swept_at y etiquetas finales en resolved_at. Fallback: swings simples de SMC.
@@ -48,10 +62,12 @@ sub render {
     }
 
     $self->_render_levels( $canvas, $d_start, $d_end, $scale, $current_bar,
-        $bsl, $COLOR_BSL, 'BSL', 'sh' ) if $self->{show_bsl};
+        $bsl, $COLOR_BSL, 'BSL', 'sh' )
+        if $self->{show_bsl} || $self->_visible('show_eqh', 1);
 
     $self->_render_levels( $canvas, $d_start, $d_end, $scale, $current_bar,
-        $ssl, $COLOR_SSL, 'SSL', 'sl' ) if $self->{show_ssl};
+        $ssl, $COLOR_SSL, 'SSL', 'sl' )
+        if $self->{show_ssl} || $self->_visible('show_eql', 1);
 }
 
 sub _render_levels {
@@ -67,16 +83,26 @@ sub _render_levels {
         my $y     = $scale->value_to_y($price);
         next if defined $scale->{y_height} && ($y < 0 || $y > $scale->{y_height});
 
+        my $level_label = _level_label($lvl, $tag, $side);
+        my $show_base = $side eq 'sh'
+            ? $self->_visible('show_bsl', 1)
+            : $self->_visible('show_ssl', 1);
+        my $show_eq = $level_label eq 'EQH'
+            ? $self->_visible('show_eqh', 1)
+            : $level_label eq 'EQL'
+                ? $self->_visible('show_eql', 1)
+                : 0;
+
         $self->_render_eq_connector(
             $canvas, $d_start, $d_end, $scale, $current_bar, $lvl, $color, $side, $y
-        );
+        ) if $show_eq;
 
         my $swept_now = defined $lvl->{swept_at} && $lvl->{swept_at} <= $current_bar;
         my $line_end  = $swept_now ? $lvl->{swept_at} : $current_bar;
         my $draw_start = $start_idx < $d_start ? $d_start : $start_idx;
         my $draw_end   = $line_end  > $d_end   ? $d_end   : $line_end;
 
-        if ( $draw_end >= $d_start && $draw_start <= $d_end && $draw_start <= $draw_end ) {
+        if ( $show_base && $draw_end >= $d_start && $draw_start <= $d_end && $draw_start <= $draw_end ) {
             my $x1 = $scale->index_to_center_x($draw_start);
             my $x2 = $scale->index_to_center_x($draw_end);
 
@@ -88,13 +114,12 @@ sub _render_levels {
                     -tags  => ['lq_overlay', "lq_$tag"],
                 );
 
-                my $level_label = _level_label($lvl, $tag, $side);
                 if (
-                    ( !$swept_now || $level_label eq 'EQH' || $level_label eq 'EQL' )
+                    !$swept_now
                     && $self->_claim_label_slot( $x2 - 4, $y - 6 )
                 ) {
                     $canvas->createText( $x2 - 4, $y - 6,
-                        -text   => $level_label,
+                        -text   => $tag,
                         -fill   => $color,
                         -font   => ['Helvetica', 7, 'bold'],
                         -anchor => 'e',
@@ -110,6 +135,7 @@ sub _render_levels {
 
         my ($text, $label_color) = _resolution_label($lvl, $side);
         next unless defined $text;
+        next unless $self->_show_resolution($lvl);
 
         my $lx = $scale->index_to_center_x($lvl->{resolved_at});
         my $ly = ($side eq 'sh') ? $y - 14 : $y + 14;
@@ -200,6 +226,15 @@ sub _resolution_label {
     return ('LQ GRAB', $COLOR_GRAB) if $class eq 'GRAB';
     return ('LQ RUN',  $COLOR_RUN)  if $class eq 'RUN';
     return;
+}
+
+sub _show_resolution {
+    my ($self, $lvl) = @_;
+    my $class = $lvl->{classification} // return 0;
+    return $self->_visible('show_sweep', 1) if $class eq 'SWEEP';
+    return $self->_visible('show_grab',  1) if $class eq 'GRAB';
+    return $self->_visible('show_run',   1) if $class eq 'RUN';
+    return 1;
 }
 
 1;

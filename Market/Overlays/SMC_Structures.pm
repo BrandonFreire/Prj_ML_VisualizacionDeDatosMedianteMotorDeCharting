@@ -19,10 +19,23 @@ sub new {
     my ($class, %args) = @_;
     return bless {
         indicator   => $args{indicator},
+        visibility  => $args{visibility},
         show_bos    => $args{show_bos}   // 1,
         show_fvg    => $args{show_fvg}   // 1,
         fvg_max_age => $args{fvg_max_age} // 20,  # barras maximas hacia futuro si no hay mitigacion
     }, $class;
+}
+
+sub set_visibility {
+    my ($self, $visibility) = @_;
+    $self->{visibility} = $visibility;
+}
+
+sub _visible {
+    my ($self, $key, $default) = @_;
+    my $v = $self->{visibility};
+    return $default unless $v && exists $v->{$key};
+    return $v->{$key} ? 1 : 0;
 }
 
 # Renderiza BOS y FVG sobre el canvas de precio.
@@ -34,6 +47,7 @@ sub render {
     return unless $ind;
 
     $canvas->delete('smc_overlay');
+    return unless $self->_visible('smc_enabled', 1);
 
     # Construir lookup de sweeps recientes para marcar FVGs como Zona de Alta Reaccion
     my %recent_sweeps;
@@ -49,15 +63,153 @@ sub render {
         }
     }
 
+    $self->_render_swing_labels( $canvas, $d_start, $d_end, $scale, $current_bar );
     $self->_render_fvg( $canvas, $d_start, $d_end, $scale, $current_bar, \%recent_sweeps )
-        if $self->{show_fvg};
-    $self->_render_bos(   $canvas, $d_start, $d_end, $scale, $current_bar ) if $self->{show_bos};
-    $self->_render_choch( $canvas, $d_start, $d_end, $scale, $current_bar );
+        if $self->{show_fvg} && $self->_visible('show_fvg', 1);
+    $self->_render_bos( $canvas, $d_start, $d_end, $scale, $current_bar )
+        if $self->{show_bos} && $self->_visible('show_bos', 1);
+    $self->_render_choch( $canvas, $d_start, $d_end, $scale, $current_bar )
+        if $self->_visible('show_choch', 1);
+    $self->_render_fibonacci( $canvas, $d_start, $d_end, $scale, $current_bar )
+        if $self->_visible('show_fibonacci', 0);
+    $self->_render_market_regime( $canvas, $current_bar )
+        if $self->_visible('show_market_regime', 0);
 }
 
 # ----------------------------------------------------------------
 # FVG — rectángulos con desvanecimiento progresivo usando stipple
 # ----------------------------------------------------------------
+sub _render_swing_labels {
+    my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
+    return unless $self->{indicator}->can('get_swing_highs')
+               && $self->{indicator}->can('get_swing_lows');
+
+    my $show_hh = $self->_visible('show_hh', 0);
+    my $show_hl = $self->_visible('show_hl', 0);
+    my $show_lh = $self->_visible('show_lh', 0);
+    my $show_ll = $self->_visible('show_ll', 0);
+    return unless $show_hh || $show_hl || $show_lh || $show_ll;
+
+    my $last_high;
+    for my $sh ( @{ $self->{indicator}->get_swing_highs() // [] } ) {
+        my $idx = $sh->{index};
+        my $price = $sh->{price};
+        next unless defined $idx && defined $price;
+        next if $idx > $current_bar;
+
+        my $label = defined $last_high && $price > $last_high ? 'HH' : 'LH';
+        $last_high = $price;
+        next if $idx < $d_start || $idx > $d_end;
+        next if ($label eq 'HH' && !$show_hh) || ($label eq 'LH' && !$show_lh);
+
+        $canvas->createText( $scale->index_to_center_x($idx), $scale->value_to_y($price) - 10,
+            -text => $label, -fill => '#b2b5be',
+            -font => ['Helvetica', 7, 'bold'], -anchor => 'center',
+            -tags => ['smc_overlay', lc($label)],
+        );
+    }
+
+    my $last_low;
+    for my $sl ( @{ $self->{indicator}->get_swing_lows() // [] } ) {
+        my $idx = $sl->{index};
+        my $price = $sl->{price};
+        next unless defined $idx && defined $price;
+        next if $idx > $current_bar;
+
+        my $label = defined $last_low && $price > $last_low ? 'HL' : 'LL';
+        $last_low = $price;
+        next if $idx < $d_start || $idx > $d_end;
+        next if ($label eq 'HL' && !$show_hl) || ($label eq 'LL' && !$show_ll);
+
+        $canvas->createText( $scale->index_to_center_x($idx), $scale->value_to_y($price) + 10,
+            -text => $label, -fill => '#b2b5be',
+            -font => ['Helvetica', 7, 'bold'], -anchor => 'center',
+            -tags => ['smc_overlay', lc($label)],
+        );
+    }
+}
+
+sub _render_fibonacci {
+    my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
+
+    my @events;
+    push @events, @{ $self->{indicator}->get_bos_events() // [] }
+        if $self->{indicator}->can('get_bos_events');
+    push @events, @{ $self->{indicator}->get_choch_events() // [] }
+        if $self->{indicator}->can('get_choch_events');
+
+    @events = grep {
+        defined $_->{index} && defined $_->{from} && defined $_->{level}
+            && $_->{index} <= $current_bar
+    } @events;
+    return unless @events;
+
+    my ($ev) = sort { $b->{index} <=> $a->{index} } @events;
+    my $from = $ev->{from};
+    my $to   = $ev->{index};
+    return if $to < $d_start || $from > $d_end;
+
+    my $candles = $self->{indicator}{_candles} // [];
+    my $c = $candles->[$to];
+    return unless $c;
+
+    my $p0 = $ev->{level};
+    my $p1 = $c->{close};
+    if (abs($p1 - $p0) < 0.000001) {
+        $p1 = ($ev->{direction}//'') eq 'bull' ? $c->{high} : $c->{low};
+    }
+    return if abs($p1 - $p0) < 0.000001;
+
+    my $draw_start = $from < $d_start ? $d_start : $from;
+    my $draw_end   = $to   > $d_end   ? $d_end   : $to;
+    return if $draw_start > $draw_end;
+
+    my $x1 = $scale->index_to_center_x($draw_start);
+    my $x2 = $scale->index_to_center_x($draw_end);
+    return if $x1 > $scale->{x_width} || $x2 < 0 || $x1 > $x2;
+
+    for my $ratio (0, 0.236, 0.382, 0.5, 0.618, 0.786, 1) {
+        my $price = $p0 + ($p1 - $p0) * $ratio;
+        my $y = $scale->value_to_y($price);
+        next if defined $scale->{y_height} && ($y < 0 || $y > $scale->{y_height});
+
+        $canvas->createLine( $x1, $y, $x2, $y,
+            -fill => '#b2b5be', -width => 1, -dash => [2, 3],
+            -tags => ['smc_overlay', 'fibonacci'],
+        );
+        $canvas->createText( $x2 - 3, $y - 5,
+            -text => sprintf('Fib %.3g', $ratio),
+            -fill => '#b2b5be', -font => ['Helvetica', 7],
+            -anchor => 'e', -tags => ['smc_overlay', 'fibonacci'],
+        );
+    }
+}
+
+sub _render_market_regime {
+    my ($self, $canvas, $current_bar) = @_;
+
+    my @events;
+    push @events, @{ $self->{indicator}->get_bos_events() // [] }
+        if $self->{indicator}->can('get_bos_events');
+    push @events, @{ $self->{indicator}->get_choch_events() // [] }
+        if $self->{indicator}->can('get_choch_events');
+
+    @events = grep { defined $_->{index} && $_->{index} <= $current_bar } @events;
+    return unless @events;
+
+    my ($ev) = sort { $b->{index} <=> $a->{index} } @events;
+    my $dir = ($ev->{direction}//'') eq 'bull' ? 'Bullish' : 'Bearish';
+    my $color = ($ev->{direction}//'') eq 'bull' ? $COLOR_BOS_BULL : $COLOR_BOS_BEAR;
+
+    $canvas->createText( 8, 34,
+        -text   => "Regime: $dir",
+        -fill   => $color,
+        -font   => ['Helvetica', 8, 'bold'],
+        -anchor => 'w',
+        -tags   => ['smc_overlay', 'market_regime'],
+    );
+}
+
 sub _render_fvg {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar, $recent_sweeps) = @_;
     $recent_sweeps //= {};

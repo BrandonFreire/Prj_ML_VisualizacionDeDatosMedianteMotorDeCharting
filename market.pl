@@ -89,7 +89,7 @@ printf "Loaded: 1m=%d  5m=%d  15m=%d  1h=%d  2h=%d  4h=%d  D=%d  W=%d candles\n"
 my $indicators = Market::IndicatorManager->new();
 $indicators->register( 'ATR', Market::Indicators::ATR->new($ATR_PERIOD) );
 
-print "Computing ATR($ATR_PERIOD) with MXNet tensors...\n";
+print "Computing ATR($ATR_PERIOD) with Wilder smoothing...\n";
 $indicators->compute_all($market);
 print "Done.\n";
 
@@ -207,6 +207,34 @@ $engine = Market::ChartEngine->new(
 );
 
 # ---- Timeframe buttons (1m → W) ----
+my %overlay_visibility = (
+    smc_enabled        => 1,
+    show_hh            => 0,
+    show_hl            => 0,
+    show_lh            => 0,
+    show_ll            => 0,
+    show_choch         => 1,
+    show_bos           => 1,
+    show_fvg           => 1,
+    show_market_regime => 0,
+    show_fibonacci     => 1,
+
+    liquidity_enabled  => 1,
+    show_bsl           => 1,
+    show_ssl           => 1,
+    show_eqh           => 1,
+    show_eql           => 1,
+    show_grab          => 1,
+    show_sweep         => 1,
+    show_run           => 1,
+);
+
+my $refresh_overlays = sub {
+    return unless defined $engine;
+    $engine->{_render_state} = undef;
+    $engine->request_render();
+};
+
 my @TIMEFRAMES = (
     { tf => '1',     label => '1m'  },
     { tf => '5',     label => '5m'  },
@@ -270,6 +298,327 @@ $mode_btn = $toolbar->Button(
     -activeforeground => '#ffffff',
     -command          => sub { $engine->toggle_auto_scale() },
 )->pack( -side => 'left', -padx => 2, -pady => 2 );
+
+my $MENU_PANEL_BG  = '#2f3642';
+my $MENU_DETAIL_BG = '#303743';
+my $MENU_HOVER_BG  = '#3b4452';
+my $MENU_BORDER    = '#485366';
+my $MENU_FG        = '#f2f4f8';
+my $MENU_MUTED_FG  = '#8b929e';
+my $MENU_CHECK_FG  = '#83a9ff';
+my $CHECK_MARK     = "\x{2713}";
+my $OVERLAY_MENU_W = 560;
+my $OVERLAY_MENU_H = 390;
+my $OVERLAY_COL_W  = int( $OVERLAY_MENU_W / 2 );
+
+my %overlay_parent_for = (
+    show_hh            => 'smc_enabled',
+    show_hl            => 'smc_enabled',
+    show_lh            => 'smc_enabled',
+    show_ll            => 'smc_enabled',
+    show_choch         => 'smc_enabled',
+    show_bos           => 'smc_enabled',
+    show_fvg           => 'smc_enabled',
+    show_market_regime => 'smc_enabled',
+    show_fibonacci     => 'smc_enabled',
+
+    show_bsl           => 'liquidity_enabled',
+    show_ssl           => 'liquidity_enabled',
+    show_eqh           => 'liquidity_enabled',
+    show_eql           => 'liquidity_enabled',
+    show_grab          => 'liquidity_enabled',
+    show_sweep         => 'liquidity_enabled',
+    show_run           => 'liquidity_enabled',
+);
+
+my $overlay_button_text = "\x{25C8} INDICADORES Y OVERLAYS  \x{25BE}";
+my $overlay_btn;
+my $overlay_menu_panel;
+my $overlay_main_panel;
+my $overlay_detail_panel;
+my $overlay_menu_visible = 0;
+my $overlay_active_group = 'smc';
+my @overlay_category_rows;
+my @overlay_toggle_rows;
+my (
+    $is_overlay_key_enabled,
+    $paint_overlay_categories,
+    $update_overlay_menu_state,
+    $add_overlay_separator,
+    $add_overlay_toggle,
+    $build_overlay_detail,
+    $show_overlay_group,
+    $hide_overlay_menu,
+    $show_overlay_menu,
+    $toggle_overlay_menu,
+);
+
+$is_overlay_key_enabled = sub {
+    my ($key) = @_;
+    my $parent = $overlay_parent_for{$key};
+    return 1 unless defined $parent;
+    return $overlay_visibility{$parent} ? 1 : 0;
+};
+
+$paint_overlay_categories = sub {
+    for my $item (@overlay_category_rows) {
+        my $active = $item->{group} eq $overlay_active_group;
+        my $bg     = $active ? $MENU_HOVER_BG : $MENU_PANEL_BG;
+        for my $w (@{ $item->{widgets} }) {
+            $w->configure( -bg => $bg );
+        }
+    }
+};
+
+$update_overlay_menu_state = sub {
+    for my $item (@overlay_toggle_rows) {
+        my $enabled = $is_overlay_key_enabled->( $item->{key} );
+        my $checked = $overlay_visibility{ $item->{key} } ? 1 : 0;
+        my $fg      = $enabled ? $MENU_FG : $MENU_MUTED_FG;
+        my $checkfg = $checked
+            ? ( $enabled ? $MENU_CHECK_FG : '#52617a' )
+            : $MENU_MUTED_FG;
+
+        $item->{check}->configure(
+            -text => $checked ? $CHECK_MARK : ' ',
+            -fg   => $checkfg,
+            -bg   => $MENU_DETAIL_BG,
+        );
+        $item->{label}->configure(
+            -fg => $fg,
+            -bg => $MENU_DETAIL_BG,
+        );
+        $item->{row}->configure( -bg => $MENU_DETAIL_BG );
+    }
+};
+
+$add_overlay_separator = sub {
+    $overlay_detail_panel->Frame(
+        -bg     => '#4a5360',
+        -height => 1,
+    )->pack( -fill => 'x', -padx => 10, -pady => 7 );
+};
+
+$add_overlay_toggle = sub {
+    my ($label, $key, $is_main) = @_;
+    my $row = $overlay_detail_panel->Frame(
+        -bg     => $MENU_DETAIL_BG,
+        -height => 34,
+    )->pack( -fill => 'x' );
+    $row->packPropagate(0);
+
+    my $check = $row->Label(
+        -text   => ' ',
+        -width  => 3,
+        -bg     => $MENU_DETAIL_BG,
+        -fg     => $MENU_CHECK_FG,
+        -font   => [ 'Helvetica', 12, 'bold' ],
+        -anchor => 'center',
+    )->pack( -side => 'left', -fill => 'y' );
+
+    my $txt = $row->Label(
+        -text   => $label,
+        -bg     => $MENU_DETAIL_BG,
+        -fg     => $MENU_FG,
+        -font   => $is_main ? [ 'Helvetica', 10, 'bold' ] : [ 'Helvetica', 10 ],
+        -anchor => 'w',
+    )->pack( -side => 'left', -fill => 'both', -expand => 1 );
+
+    my $toggle = sub {
+        return unless $is_overlay_key_enabled->($key);
+        $overlay_visibility{$key} = $overlay_visibility{$key} ? 0 : 1;
+        $update_overlay_menu_state->();
+        $refresh_overlays->();
+    };
+
+    for my $w ($row, $check, $txt) {
+        $w->configure( -cursor => 'hand2' );
+        $w->bind( '<Button-1>', $toggle );
+        $w->bind( '<Enter>', sub {
+            return unless $is_overlay_key_enabled->($key);
+            $row->configure( -bg => $MENU_HOVER_BG );
+            $check->configure( -bg => $MENU_HOVER_BG );
+            $txt->configure( -bg => $MENU_HOVER_BG );
+        });
+        $w->bind( '<Leave>', sub {
+            $row->configure( -bg => $MENU_DETAIL_BG );
+            $check->configure( -bg => $MENU_DETAIL_BG );
+            $txt->configure( -bg => $MENU_DETAIL_BG );
+        });
+    }
+
+    push @overlay_toggle_rows, {
+        key   => $key,
+        row   => $row,
+        check => $check,
+        label => $txt,
+    };
+};
+
+$build_overlay_detail = sub {
+    my ($group) = @_;
+    $_->destroy for $overlay_detail_panel->children;
+    @overlay_toggle_rows = ();
+
+    if ( $group eq 'smc' ) {
+        $add_overlay_toggle->( 'Motor SMC',     'smc_enabled', 1 );
+        $add_overlay_separator->();
+        $add_overlay_toggle->( 'HH',            'show_hh', 0 );
+        $add_overlay_toggle->( 'HL',            'show_hl', 0 );
+        $add_overlay_toggle->( 'LH',            'show_lh', 0 );
+        $add_overlay_toggle->( 'LL',            'show_ll', 0 );
+        $add_overlay_separator->();
+        $add_overlay_toggle->( 'CHoCH',         'show_choch', 0 );
+        $add_overlay_toggle->( 'BOS',           'show_bos', 0 );
+        $add_overlay_toggle->( 'FVG fade',      'show_fvg', 0 );
+        $add_overlay_toggle->( 'Market Regime', 'show_market_regime', 0 );
+        $add_overlay_toggle->( 'Fibonacci',     'show_fibonacci', 0 );
+    } else {
+        $add_overlay_toggle->( 'Modulo completo', 'liquidity_enabled', 1 );
+        $add_overlay_separator->();
+        $add_overlay_toggle->( 'BSL',             'show_bsl', 0 );
+        $add_overlay_toggle->( 'SSL',             'show_ssl', 0 );
+        $add_overlay_toggle->( 'EQH',             'show_eqh', 0 );
+        $add_overlay_toggle->( 'EQL',             'show_eql', 0 );
+        $add_overlay_separator->();
+        $add_overlay_toggle->( 'Liquidity Grab',  'show_grab', 0 );
+        $add_overlay_toggle->( 'Sweep',           'show_sweep', 0 );
+        $add_overlay_toggle->( 'Run',             'show_run', 0 );
+    }
+
+    $update_overlay_menu_state->();
+};
+
+$show_overlay_group = sub {
+    my ($group) = @_;
+    $overlay_active_group = $group;
+    $paint_overlay_categories->();
+    $build_overlay_detail->($group);
+};
+
+$overlay_btn = $toolbar->Button(
+    -text             => $overlay_button_text,
+    -bg               => '#2a2d3e',
+    -fg               => '#ffffff',
+    -relief           => 'flat',
+    -padx             => 10,
+    -pady             => 3,
+    -activebackground => '#3a3d4e',
+    -activeforeground => '#ffffff',
+    -font             => [ 'Helvetica', 9, 'bold' ],
+    -command          => sub { $toggle_overlay_menu->(); },
+)->pack( -side => 'left', -padx => 8, -pady => 2 );
+
+$overlay_menu_panel = $mw->Frame(
+    -bg                 => $MENU_BORDER,
+    -borderwidth        => 1,
+    -relief             => 'solid',
+    -highlightthickness => 0,
+);
+
+$overlay_main_panel = $overlay_menu_panel->Frame(
+    -bg     => $MENU_PANEL_BG,
+    -width  => $OVERLAY_COL_W,
+    -height => $OVERLAY_MENU_H,
+)->pack( -side => 'left', -fill => 'y' );
+$overlay_main_panel->packPropagate(0);
+
+$overlay_detail_panel = $overlay_menu_panel->Frame(
+    -bg     => $MENU_DETAIL_BG,
+    -width  => $OVERLAY_COL_W,
+    -height => $OVERLAY_MENU_H,
+)->pack( -side => 'left', -fill => 'both' );
+$overlay_detail_panel->packPropagate(0);
+
+my $add_overlay_category = sub {
+    my ($label, $group) = @_;
+    my $row = $overlay_main_panel->Frame(
+        -bg     => $MENU_PANEL_BG,
+        -height => 44,
+    )->pack( -fill => 'x' );
+    $row->packPropagate(0);
+
+    my $txt = $row->Label(
+        -text   => $label,
+        -bg     => $MENU_PANEL_BG,
+        -fg     => $MENU_FG,
+        -font   => [ 'Helvetica', 10 ],
+        -anchor => 'w',
+        -padx   => 14,
+    )->pack( -side => 'left', -fill => 'both', -expand => 1 );
+    my $arrow = $row->Label(
+        -text   => '>',
+        -bg     => $MENU_PANEL_BG,
+        -fg     => '#c4cad3',
+        -font   => [ 'Helvetica', 12, 'bold' ],
+        -width  => 4,
+        -anchor => 'center',
+    )->pack( -side => 'right', -fill => 'y' );
+
+    my $select = sub { $show_overlay_group->($group); };
+    for my $w ($row, $txt, $arrow) {
+        $w->configure( -cursor => 'hand2' );
+        $w->bind( '<Button-1>', $select );
+        $w->bind( '<Enter>', sub {
+            return if $overlay_active_group eq $group;
+            $row->configure( -bg => $MENU_HOVER_BG );
+            $txt->configure( -bg => $MENU_HOVER_BG );
+            $arrow->configure( -bg => $MENU_HOVER_BG );
+        });
+        $w->bind( '<Leave>', sub { $paint_overlay_categories->(); } );
+    }
+
+    push @overlay_category_rows, {
+        group   => $group,
+        widgets => [ $row, $txt, $arrow ],
+    };
+};
+
+$add_overlay_category->( 'SMC',      'smc' );
+$add_overlay_category->( 'Liquidez', 'liquidity' );
+
+$hide_overlay_menu = sub {
+    return unless $overlay_menu_visible;
+    $overlay_menu_panel->placeForget();
+    $overlay_menu_visible = 0;
+    $overlay_btn->configure( -bg => '#2a2d3e' );
+};
+
+$show_overlay_menu = sub {
+    $show_overlay_group->($overlay_active_group);
+
+    my $menu_w = $OVERLAY_MENU_W;
+    my $menu_h = $OVERLAY_MENU_H;
+    my $x = $overlay_btn->rootx - $mw->rootx;
+    my $y = $toolbar->rooty - $mw->rooty + ( $toolbar->height || 32 ) + 4;
+    my $window_w = $mw->width || 1200;
+    my $window_h = $mw->height || 800;
+
+    $x = $window_w - $menu_w - 6 if $x + $menu_w > $window_w - 6;
+    $x = 6 if $x < 6;
+    $y = $window_h - $menu_h - 6 if $y + $menu_h > $window_h - 6;
+    $y = 6 if $y < 6;
+
+    $overlay_menu_panel->place(
+        -x      => $x,
+        -y      => $y,
+        -width  => $menu_w,
+        -height => $menu_h,
+    );
+    $overlay_menu_panel->raise();
+    $overlay_menu_visible = 1;
+    $overlay_btn->configure( -bg => '#354052' );
+};
+
+$toggle_overlay_menu = sub {
+    if ($overlay_menu_visible) {
+        $hide_overlay_menu->();
+    } else {
+        $show_overlay_menu->();
+    }
+};
+
+$show_overlay_group->('smc');
 
 # ---- Separador visual ----
 $toolbar->Label( -text => '|', -bg => '#1e222d', -fg => '#3a3d4e' )
@@ -396,8 +745,14 @@ $fs_btn = $toolbar->Button(
 # Registrar overlays SMC y Liquidez
 $engine->set_lq_indicator($lq_ind);
 $engine->set_smc_indicator($smc_ind);
-$engine->add_overlay( Market::Overlays::SMC_Structures->new( indicator => $smc_ind ) );
-$engine->add_overlay( Market::Overlays::Liquidity->new(      indicator => $lq_ind  ) );
+$engine->add_overlay( Market::Overlays::SMC_Structures->new(
+    indicator  => $smc_ind,
+    visibility => \%overlay_visibility,
+) );
+$engine->add_overlay( Market::Overlays::Liquidity->new(
+    indicator  => $lq_ind,
+    visibility => \%overlay_visibility,
+) );
 
 $engine->set_scale_mode_callback( \&_update_mode_btn );
 $engine->set_replay_callback( \&_update_replay_ui );

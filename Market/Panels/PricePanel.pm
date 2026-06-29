@@ -11,6 +11,8 @@ my $COLOR_DOWN = '#ef5350';
 my $COLOR_GRID = '#1e2130';
 my $COLOR_AXIS = '#434651';
 my $COLOR_TEXT = '#b2b5be';
+my $COLOR_VOL_UP   = '#1d6f68';
+my $COLOR_VOL_DOWN = '#7b343b';
 
 sub new {
     my ($class, %args) = @_;
@@ -20,6 +22,7 @@ sub new {
         scale        => undef,
         _last_close  => undef,
         _last_open   => undef,
+        _volume_max  => 0,
     };
     bless $self, $class;
     return $self;
@@ -50,6 +53,68 @@ sub get_y_range {
     my $pad = ( $max - $min ) * 0.06;
     $pad = 0.5 if $pad < 0.5;
     return ( $min - $pad, $max + $pad );
+}
+
+sub get_volume_max {
+    my ($self, $data) = @_;
+    my $max = 0;
+    for my $c (@$data) {
+        my $v = $c->{volume} // 0;
+        $max = $v if $v > $max;
+    }
+    return $max;
+}
+
+sub render_volume_bar {
+    my ($self, $canvas, $c, $ix, $scale, $volume_max) = @_;
+    my $volume = $c->{volume} // 0;
+    return unless $volume > 0 && $volume_max && $volume_max > 0;
+
+    my $bar_w = $scale->{x_width} / $scale->{visible_bars};
+    my $vol_w = $bar_w * 0.65;
+    $vol_w = 1 if $vol_w < 1;
+
+    my $panel_h = int( $scale->{y_height} * 0.22 );
+    $panel_h = 34  if $panel_h < 34;
+    $panel_h = 120 if $panel_h > 120;
+
+    my $base_y = $scale->{y_height} - 2;
+    my $h      = int( $volume / $volume_max * $panel_h + 0.5 );
+    $h = 1 if $h < 1;
+
+    my $x     = $self->round( $scale->index_to_center_x($ix) );
+    my $half  = int( $vol_w / 2 );
+    my $y_top = $base_y - $h;
+    my $color = $c->{close} >= $c->{open} ? $COLOR_VOL_UP : $COLOR_VOL_DOWN;
+    my @tags  = ( 'volume', "vi_$ix" );
+
+    if ( $bar_w >= 2 ) {
+        $canvas->createRectangle(
+            $x - $half, $y_top, $x + $half, $base_y,
+            -fill => $color, -outline => $color, -tags => \@tags,
+        );
+    }
+    else {
+        $canvas->createLine(
+            $x, $y_top, $x, $base_y,
+            -fill => $color, -tags => \@tags,
+        );
+    }
+}
+
+sub render_volume {
+    my ($self, $canvas, $data, $scale, $volume_max) = @_;
+    $volume_max //= $self->get_volume_max($data);
+    $self->{_volume_max} = $volume_max;
+    return unless $volume_max > 0;
+
+    my $d_start = $scale->{data_start_index} // $scale->{start_index};
+    for my $i ( 0 .. $#$data ) {
+        my $ix = $d_start + $i;
+        $self->render_volume_bar( $canvas, $data->[$i], $ix, $scale, $volume_max );
+    }
+
+    $canvas->lower( 'volume', 'grid' ) if $canvas->find( 'withtag', 'grid' );
 }
 
 # Draw a single candle with per-index tags (used by render and incremental update)
@@ -88,7 +153,7 @@ sub render_candle {
 
 # Main render: draw grid lines, then all visible candles
 sub render {
-    my ($self, $canvas, $data, $scale) = @_;
+    my ($self, $canvas, $data, $scale, $volume_max) = @_;
     return unless @$data;
 
     # Grid lines
@@ -98,6 +163,9 @@ sub render {
         $canvas->createLine( 0, $y, $scale->{x_width}, $y,
             -fill => $COLOR_GRID, -tags => ['grid'] );
     }
+
+    # Volume histogram, aligned to candles and kept inside the price canvas.
+    $self->render_volume( $canvas, $data, $scale, $volume_max );
 
     # Candles
     # data_start_index es el indice real del primer elemento del slice;

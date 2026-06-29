@@ -30,6 +30,11 @@ sub new {
         y_auto         => 1,
         y_min_manual   => 0,
         y_max_manual   => 1,
+        _price_scale_dragging => 0,
+        _vy_drag_start        => undef,
+        _vy_drag_y_min        => undef,
+        _vy_drag_y_max        => undef,
+        _vy_drag_height       => 1,
 
         crosshair_x       => undef,
         crosshair_y       => undef,
@@ -39,6 +44,12 @@ sub new {
         _drag_start_x      => undef,
         _drag_start_offset => 0,
         _render_state      => undef,
+
+        # Manual Fibonacci drawing tool
+        manual_fib_selecting => 0,
+        manual_fib_visible   => 1,
+        manual_fib           => undef,
+        manual_fib_preview   => undef,
 
         on_scale_mode_change => undef,
 
@@ -94,10 +105,7 @@ sub compute_window {
 
     # Replay: nunca mostrar velas mas alla del cursor temporal
     if ( $self->{replay_mode} && defined $self->{replay_cursor} ) {
-        if ( $v_end > $self->{replay_cursor} ) {
-            $v_end   = $self->{replay_cursor};
-            $v_start = $v_end - $n + 1;
-        }
+        $v_end = $self->{replay_cursor} if $v_end > $self->{replay_cursor};
     }
 
     my $d_start = $v_start < 0     ? 0     : $v_start;
@@ -160,6 +168,7 @@ sub render {
     my $ph = $self->{price_canvas}->height() || 500;
     my $aw = $self->{atr_canvas}->width()    || 900;
     my $ah = $self->{atr_canvas}->height()   || 150;
+    my $volume_max = $self->{price_panel}->get_volume_max($data_slice);
 
     # La escala usa v_start como origen: index_to_center_x posiciona correctamente
     # las velas reales (con indice >= 0) dejando espacio vacio donde no hay datos.
@@ -217,11 +226,11 @@ sub render {
 
     # Dispatch to incremental or full render
     my $rs = $self->{_render_state};
-    if ( $rs && $self->_can_incremental( $rs, $v_start, $v_end, $d_start, $d_end, $price_scale, $n_visible, $pw, $ph ) ) {
-        $self->_incremental_pan( $v_start, $v_end, $d_start, $d_end, $data_slice, $price_scale, $atr_slice, $atr_scale, $rs );
+    if ( $rs && $self->_can_incremental( $rs, $v_start, $v_end, $d_start, $d_end, $price_scale, $n_visible, $pw, $ph, $volume_max ) ) {
+        $self->_incremental_pan( $v_start, $v_end, $d_start, $d_end, $data_slice, $price_scale, $atr_slice, $atr_scale, $rs, $volume_max );
     }
     else {
-        $self->_full_render( $d_start, $d_end, $data_slice, $price_scale, $atr_slice, $atr_scale );
+        $self->_full_render( $d_start, $d_end, $data_slice, $price_scale, $atr_slice, $atr_scale, $volume_max );
     }
 
     # Save state for next incremental check
@@ -235,6 +244,7 @@ sub render {
         a_min        => $atr_scale->{y_min},
         a_max        => $atr_scale->{y_max},
         visible_bars => $n_visible,
+        volume_max   => $volume_max,
         pw           => $pw,
         ph           => $ph,
     };
@@ -246,11 +256,12 @@ sub render {
 
 # Returns true when an incremental pan is safe (no Y rescale, no zoom, no resize)
 sub _can_incremental {
-    my ($self, $rs, $v_start, $v_end, $d_start, $d_end, $pscale, $n_visible, $pw, $ph) = @_;
+    my ($self, $rs, $v_start, $v_end, $d_start, $d_end, $pscale, $n_visible, $pw, $ph, $volume_max) = @_;
 
     return 0 if $self->{_x_offset} != 0;
     return 0 if $rs->{pw} != $pw || $rs->{ph} != $ph;
     return 0 if $rs->{visible_bars} != $n_visible;
+    return 0 if ( $rs->{volume_max} // 0 ) != ( $volume_max // 0 );
 
     my $delta = abs( $v_start - $rs->{v_start} );
     return 0 if $delta == 0;
@@ -267,7 +278,7 @@ sub _can_incremental {
 
 # Complete redraw of all panels and scales
 sub _full_render {
-    my ($self, $d_start, $d_end, $data_slice, $pscale, $atr_slice, $ascale) = @_;
+    my ($self, $d_start, $d_end, $data_slice, $pscale, $atr_slice, $ascale, $volume_max) = @_;
 
     my $pc  = $self->{price_canvas};
     my $psc = $self->{price_scale_canvas};
@@ -277,7 +288,7 @@ sub _full_render {
     # --- Price panel ---
     $pc->delete('all');
     $self->{price_panel}->set_scale($pscale);
-    $self->{price_panel}->render( $pc, $data_slice, $pscale );
+    $self->{price_panel}->render( $pc, $data_slice, $pscale, $volume_max );
     my $ts = $self->compute_intraday_labels( $d_start, $d_end, $pscale );
     $self->{price_panel}->draw_time_axis( $pc, $ts );
 
@@ -287,6 +298,7 @@ sub _full_render {
     for my $ov ( @{ $self->{overlays} } ) {
         $ov->render( $pc, $d_start, $d_end, $pscale, $cur_bar );
     }
+    $self->_render_manual_fibonacci( $pc, $pscale, $cur_bar );
 
     # --- Price scale (must come after candles so lastprice draws on ready canvas) ---
     $psc->delete('all');
@@ -306,7 +318,7 @@ sub _full_render {
 
 # O(1) horizontal pan: move existing candles, add/delete only the edge bars
 sub _incremental_pan {
-    my ($self, $v_start, $v_end, $d_start, $d_end, $data_slice, $pscale, $atr_slice, $ascale, $rs) = @_;
+    my ($self, $v_start, $v_end, $d_start, $d_end, $data_slice, $pscale, $atr_slice, $ascale, $rs, $volume_max) = @_;
 
     # El delta virtual determina cuantos pixeles se desplazan las velas existentes
     my $delta = $v_start - $rs->{v_start};
@@ -321,25 +333,30 @@ sub _incremental_pan {
     $self->{price_panel}->set_scale($pscale);
     $self->{atr_panel}->set_scale($ascale);
 
-    # Shift all candles O(1)
+    # Shift all price items O(1)
     $pc->move( 'candles', $dx, 0 );
+    $pc->move( 'volume',  $dx, 0 );
 
     if ( $delta > 0 ) {
         # Panned left: eliminar velas que salieron por la izquierda, agregar a la derecha
         $pc->delete("ci_$_") for $rs->{d_start} .. $d_start - 1;
+        $pc->delete("vi_$_") for $rs->{d_start} .. $d_start - 1;
         for my $i ( 0 .. $#$data_slice ) {
             my $ix = $d_start + $i;
-            $self->{price_panel}->render_candle( $pc, $data_slice->[$i], $ix, $pscale )
-                if $ix > $rs->{d_end};
+            next unless $ix > $rs->{d_end};
+            $self->{price_panel}->render_volume_bar( $pc, $data_slice->[$i], $ix, $pscale, $volume_max );
+            $self->{price_panel}->render_candle( $pc, $data_slice->[$i], $ix, $pscale );
         }
     }
     else {
         # Panned right: eliminar velas que salieron por la derecha, agregar a la izquierda
         $pc->delete("ci_$_") for ( $d_end + 1 ) .. $rs->{d_end};
+        $pc->delete("vi_$_") for ( $d_end + 1 ) .. $rs->{d_end};
         for my $i ( 0 .. $#$data_slice ) {
             my $ix = $d_start + $i;
-            $self->{price_panel}->render_candle( $pc, $data_slice->[$i], $ix, $pscale )
-                if $ix < $rs->{d_start};
+            next unless $ix < $rs->{d_start};
+            $self->{price_panel}->render_volume_bar( $pc, $data_slice->[$i], $ix, $pscale, $volume_max );
+            $self->{price_panel}->render_candle( $pc, $data_slice->[$i], $ix, $pscale );
         }
     }
 
@@ -356,6 +373,7 @@ sub _incremental_pan {
         $pc->createLine( 0, $y, $pscale->{x_width}, $y,
             -fill => '#1e2130', -tags => ['grid'] );
     }
+    $pc->lower( 'volume', 'grid' ) if $pc->find( 'withtag', 'grid' );
     $pc->lower( 'grid', 'candles' ) if $pc->find( 'withtag', 'candles' );
 
     # Redraw time axis
@@ -369,6 +387,7 @@ sub _incremental_pan {
     for my $ov ( @{ $self->{overlays} } ) {
         $ov->render( $pc, $d_start, $d_end, $pscale, $cur_bar2 );
     }
+    $self->_render_manual_fibonacci( $pc, $pscale, $cur_bar2 );
 
     # Redraw last price label
     $pc->delete('lastprice');
@@ -420,43 +439,28 @@ sub bind_events {
     #   Tk::break() corta la cadena despues del binding del canvas.
     # ---------------------------------------------------------------
     my $psc = $self->{price_scale_canvas};
+    $psc->configure( -cursor => 'sb_v_double_arrow' );
 
     $psc->bind( '<ButtonPress-1>', sub {
-        # Guardar Y absoluta de pantalla como referencia de inicio del drag
-        $self->{_vy_drag_start} = $psc->pointery();
-
-        # Si estabamos en auto, pasar a manual antes del primer arrastre
-        if ( $self->{y_auto} ) {
-            if ( $self->{price_scale} ) {
-                $self->{y_min_manual} = $self->{price_scale}{y_min};
-                $self->{y_max_manual} = $self->{price_scale}{y_max};
-            }
-            $self->{y_auto} = 0;
-            $self->{on_scale_mode_change}->(0) if $self->{on_scale_mode_change};
-        }
-
-        Tk::break();   # impide que MainWindow procese este click como pan horizontal
+        $self->_price_scale_drag_start( $psc->pointery() );
+        return Tk::break();   # impide que MainWindow procese este click como pan horizontal
     });
 
     $psc->bind( '<B1-Motion>', sub {
-        my $current_y = $psc->pointery();
-        my $dy = $current_y - ( $self->{_vy_drag_start} // $current_y );
-        if ( $dy != 0 ) {
-            $self->_vertical_drag($dy);
-            $self->{_vy_drag_start} = $current_y;
-        }
-        Tk::break();
+        $self->_price_scale_drag_to( $psc->pointery() );
+        return Tk::break();
     });
 
     $psc->bind( '<ButtonRelease-1>', sub {
-        $self->{_vy_drag_start} = undef;
+        $self->_price_scale_drag_end();
+        return Tk::break();
     });
 
     # Rueda del mouse sobre escala Y → zoom vertical (no horizontal)
     # Button-4 = scroll arriba = zoom IN (rango mas chico, velas mas grandes)
     # Button-5 = scroll abajo  = zoom OUT (rango mas grande, velas mas chicas)
-    $psc->bind( '<Button-4>', sub { $self->_vertical_zoom(0.85);     Tk::break() });
-    $psc->bind( '<Button-5>', sub { $self->_vertical_zoom(1 / 0.85); Tk::break() });
+    $psc->bind( '<Button-4>', sub { $self->_vertical_zoom(0.85);     return Tk::break() });
+    $psc->bind( '<Button-5>', sub { $self->_vertical_zoom(1 / 0.85); return Tk::break() });
 
     # ---------------------------------------------------------------
     # Escala Y del ATR — zoom vertical INDEPENDIENTE del de precio
@@ -564,10 +568,294 @@ sub _hide_crosshair_all {
     $self->{atr_panel}->hide_crosshair();
 }
 
+sub _point_in_widget {
+    my ($self, $w, $root_x, $root_y) = @_;
+    return 0 unless $w && defined $root_x && defined $root_y;
+
+    my $x = $root_x - $w->rootx;
+    my $y = $root_y - $w->rooty;
+    my $ww = $w->width  || 0;
+    my $hh = $w->height || 0;
+
+    return $x >= 0 && $x < $ww && $y >= 0 && $y < $hh;
+}
+
+sub _price_scale_drag_start {
+    my ($self, $root_y) = @_;
+    return unless $self->{price_scale};
+
+    my $scale = $self->{price_scale};
+    my $y_min = $self->{y_auto} ? $scale->{y_min} : $self->{y_min_manual};
+    my $y_max = $self->{y_auto} ? $scale->{y_max} : $self->{y_max_manual};
+    return unless defined $y_min && defined $y_max && $y_max > $y_min;
+
+    my $was_auto = $self->{y_auto};
+    $self->{y_auto}              = 0;
+    $self->{_price_scale_dragging} = 1;
+    $self->{_vy_drag_start}      = $root_y;
+    $self->{_vy_drag_y_min}      = $y_min;
+    $self->{_vy_drag_y_max}      = $y_max;
+    $self->{_vy_drag_height}     = $scale->{y_height} || 1;
+    $self->{y_min_manual}        = $y_min;
+    $self->{y_max_manual}        = $y_max;
+    $self->{_render_state}       = undef;
+
+    $self->{price_scale_canvas}->configure( -cursor => 'sb_v_double_arrow' )
+        if $self->{price_scale_canvas};
+    $self->{on_scale_mode_change}->(0)
+        if $was_auto && $self->{on_scale_mode_change};
+}
+
+sub _price_scale_drag_to {
+    my ($self, $root_y) = @_;
+    return unless $self->{_price_scale_dragging};
+
+    my $start = $self->{_vy_drag_start} // $root_y;
+    my $dy    = $root_y - $start;
+    my $h     = $self->{_vy_drag_height} || 1;
+
+    my $base_min = $self->{_vy_drag_y_min};
+    my $base_max = $self->{_vy_drag_y_max};
+    return unless defined $base_min && defined $base_max && $base_max > $base_min;
+
+    my $center = ($base_min + $base_max) / 2;
+    my $range  = $base_max - $base_min;
+
+    # dy > 0 estira las velas; dy < 0 comprime. El exponencial evita cambios bruscos.
+    my $factor = exp( -2.0 * $dy / $h );
+    $factor = 0.02 if $factor < 0.02;
+    $factor = 50.0 if $factor > 50.0;
+
+    my $half = ($range * $factor) / 2;
+    my $min_half = abs($center) * 1e-10;
+    $min_half = 1e-8 if $min_half < 1e-8;
+    $half = $min_half if $half < $min_half;
+
+    $self->{y_min_manual}  = $center - $half;
+    $self->{y_max_manual}  = $center + $half;
+    $self->{_render_state} = undef;
+    $self->{pending_render} = 0;
+    $self->render();
+}
+
+sub _price_scale_drag_end {
+    my ($self) = @_;
+    $self->{_price_scale_dragging} = 0;
+    $self->{_vy_drag_start}  = undef;
+    $self->{_vy_drag_y_min}  = undef;
+    $self->{_vy_drag_y_max}  = undef;
+    $self->{_vy_drag_height} = 1;
+    $self->{price_scale_canvas}->configure( -cursor => 'sb_v_double_arrow' )
+        if $self->{price_scale_canvas};
+}
+
+sub _manual_fib_point_from_global {
+    my ($self, $global_x, $global_y) = @_;
+    my $pc    = $self->{price_canvas};
+    my $scale = $self->{price_scale};
+    return unless $pc && $scale;
+
+    my $x = $global_x - $pc->rootx;
+    my $y = $global_y - $pc->rooty;
+    my $w = $pc->width  || 900;
+    my $h = $scale->{y_height} || ($pc->height || 500);
+    return if $x < 0 || $x > $w || $y < 0 || $y > $h;
+
+    my $ix = $scale->x_to_index($x);
+    my ( undef, undef, $d_start, $d_end ) = $self->compute_window();
+    my $hi = $self->{replay_mode} && defined $self->{replay_cursor}
+        ? $self->{replay_cursor}
+        : $d_end;
+    $ix = $d_start if $ix < $d_start;
+    $ix = $hi      if $ix > $hi;
+
+    $y = 0  if $y < 0;
+    $y = $h if $y > $h;
+
+    return {
+        index => $ix,
+        price => $scale->y_to_value($y),
+    };
+}
+
+sub _set_manual_fib_cursor {
+    my ($self) = @_;
+    return unless $self->{price_canvas};
+    my $cursor = $self->{manual_fib_selecting} ? 'crosshair' : '';
+    $self->{price_canvas}->configure( -cursor => $cursor );
+}
+
+sub start_manual_fibonacci_selection {
+    my ($self) = @_;
+    $self->{manual_fib_selecting} = 1;
+    $self->{manual_fib_preview}   = undef;
+    $self->_set_manual_fib_cursor();
+}
+
+sub set_manual_fibonacci_visible {
+    my ($self, $visible) = @_;
+    $self->{manual_fib_visible} = $visible ? 1 : 0;
+    $self->{_render_state} = undef;
+    $self->request_render();
+}
+
+sub clear_manual_fibonacci {
+    my ($self) = @_;
+    $self->{manual_fib}           = undef;
+    $self->{manual_fib_preview}   = undef;
+    $self->{manual_fib_selecting} = 0;
+    $self->_set_manual_fib_cursor();
+    $self->{price_canvas}->delete('manual_fib')         if $self->{price_canvas};
+    $self->{price_canvas}->delete('manual_fib_preview') if $self->{price_canvas};
+    $self->{_render_state} = undef;
+    $self->request_render();
+}
+
+sub _manual_fib_start {
+    my ($self, $global_x, $global_y) = @_;
+    my $pt = $self->_manual_fib_point_from_global($global_x, $global_y);
+    return unless $pt;
+    $self->{manual_fib_preview} = {
+        from => { %$pt },
+        to   => { %$pt },
+    };
+    $self->{price_canvas}->delete('manual_fib_preview');
+    $self->_draw_manual_fib_set( $self->{price_canvas}, $self->{price_scale},
+        $self->{manual_fib_preview}, 'manual_fib_preview', 1 );
+}
+
+sub _manual_fib_drag_to {
+    my ($self, $global_x, $global_y) = @_;
+    return unless $self->{manual_fib_preview};
+    my $pt = $self->_manual_fib_point_from_global($global_x, $global_y);
+    return unless $pt;
+    $self->{manual_fib_preview}{to} = { %$pt };
+    $self->{price_canvas}->delete('manual_fib_preview');
+    $self->_draw_manual_fib_set( $self->{price_canvas}, $self->{price_scale},
+        $self->{manual_fib_preview}, 'manual_fib_preview', 1 );
+}
+
+sub _manual_fib_finish {
+    my ($self) = @_;
+    my $fib = $self->{manual_fib_preview};
+    $self->{manual_fib_preview}   = undef;
+    $self->{manual_fib_selecting} = 0;
+    $self->_set_manual_fib_cursor();
+    $self->{price_canvas}->delete('manual_fib_preview') if $self->{price_canvas};
+
+    if ($fib) {
+        my $di = abs( $fib->{to}{index} - $fib->{from}{index} );
+        my $dp = abs( $fib->{to}{price} - $fib->{from}{price} );
+        if ( $di >= 1 && $dp > 0.000001 ) {
+            $self->{manual_fib} = $fib;
+            $self->{manual_fib_visible} = 1;
+        }
+    }
+
+    $self->{_render_state} = undef;
+    $self->request_render();
+}
+
+sub _render_manual_fibonacci {
+    my ($self, $canvas, $scale, $current_bar) = @_;
+    $canvas->delete('manual_fib');
+    return unless $self->{manual_fib_visible};
+    return unless $self->{manual_fib};
+    $self->_draw_manual_fib_set( $canvas, $scale, $self->{manual_fib}, 'manual_fib', 0, $current_bar );
+}
+
+sub _draw_manual_fib_set {
+    my ($self, $canvas, $scale, $fib, $tag, $is_preview, $current_bar) = @_;
+    return unless $canvas && $scale && $fib && $fib->{from} && $fib->{to};
+
+    my $i0 = $fib->{from}{index};
+    my $i1 = $fib->{to}{index};
+    my $p0 = $fib->{from}{price};
+    my $p1 = $fib->{to}{price};
+    return unless defined $i0 && defined $i1 && defined $p0 && defined $p1;
+    return if defined $current_bar && ( $i0 > $current_bar || $i1 > $current_bar );
+
+    my $x0 = $scale->index_to_center_x($i0);
+    my $x1 = $scale->index_to_center_x($i1);
+    my $left  = $x0 < $x1 ? $x0 : $x1;
+    my $right = $x0 < $x1 ? $x1 : $x0;
+    return if $right < 0 || $left > $scale->{x_width};
+
+    my $draw_left  = $left  < 0 ? 0 : $left;
+    my $draw_right = $right > $scale->{x_width} ? $scale->{x_width} : $right;
+    return if $draw_right <= $draw_left;
+
+    my $y0 = $scale->value_to_y($p0);
+    my $y1 = $scale->value_to_y($p1);
+    my $ytop = $y0 < $y1 ? $y0 : $y1;
+    my $ybot = $y0 < $y1 ? $y1 : $y0;
+    my $vh = $scale->{y_height} || 1;
+    my $zone_top = $ytop < 0 ? 0 : $ytop;
+    my $zone_bot = $ybot > $vh ? $vh : $ybot;
+
+    my @tags = ($tag);
+    my $line_color = $is_preview ? '#d7dee9' : '#9aa5b5';
+    my $gold = '#d6b84f';
+
+    if ( $zone_bot > $zone_top ) {
+        $canvas->createRectangle( $draw_left, $zone_top, $draw_right, $zone_bot,
+            -fill => '#2f4051', -outline => '',
+            -stipple => $is_preview ? 'gray12' : 'gray25',
+            -tags => \@tags,
+        );
+    }
+
+    $canvas->createLine( $x0, $y0, $x1, $y1,
+        -fill => $line_color, -width => 1, -dash => [4, 3], -tags => \@tags,
+    );
+
+    for my $pt ( [$x0, $y0], [$x1, $y1] ) {
+        $canvas->createOval( $pt->[0] - 4, $pt->[1] - 4, $pt->[0] + 4, $pt->[1] + 4,
+            -outline => $line_color, -width => 1, -tags => \@tags,
+        );
+    }
+
+    my @levels = (0, 0.236, 0.382, 0.5, 0.618, 0.786, 1, 1.272, 1.618, 2.236);
+    for my $ratio (@levels) {
+        my $price = $p0 + ($p1 - $p0) * $ratio;
+        my $y = $scale->value_to_y($price);
+        next if $y < -20 || $y > $vh + 20;
+        my $color = ($ratio == 0.5 || $ratio == 0.618) ? $gold : $line_color;
+        my $dash = ($ratio == 0 || $ratio == 1) ? undef : [2, 3];
+
+        my %line_opts = (
+            -fill => $color,
+            -width => ($ratio == 0 || $ratio == 1 || $ratio == 0.618) ? 1.5 : 1,
+            -tags => \@tags,
+        );
+        $line_opts{-dash} = $dash if $dash;
+        $canvas->createLine( $draw_left, $y, $draw_right, $y, %line_opts );
+
+        my $label = sprintf('%.3g  %.2f', $ratio, $price);
+        $canvas->createText( $draw_right - 4, $y - 6,
+            -text => $label, -fill => $color,
+            -font => ['Helvetica', 7, ($ratio == 0.618 ? 'bold' : 'normal')],
+            -anchor => 'e', -tags => \@tags,
+        );
+    }
+}
+
 # --- Public pan methods (called from market.pl) ---
 
 sub drag_start {
     my ($self, $global_x, $global_y) = @_;
+    if ( $self->{manual_fib_selecting} ) {
+        $self->_manual_fib_start( $global_x, $global_y )
+            if $self->_point_in_widget( $self->{price_canvas}, $global_x, $global_y );
+        return;
+    }
+
+    if ( $self->_point_in_widget( $self->{price_scale_canvas}, $global_x, $global_y ) ) {
+        $self->_price_scale_drag_start($global_y) unless $self->{_price_scale_dragging};
+        return;
+    }
+    return if $self->_point_in_widget( $self->{atr_scale_canvas},   $global_x, $global_y );
+
     $self->{_drag_start_x}      = $global_x;
     $self->{_drag_start_y}      = $global_y;
     $self->{_drag_start_offset} = $self->{offset};
@@ -578,12 +866,28 @@ sub drag_start {
 
 sub drag_end {
     my ($self) = @_;
+    if ( $self->{manual_fib_selecting} || $self->{manual_fib_preview} ) {
+        $self->_manual_fib_finish();
+        return;
+    }
+
     $self->{_drag_start_x} = undef;
     $self->{_drag_start_y} = undef;
+    $self->_price_scale_drag_end() if $self->{_price_scale_dragging};
 }
 
 sub drag_move {
     my ($self, $global_x, $global_y) = @_;
+    if ( $self->{manual_fib_selecting} ) {
+        $self->_manual_fib_drag_to( $global_x, $global_y )
+            if $self->{manual_fib_preview};
+        return;
+    }
+
+    if ( $self->{_price_scale_dragging} ) {
+        $self->_price_scale_drag_to($global_y);
+        return;
+    }
     return unless defined $self->{_drag_start_x};
 
     # --- Pan horizontal (siempre) ---
@@ -796,38 +1100,14 @@ sub set_replay_callback {
     $self->{on_replay_state_change} = $cb;
 }
 
-sub _indicator_market {
-    my ($self) = @_;
-    return $self->{market}->clone_upto( $self->{replay_cursor} )
-        if $self->{replay_mode} && defined $self->{replay_cursor};
-    return $self->{market};
-}
-
-sub _recompute_indicators_for_view {
-    my ($self) = @_;
-    my $calc_market = $self->_indicator_market();
-
-    $self->{indicators}->reset_all();
-    $self->{indicators}->compute_all($calc_market);
-
-    if ( $self->{_lq_indicator} ) {
-        $self->{_lq_indicator}->reset();
-        $self->{_lq_indicator}->compute_all($calc_market);
-    }
-    if ( $self->{_smc_indicator} ) {
-        $self->{_smc_indicator}->reset();
-        $self->{_smc_indicator}->compute_all($calc_market);
-    }
-}
-
 # ================================================================
 # SISTEMA REPLAY — Seccion 3 de la especificacion
 # ================================================================
 # El cursor de replay es la "barrera temporal": ninguna vela con
 # indice > replay_cursor se mostrara en pantalla ni en indicadores.
 # compute_window() aplica este clamp en cada render.
-# En Replay, los indicadores se recomputan contra un MarketData truncado
-# hasta replay_cursor para evitar filtracion analitica de velas futuras.
+# Los indicadores ya estan precomputados para todo el historico;
+# el slice los limita al rango visible.
 # ================================================================
 
 sub start_replay {
@@ -839,7 +1119,6 @@ sub start_replay {
     $self->{replay_playing} = 0;
     $self->{replay_speed}   = 400;
     $self->{_render_state}  = undef;
-    $self->_recompute_indicators_for_view();
     $self->{on_replay_state_change}->('started') if $self->{on_replay_state_change};
     $self->request_render();
 }
@@ -851,7 +1130,6 @@ sub exit_replay {
     $self->{replay_playing} = 0;
     $self->{replay_cursor}  = undef;
     $self->{_render_state}  = undef;
-    $self->_recompute_indicators_for_view();
     $self->{on_replay_state_change}->('exited') if $self->{on_replay_state_change};
     $self->goto_last();
 }
@@ -865,7 +1143,6 @@ sub step_forward {
     return if $self->{replay_cursor} >= $real_last;
     $self->{replay_cursor}++;
     $self->_anchor_cursor_to_right_edge();
-    $self->_recompute_indicators_for_view();
     $self->{_render_state} = undef;
     $self->request_render();
 }
@@ -876,7 +1153,6 @@ sub step_backward {
     return if $self->{replay_cursor} <= 0;
     $self->{replay_cursor}--;
     $self->_anchor_cursor_to_right_edge();
-    $self->_recompute_indicators_for_view();
     $self->{_render_state} = undef;
     $self->request_render();
 }
@@ -927,7 +1203,6 @@ sub _tick_replay {
 
     $self->{replay_cursor}++;
     $self->_anchor_cursor_to_right_edge();
-    $self->_recompute_indicators_for_view();
     $self->{_render_state} = undef;
     $self->request_render();
 
@@ -1087,16 +1362,19 @@ sub _draw_crosshair_all {
 sub set_timeframe {
     my ($self, $tf) = @_;
     $self->{market}->set_timeframe($tf);
+    $self->{indicators}->reset_all();
+    $self->{indicators}->compute_all( $self->{market} );
 
-    if ( $self->{replay_mode} ) {
-        my $last = $self->{market}->last_index();
-        $self->{replay_cursor} = $last
-            if defined $self->{replay_cursor} && $self->{replay_cursor} > $last;
-        $self->{replay_cursor} //= $last;
-        $self->_anchor_cursor_to_right_edge();
+    # Recomputar Liquidity y SMC al cambiar timeframe
+    if ( $self->{_lq_indicator} ) {
+        $self->{_lq_indicator}->reset();
+        $self->{_lq_indicator}->compute_all( $self->{market} );
+    }
+    if ( $self->{_smc_indicator} ) {
+        $self->{_smc_indicator}->reset();
+        $self->{_smc_indicator}->compute_all( $self->{market} );
     }
 
-    $self->_recompute_indicators_for_view();
     $self->reset_view();
 }
 
@@ -1107,12 +1385,7 @@ sub reset_view {
     $self->{y_auto_atr}    = 1;
     $self->{_render_state} = undef;
     $self->{on_scale_mode_change}->(1) if $self->{on_scale_mode_change};
-    if ( $self->{replay_mode} && defined $self->{replay_cursor} ) {
-        $self->_anchor_cursor_to_right_edge();
-        $self->request_render();
-    } else {
-        $self->goto_last();
-    }
+    $self->goto_last();
 }
 
 # Compute time labels for visible range (filtered to avoid overlap)
