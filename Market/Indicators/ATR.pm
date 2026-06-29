@@ -48,48 +48,84 @@ sub compute_all {
     my $arr = $market_data->_active_array();
     my $n   = scalar @$arr;
     my $p   = $self->{period};
+    return unless $n >= $p;
 
-    return unless $n > 0;
-
-    my @all_atrs;
-    my $prev_close;
-    my $prev_atr;
-    my $tr_sum   = 0;
-    my $tr_count = 0;
-
-    for my $i (0 .. $n - 1) {
-        my $candle = $arr->[$i];
-
-        my $tr = _true_range($candle, $prev_close);
-        $prev_close = $candle->{close};
-
-        my $atr;
-
-        if (!defined $prev_atr) {
-            $tr_sum   += $tr;
-            $tr_count += 1;
-
-            # Warmup: running mean hasta completar el periodo
-            $atr = $tr_sum / $tr_count;
-
-            # Seed ATR[p-1]
-            $prev_atr = $atr if $tr_count >= $p;
-        }
-        else {
-            # Wilder smoothing
-            $atr = (($p - 1) * $prev_atr + $tr) / $p;
-            $prev_atr = $atr;
-        }
-
-        push @all_atrs, $atr;
+    # Extract OHLC columns (unavoidable: Perl hash access per candle)
+    my (@highs, @lows, @closes);
+    for my $c (@$arr) {
+        push @highs,  $c->{high};
+        push @lows,   $c->{low};
+        push @closes, $c->{close};
     }
 
-    $self->{values}      = \@all_atrs;
-    $self->{_nd_atr}     = undef;        # Evitamos NDArray porque el binding devuelve datos corruptos
-    $self->{_prev_close} = $prev_close;
-    $self->{_prev_atr}   = $prev_atr;
-    $self->{_tr_sum}     = $tr_sum;
-    $self->{_tr_count}   = $tr_count;
+    # ---- Lift to MXNet ndarrays ----
+    my $nd_h = mx->nd->array(\@highs,  ctx => mx->cpu());
+    my $nd_l = mx->nd->array(\@lows,   ctx => mx->cpu());
+    my $nd_c = mx->nd->array(\@closes, ctx => mx->cpu());
+
+    # ---- True Range (fully vectorized) ----
+    # Align current [1..n-1] with previous [0..n-2]
+    my $cur_h  = $nd_h->slice([1, $n - 1]);
+    my $cur_l  = $nd_l->slice([1, $n - 1]);
+    my $prev_c = $nd_c->slice([0, $n - 2]);
+
+    my $nd_tr_tail = ($cur_h - $cur_l)
+                        ->maximum( ($cur_h - $prev_c)->abs() )
+                        ->maximum( ($cur_l - $prev_c)->abs() );
+
+    # Candle 0 has no previous close: TR[0] = H[0] - L[0]
+    my @tr = ($highs[0] - $lows[0], $nd_tr_tail->asnumpy->list);
+    my $nd_tr = mx->nd->array(\@tr, ctx => mx->cpu());
+
+    # ---- Warmup ATR: running mean via cumsum (vectorized) ----
+    my $nd_tr_warmup  = $nd_tr->slice([0, $p - 1]);
+    my $nd_cum_warmup = $nd_tr_warmup->cumsum();
+    my $nd_divisors   = mx->nd->array([1 .. $p], ctx => mx->cpu());
+    my $nd_warmup_atr = $nd_cum_warmup / $nd_divisors;
+
+    my @warmup_atrs = $nd_warmup_atr->asnumpy->list;
+    my $seed        = $warmup_atrs[-1];    # ATR[p-1], seed for tail recursion
+
+    # ---- Tail ATR via chunked cumulative weighted sum ----
+    # beta^j -> 0 for large j, causing TR/beta^j to overflow float32 for the
+    # full 30k-bar tail. Solution: process in chunks of W bars where beta^W
+    # stays within float32 range. Each chunk is a pure tensor computation;
+    # only the ~60 chunk boundaries need a Perl iteration.
+    my $m     = $n - $p;
+    my $alpha = 1.0 / $p;
+    my $beta  = ($p - 1.0) / $p;
+    my $W     = 500;   # safe chunk size: beta^500 ~ 8e-17, no float32 overflow
+
+    my @all_atrs = @warmup_atrs;
+
+    my $offset = 0;
+    while ($offset < $m) {
+        my $w   = ($offset + $W <= $m) ? $W : $m - $offset;
+        my $s   = $p + $offset;
+        my $e   = $s + $w - 1;
+
+        my $nd_tr_chunk = $nd_tr->slice([$s, $e]);
+
+        # beta^j for j = 0..w-1  (tensor, no per-bar loop)
+        my $nd_j  = mx->nd->array([0 .. $w - 1], ctx => mx->cpu());
+        my $nd_bp = ($nd_j * log($beta))->exp();
+
+        # s[j] = TR[j] / beta^j  then cumulative sum
+        my $nd_s      = $nd_tr_chunk / $nd_bp;
+        my $nd_cumsum = $nd_s->cumsum();
+
+        # ATR[j] = alpha * beta^j * cumsum(s)[j]  +  seed * beta * beta^j
+        my $nd_chunk = $nd_cumsum * $nd_bp * $alpha
+                       + $nd_bp * ($seed * $beta);
+
+        my @chunk_vals = @{ $nd_chunk->asarray() };
+        push @all_atrs, @chunk_vals;
+        $seed   = $chunk_vals[-1];
+        $offset += $w;
+    }
+
+    $self->{values}  = \@all_atrs;
+    $self->{_nd_atr} = mx->nd->array(\@all_atrs, ctx => mx->cpu());
 }
 
 # -----------------------------------------------------------------------
