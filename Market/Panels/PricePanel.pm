@@ -203,29 +203,14 @@ sub render_last_visible_price {
         -tags  => ['lastprice'],
     );
 
-    # Label box on the right edge
     my $label = sprintf( "%.2f", $price );
-    my $lx    = $scale->{x_width} - 4;
 
-    $canvas->createRectangle(
-        $lx - 56, $y - 9, $lx + 2, $y + 9,
-        -fill    => $color,
-        -outline => $color,
-        -tags    => ['lastprice'],
-    );
-    $canvas->createText(
-        $lx - 27, $y,
-        -text   => $label,
-        -fill   => '#ffffff',
-        -font   => [ 'Helvetica', 9, 'bold' ],
-        -anchor => 'center',
-        -tags   => ['lastprice'],
-    );
-
-    # Also draw on scale canvas
+    # El marcador de precio pertenece solo al eje derecho. Dibujarlo tambien
+    # sobre el canvas principal duplica visualmente la etiqueta en el borde.
     my $sc = $self->{scale_canvas};
     if ($sc) {
         my $sw = $sc->width() || 75;
+        $sc->delete('lastprice');
         $sc->createRectangle(
             0, $y - 9, $sw, $y + 9,
             -fill    => $color,

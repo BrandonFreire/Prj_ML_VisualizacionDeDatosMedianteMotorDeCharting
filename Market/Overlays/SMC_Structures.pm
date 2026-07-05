@@ -240,10 +240,12 @@ sub _render_fvg {
     my $fvgs = $self->{indicator}->get_fvg_zones() // [];
     my $candles = $self->{indicator}{_candles} // [];
     my $bar_w = $scale->{x_width} / ( $scale->{visible_bars} || 1 );
+    my $half_bar = $bar_w * 0.5;
 
     for my $fvg (@$fvgs) {
         my $idx = $fvg->{index};
-        my $formed_at = $fvg->{formed_at} // $idx;
+        next unless defined $idx;
+        my $formed_at = $fvg->{formed_at} // ($idx + 1);
         next unless defined $formed_at;
         next unless defined $fvg->{top} && defined $fvg->{bottom};
         next if $formed_at > $current_bar;     # no mostrar FVGs aun no confirmados en Replay
@@ -266,11 +268,14 @@ sub _render_fvg {
                     : $age <= 12 ? 'gray25'
                     :              'gray12';
 
-        my $x1 = $scale->index_to_center_x($draw_start);
-        my $x2 = $scale->index_to_center_x($draw_end) + ($bar_w * 0.5);
+        my $x1 = $scale->index_to_center_x($draw_start) - $half_bar;
+        my $x2 = defined $mitigated_at && $mitigated_at <= $d_end
+            ? $scale->index_to_center_x($mitigated_at) - $half_bar
+            : $scale->index_to_center_x($draw_end) + $half_bar;
         next if $x1 > $scale->{x_width} || $x2 < 0;
         $x1 = 0 if $x1 < 0;
         $x2 = $scale->{x_width} if $x2 > $scale->{x_width};
+        next if $x2 <= $x1;
 
         my $yt = $scale->value_to_y( $fvg->{top} );
         my $yb = $scale->value_to_y( $fvg->{bottom} );
@@ -286,20 +291,11 @@ sub _render_fvg {
             -tags    => ['smc_overlay', 'fvg'],
         );
 
-        # Verificar si este FVG coincide con un Sweep/Grab reciente (ventana de 5 barras)
-        my $is_zone = 0;
-        for my $si (keys %$recent_sweeps) {
-            $is_zone = 1 if abs($si - $formed_at) <= 5;
-        }
-
-        # Etiqueta: "FVG" normal o "ZAR" (Zona de Alta Reaccion) si coincide con Sweep
         my $lbl_y   = ($y1 + $y2) / 2;
-        my $lbl     = $is_zone ? 'ZAR' : 'FVG';
-        my $lbl_clr = $is_zone ? $COLOR_ZONE_HIGH : $color;
         $canvas->createText( $x1 + 3, $lbl_y,
-            -text   => $lbl,
-            -fill   => $lbl_clr,
-            -font   => ['Helvetica', 7, $is_zone ? 'bold' : 'normal'],
+            -text   => 'FVG',
+            -fill   => $color,
+            -font   => ['Helvetica', 7, 'bold'],
             -anchor => 'w',
             -tags   => ['smc_overlay', 'smc_label', 'fvg'],
         );
@@ -314,12 +310,18 @@ sub _fvg_mitigated_at {
     $to = $#$candles if $to > $#$candles;
     return undef if $from > $to;
 
+    my ($upper, $lower) = $fvg->{top} >= $fvg->{bottom}
+        ? ($fvg->{top}, $fvg->{bottom})
+        : ($fvg->{bottom}, $fvg->{top});
+    my $eps = abs($upper - $lower) * 1e-8;
+    $eps = 1e-8 if $eps < 1e-8;
+
     for my $i ($from .. $to) {
         my $c = $candles->[$i] // next;
         if ( ($fvg->{direction}//'') eq 'bull' ) {
-            return $i if defined $c->{low} && $c->{low} <= $fvg->{bottom};
+            return $i if defined $c->{low} && $c->{low} <= $lower + $eps;
         } else {
-            return $i if defined $c->{high} && $c->{high} >= $fvg->{top};
+            return $i if defined $c->{high} && $c->{high} >= $upper - $eps;
         }
     }
     return undef;
