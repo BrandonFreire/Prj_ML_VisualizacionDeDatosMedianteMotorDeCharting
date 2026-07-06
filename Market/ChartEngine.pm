@@ -5,6 +5,7 @@ use warnings;
 use lib '.';
 use Market::Panels::Scales;
 use Market::Panels::PricePanel;
+use Market::Panels::VolumePanel;
 use Market::Panels::ATRPanel;
 
 # Orchestrates the complete rendering pipeline.
@@ -20,6 +21,8 @@ sub new {
         indicators         => $args{indicators},
         price_canvas       => $args{price_canvas},
         price_scale_canvas => $args{price_scale_canvas},
+        volume_canvas      => $args{volume_canvas},
+        volume_scale_canvas => $args{volume_scale_canvas},
         atr_canvas         => $args{atr_canvas},
         atr_scale_canvas   => $args{atr_scale_canvas},
 
@@ -42,7 +45,11 @@ sub new {
         pending_render    => 0,
 
         _drag_start_x      => undef,
+        _drag_start_y      => undef,
         _drag_start_offset => 0,
+        _drag_started_in_chart => 0,
+        _drag_start_replay_index => undef,
+        _drag_moved       => 0,
         _render_state      => undef,
 
         # Manual Fibonacci drawing tool
@@ -60,6 +67,7 @@ sub new {
         # --- Sistema Replay ---
         replay_mode    => 0,       # 1 = en modo replay
         replay_cursor  => undef,   # indice de la ultima vela visible (barrera temporal)
+        selected_replay_index => undef, # vela elegida por click para iniciar Replay
         replay_playing => 0,       # 1 = avanzando automaticamente
         replay_speed   => 400,     # ms entre pasos en modo play normal
         _replay_timer  => undef,   # ID del after() activo
@@ -72,8 +80,10 @@ sub new {
         _atr_vy_drag_start => undef,
 
         price_panel => undef,
+        volume_panel => undef,
         atr_panel   => undef,
         price_scale => undef,
+        volume_scale => undef,
         atr_scale   => undef,
     };
     bless $self, $class;
@@ -81,6 +91,10 @@ sub new {
     $self->{price_panel} = Market::Panels::PricePanel->new(
         canvas       => $self->{price_canvas},
         scale_canvas => $self->{price_scale_canvas},
+    );
+    $self->{volume_panel} = Market::Panels::VolumePanel->new(
+        canvas       => $self->{volume_canvas},
+        scale_canvas => $self->{volume_scale_canvas},
     );
     $self->{atr_panel} = Market::Panels::ATRPanel->new(
         canvas       => $self->{atr_canvas},
@@ -100,13 +114,17 @@ sub compute_window {
     my ($self) = @_;
     my $last    = $self->{market}->last_index();
     my $n       = $self->{visible_bars};
-    my $v_end   = $last - $self->{offset};
-    my $v_start = $v_end - $n + 1;
 
-    # Replay: nunca mostrar velas mas alla del cursor temporal
+    my $max_end = $last;
     if ( $self->{replay_mode} && defined $self->{replay_cursor} ) {
-        $v_end = $self->{replay_cursor} if $v_end > $self->{replay_cursor};
+        $self->{replay_cursor} = 0     if $self->{replay_cursor} < 0;
+        $self->{replay_cursor} = $last if $self->{replay_cursor} > $last;
+        $max_end = $self->{replay_cursor};
     }
+
+    my $v_end   = $last - $self->{offset};
+    $v_end = $max_end if $v_end > $max_end;
+    my $v_start = $v_end - $n + 1;
 
     my $d_start = $v_start < 0     ? 0     : $v_start;
     my $d_end   = $v_end   > $last ? $last : $v_end;
@@ -123,6 +141,13 @@ sub compute_window {
 # Llamado por reset_view y por el atajo de teclado End.
 sub goto_last {
     my ($self) = @_;
+    if ( $self->{replay_mode} && defined $self->{replay_cursor} ) {
+        $self->_anchor_cursor_to_right_edge();
+        $self->{_render_state} = undef;
+        $self->request_render();
+        return;
+    }
+
     $self->{offset}        = 0;
     $self->{_offset_exact} = 0.0;
     $self->{_x_offset}     = 0.0;
@@ -149,7 +174,7 @@ sub render {
     $self->{pending_render} = 0;
 
     # Fix scrollregion so Button-4/5 cannot scroll the viewport
-    for my $cv ( $self->{price_canvas}, $self->{atr_canvas} ) {
+    for my $cv ( $self->{price_canvas}, $self->{volume_canvas}, $self->{atr_canvas} ) {
         my $w = $cv->width()  || 1;
         my $h = $cv->height() || 1;
         $cv->configure( -scrollregion => [ 0, 0, $w, $h ] );
@@ -166,9 +191,11 @@ sub render {
     my $n_visible = $self->{visible_bars};   # siempre el ancho completo de la ventana
     my $pw = $self->{price_canvas}->width()  || 900;
     my $ph = $self->{price_canvas}->height() || 500;
+    my $vw = $self->{volume_canvas}->width() || 900;
+    my $vh = $self->{volume_canvas}->height() || 90;
     my $aw = $self->{atr_canvas}->width()    || 900;
     my $ah = $self->{atr_canvas}->height()   || 150;
-    my $volume_max = $self->{price_panel}->get_volume_max($data_slice);
+    my $volume_max = $self->{volume_panel}->get_volume_max($data_slice);
 
     # La escala usa v_start como origen: index_to_center_x posiciona correctamente
     # las velas reales (con indice >= 0) dejando espacio vacio donde no hay datos.
@@ -196,6 +223,24 @@ sub render {
     }
     $price_scale->{x_offset} = $self->{_x_offset} // 0;
     $self->{price_scale} = $price_scale;
+
+    # Volume scale — panel independiente, misma ventana horizontal
+    my $volume_scale = Market::Panels::Scales->new(
+        x_left       => 0,
+        x_width      => $vw,
+        start_index  => $v_start,
+        visible_bars => $n_visible,
+        y_top        => 0,
+        y_height     => $vh,
+        y_min        => 0,
+        y_max        => 1,
+    );
+    $volume_scale->{data_start_index} = $d_start;
+    my ( $v_min, $v_max ) = $self->{volume_panel}->get_y_range($data_slice);
+    $volume_scale->{y_min} = $v_min;
+    $volume_scale->{y_max} = $v_max;
+    $volume_scale->{x_offset} = $self->{_x_offset} // 0;
+    $self->{volume_scale} = $volume_scale;
 
     # ATR scale — misma logica de ventana virtual
     my $atr_slice = $self->{indicators}->slice_array( 'ATR', $d_start, $d_end );
@@ -226,11 +271,11 @@ sub render {
 
     # Dispatch to incremental or full render
     my $rs = $self->{_render_state};
-    if ( $rs && $self->_can_incremental( $rs, $v_start, $v_end, $d_start, $d_end, $price_scale, $n_visible, $pw, $ph, $volume_max ) ) {
-        $self->_incremental_pan( $v_start, $v_end, $d_start, $d_end, $data_slice, $price_scale, $atr_slice, $atr_scale, $rs, $volume_max );
+    if ( $rs && $self->_can_incremental( $rs, $v_start, $v_end, $d_start, $d_end, $price_scale, $n_visible, $pw, $ph, $vw, $vh, $volume_max ) ) {
+        $self->_incremental_pan( $v_start, $v_end, $d_start, $d_end, $data_slice, $price_scale, $volume_scale, $atr_slice, $atr_scale, $rs, $volume_max );
     }
     else {
-        $self->_full_render( $d_start, $d_end, $data_slice, $price_scale, $atr_slice, $atr_scale, $volume_max );
+        $self->_full_render( $d_start, $d_end, $data_slice, $price_scale, $volume_scale, $atr_slice, $atr_scale, $volume_max );
     }
 
     # Save state for next incremental check
@@ -247,6 +292,8 @@ sub render {
         volume_max   => $volume_max,
         pw           => $pw,
         ph           => $ph,
+        vw           => $vw,
+        vh           => $vh,
     };
 
     if ( defined $self->{crosshair_x} ) {
@@ -256,10 +303,11 @@ sub render {
 
 # Returns true when an incremental pan is safe (no Y rescale, no zoom, no resize)
 sub _can_incremental {
-    my ($self, $rs, $v_start, $v_end, $d_start, $d_end, $pscale, $n_visible, $pw, $ph, $volume_max) = @_;
+    my ($self, $rs, $v_start, $v_end, $d_start, $d_end, $pscale, $n_visible, $pw, $ph, $vw, $vh, $volume_max) = @_;
 
     return 0 if $self->{_x_offset} != 0;
     return 0 if $rs->{pw} != $pw || $rs->{ph} != $ph;
+    return 0 if ($rs->{vw}//0) != $vw || ($rs->{vh}//0) != $vh;
     return 0 if $rs->{visible_bars} != $n_visible;
     return 0 if ( $rs->{volume_max} // 0 ) != ( $volume_max // 0 );
 
@@ -286,17 +334,19 @@ sub _raise_overlay_labels {
 
 # Complete redraw of all panels and scales
 sub _full_render {
-    my ($self, $d_start, $d_end, $data_slice, $pscale, $atr_slice, $ascale, $volume_max) = @_;
+    my ($self, $d_start, $d_end, $data_slice, $pscale, $vscale, $atr_slice, $ascale, $volume_max) = @_;
 
     my $pc  = $self->{price_canvas};
     my $psc = $self->{price_scale_canvas};
+    my $vc  = $self->{volume_canvas};
+    my $vsc = $self->{volume_scale_canvas};
     my $ac  = $self->{atr_canvas};
     my $asc = $self->{atr_scale_canvas};
 
     # --- Price panel ---
     $pc->delete('all');
     $self->{price_panel}->set_scale($pscale);
-    $self->{price_panel}->render( $pc, $data_slice, $pscale, $volume_max );
+    $self->{price_panel}->render( $pc, $data_slice, $pscale );
     my $ts = $self->compute_intraday_labels( $d_start, $d_end, $pscale );
     $self->{price_panel}->draw_time_axis( $pc, $ts );
 
@@ -307,12 +357,19 @@ sub _full_render {
         $ov->render( $pc, $d_start, $d_end, $pscale, $cur_bar );
     }
     $self->_render_manual_fibonacci( $pc, $pscale, $cur_bar );
+    $self->_draw_replay_marker( $pc, $d_start, $d_end, $pscale );
     $self->_raise_overlay_labels($pc);
 
     # --- Price scale (must come after candles so lastprice draws on ready canvas) ---
     $psc->delete('all');
     $pscale->_draw_y_scale($psc);
     $self->{price_panel}->render_last_visible_price($pc);
+
+    # --- Volume panel ---
+    $vc->delete('all');
+    $self->{volume_panel}->set_scale($vscale);
+    $self->{volume_panel}->render( $vc, $data_slice, $vscale );
+    $self->{volume_panel}->render_scale($vsc);
 
     # --- ATR panel ---
     $ac->delete('all');
@@ -327,7 +384,7 @@ sub _full_render {
 
 # O(1) horizontal pan: move existing candles, add/delete only the edge bars
 sub _incremental_pan {
-    my ($self, $v_start, $v_end, $d_start, $d_end, $data_slice, $pscale, $atr_slice, $ascale, $rs, $volume_max) = @_;
+    my ($self, $v_start, $v_end, $d_start, $d_end, $data_slice, $pscale, $vscale, $atr_slice, $ascale, $rs, $volume_max) = @_;
 
     # El delta virtual determina cuantos pixeles se desplazan las velas existentes
     my $delta = $v_start - $rs->{v_start};
@@ -336,35 +393,33 @@ sub _incremental_pan {
 
     my $pc  = $self->{price_canvas};
     my $psc = $self->{price_scale_canvas};
+    my $vc  = $self->{volume_canvas};
+    my $vsc = $self->{volume_scale_canvas};
     my $ac  = $self->{atr_canvas};
     my $asc = $self->{atr_scale_canvas};
 
     $self->{price_panel}->set_scale($pscale);
+    $self->{volume_panel}->set_scale($vscale);
     $self->{atr_panel}->set_scale($ascale);
 
     # Shift all price items O(1)
     $pc->move( 'candles', $dx, 0 );
-    $pc->move( 'volume',  $dx, 0 );
 
     if ( $delta > 0 ) {
         # Panned left: eliminar velas que salieron por la izquierda, agregar a la derecha
         $pc->delete("ci_$_") for $rs->{d_start} .. $d_start - 1;
-        $pc->delete("vi_$_") for $rs->{d_start} .. $d_start - 1;
         for my $i ( 0 .. $#$data_slice ) {
             my $ix = $d_start + $i;
             next unless $ix > $rs->{d_end};
-            $self->{price_panel}->render_volume_bar( $pc, $data_slice->[$i], $ix, $pscale, $volume_max );
             $self->{price_panel}->render_candle( $pc, $data_slice->[$i], $ix, $pscale );
         }
     }
     else {
         # Panned right: eliminar velas que salieron por la derecha, agregar a la izquierda
         $pc->delete("ci_$_") for ( $d_end + 1 ) .. $rs->{d_end};
-        $pc->delete("vi_$_") for ( $d_end + 1 ) .. $rs->{d_end};
         for my $i ( 0 .. $#$data_slice ) {
             my $ix = $d_start + $i;
             next unless $ix < $rs->{d_start};
-            $self->{price_panel}->render_volume_bar( $pc, $data_slice->[$i], $ix, $pscale, $volume_max );
             $self->{price_panel}->render_candle( $pc, $data_slice->[$i], $ix, $pscale );
         }
     }
@@ -382,7 +437,6 @@ sub _incremental_pan {
         $pc->createLine( 0, $y, $pscale->{x_width}, $y,
             -fill => '#1e2130', -tags => ['grid'] );
     }
-    $pc->lower( 'volume', 'grid' ) if $pc->find( 'withtag', 'grid' );
     $pc->lower( 'grid', 'candles' ) if $pc->find( 'withtag', 'candles' );
 
     # Redraw time axis
@@ -397,6 +451,7 @@ sub _incremental_pan {
         $ov->render( $pc, $d_start, $d_end, $pscale, $cur_bar2 );
     }
     $self->_render_manual_fibonacci( $pc, $pscale, $cur_bar2 );
+    $self->_draw_replay_marker( $pc, $d_start, $d_end, $pscale );
     $self->_raise_overlay_labels($pc);
 
     # Redraw last price label
@@ -404,6 +459,11 @@ sub _incremental_pan {
     $psc->delete('all');
     $pscale->_draw_y_scale($psc);
     $self->{price_panel}->render_last_visible_price($pc);
+
+    # Redraw volume panel independently from price overlays
+    $vc->delete('all');
+    $self->{volume_panel}->render( $vc, $data_slice, $vscale );
+    $self->{volume_panel}->render_scale($vsc);
 
     # Redraw ATR (full, fast)
     $ac->delete('grid');
@@ -423,6 +483,7 @@ sub _incremental_pan {
     $self->{atr_panel}->render_last_visible_value($ac);
 
     $pc->raise('crosshair');
+    $vc->raise('crosshair');
     $ac->raise('crosshair');
 }
 
@@ -430,6 +491,7 @@ sub _incremental_pan {
 sub bind_events {
     my ($self) = @_;
     $self->_bind_all_canvas( $self->{price_canvas} );
+    $self->_bind_all_canvas( $self->{volume_canvas} );
     $self->_bind_all_canvas( $self->{atr_canvas} );
 
     # ---------------------------------------------------------------
@@ -548,6 +610,7 @@ sub _handle_global_motion {
     my ($self, $rx, $ry) = @_;
 
     my $pc = $self->{price_canvas};
+    my $vc = $self->{volume_canvas};
     my $ac = $self->{atr_canvas};
 
     my $pcx = $rx - $pc->rootx;
@@ -555,6 +618,14 @@ sub _handle_global_motion {
     if ( $pcx >= 0 && $pcx < ( $pc->width || 900 )
       && $pcy >= 0 && $pcy < ( $pc->height || 500 ) ) {
         $self->_on_mouse_move_xy( $pcx, $pcy, 'price' );
+        return;
+    }
+
+    my $vcx = $rx - $vc->rootx;
+    my $vcy = $ry - $vc->rooty;
+    if ( $vcx >= 0 && $vcx < ( $vc->width || 900 )
+      && $vcy >= 0 && $vcy < ( $vc->height || 90 ) ) {
+        $self->_on_mouse_move_xy( $vcx, $vcy, 'volume' );
         return;
     }
 
@@ -575,6 +646,7 @@ sub _hide_crosshair_all {
     $self->{crosshair_x} = undef;
     $self->{crosshair_y} = undef;
     $self->{price_panel}->hide_crosshair();
+    $self->{volume_panel}->hide_crosshair();
     $self->{atr_panel}->hide_crosshair();
 }
 
@@ -588,6 +660,55 @@ sub _point_in_widget {
     my $hh = $w->height || 0;
 
     return $x >= 0 && $x < $ww && $y >= 0 && $y < $hh;
+}
+
+sub _index_from_global_point {
+    my ($self, $global_x, $global_y) = @_;
+    return unless defined $global_x && defined $global_y;
+
+    my ($canvas, $scale);
+    if ( $self->_point_in_widget( $self->{price_canvas}, $global_x, $global_y ) ) {
+        ($canvas, $scale) = ( $self->{price_canvas}, $self->{price_scale} );
+    }
+    elsif ( $self->_point_in_widget( $self->{volume_canvas}, $global_x, $global_y ) ) {
+        ($canvas, $scale) = ( $self->{volume_canvas}, $self->{volume_scale} );
+    }
+    elsif ( $self->_point_in_widget( $self->{atr_canvas}, $global_x, $global_y ) ) {
+        ($canvas, $scale) = ( $self->{atr_canvas}, $self->{atr_scale} );
+    }
+    return unless $canvas && $scale;
+
+    my $x  = $global_x - $canvas->rootx;
+    my $ix = $scale->x_to_index($x);
+    my ( undef, undef, $d_start, $d_end ) = $self->compute_window();
+    my $hi = $self->{replay_mode} && defined $self->{replay_cursor}
+        ? $self->{replay_cursor}
+        : $d_end;
+    my $last = $self->{market}->last_index();
+    $d_start = 0 if $d_start < 0;
+    $hi = $last if $hi > $last;
+    $ix = $d_start if $ix < $d_start;
+    $ix = $hi      if $ix > $hi;
+    return undef if $ix < 0 || $ix > $last;
+    return $ix;
+}
+
+sub set_replay_start_index {
+    my ($self, $index) = @_;
+    return unless defined $index;
+    my $last = $self->{market}->last_index();
+    return if $last < 0;
+    $index = 0     if $index < 0;
+    $index = $last if $index > $last;
+
+    $self->{selected_replay_index} = $index;
+    if ( $self->{replay_mode} ) {
+        $self->pause_replay() if $self->{replay_playing};
+        $self->{replay_cursor} = $index;
+        $self->_anchor_cursor_to_right_edge();
+    }
+    $self->{_render_state} = undef;
+    $self->request_render();
 }
 
 sub _price_scale_drag_start {
@@ -855,6 +976,10 @@ sub _draw_manual_fib_set {
 
 sub drag_start {
     my ($self, $global_x, $global_y) = @_;
+    $self->{_drag_started_in_chart} = 0;
+    $self->{_drag_start_replay_index} = undef;
+    $self->{_drag_moved} = 0;
+
     if ( $self->{manual_fib_selecting} ) {
         $self->_manual_fib_start( $global_x, $global_y )
             if $self->_point_in_widget( $self->{price_canvas}, $global_x, $global_y );
@@ -865,18 +990,24 @@ sub drag_start {
         $self->_price_scale_drag_start($global_y) unless $self->{_price_scale_dragging};
         return;
     }
+    return if $self->_point_in_widget( $self->{volume_scale_canvas}, $global_x, $global_y );
     return if $self->_point_in_widget( $self->{atr_scale_canvas},   $global_x, $global_y );
+    return unless $self->_point_in_widget( $self->{price_canvas}, $global_x, $global_y )
+               || $self->_point_in_widget( $self->{volume_canvas}, $global_x, $global_y )
+               || $self->_point_in_widget( $self->{atr_canvas}, $global_x, $global_y );
 
     $self->{_drag_start_x}      = $global_x;
     $self->{_drag_start_y}      = $global_y;
     $self->{_drag_start_offset} = $self->{offset};
+    $self->{_drag_started_in_chart} = 1;
+    $self->{_drag_start_replay_index} = $self->_index_from_global_point($global_x, $global_y);
     # Capturar rango Y al inicio del drag para pan vertical relativo al punto de inicio
     $self->{_drag_start_y_min}  = $self->{y_min_manual};
     $self->{_drag_start_y_max}  = $self->{y_max_manual};
 }
 
 sub drag_end {
-    my ($self) = @_;
+    my ($self, $global_x, $global_y) = @_;
     if ( $self->{manual_fib_selecting} && !$self->{manual_fib_preview} ) {
         return;
     }
@@ -885,8 +1016,21 @@ sub drag_end {
         return;
     }
 
+    my $was_click = defined $self->{_drag_start_x}
+                 && $self->{_drag_started_in_chart}
+                 && !$self->{_drag_moved};
+    if ($was_click) {
+        my $idx = $self->{_drag_start_replay_index};
+        $idx = $self->_index_from_global_point($global_x, $global_y)
+            if !defined $idx && defined $global_x && defined $global_y;
+        $self->set_replay_start_index($idx) if defined $idx;
+    }
+
     $self->{_drag_start_x} = undef;
     $self->{_drag_start_y} = undef;
+    $self->{_drag_started_in_chart} = 0;
+    $self->{_drag_start_replay_index} = undef;
+    $self->{_drag_moved} = 0;
     $self->_price_scale_drag_end() if $self->{_price_scale_dragging};
 }
 
@@ -906,6 +1050,8 @@ sub drag_move {
 
     # --- Pan horizontal (siempre) ---
     my $dx    = $global_x - $self->{_drag_start_x};
+    my $dy0   = $global_y - ( $self->{_drag_start_y} // $global_y );
+    $self->{_drag_moved} = 1 if abs($dx) > 3 || abs($dy0) > 3;
     my $bar_w = ( $self->{price_canvas}->width() || 900 ) / ( $self->{visible_bars} || 100 );
     $bar_w    = 0.5 if $bar_w < 0.5;
 
@@ -914,6 +1060,10 @@ sub drag_move {
     my $pad     = $self->{visible_bars};
     my $max_off = $self->{market}->last_index() + $pad;
     my $min_off = -$pad;
+    if ( $self->{replay_mode} && defined $self->{replay_cursor} ) {
+        my $replay_min_off = $self->{market}->last_index() - $self->{replay_cursor};
+        $min_off = $replay_min_off if $replay_min_off > $min_off;
+    }
     $new_off = $min_off if $new_off < $min_off;
     $new_off = $max_off if $new_off > $max_off;
 
@@ -960,6 +1110,8 @@ sub zoom {
     $new_bars = 5    if $new_bars < 5;
     $new_bars = 5000 if $new_bars > 5000;
     $self->{visible_bars} = $new_bars;
+    $self->_anchor_cursor_to_right_edge()
+        if $self->{replay_mode} && defined $self->{replay_cursor};
     $self->{_render_state} = undef;    # force full render after zoom
     my $tf = $self->{market}{current_tf};
     $self->{price_canvas}->toplevel->title("Market Chart | " . $self->tf_label($tf) . "  [velas: $new_bars]");
@@ -1012,6 +1164,13 @@ sub zoom_at {
     my $clamped = 0;
     if ( $new_off < 0 )     { $new_off = 0;     $clamped = 1; }
     if ( $new_off > $last ) { $new_off = $last;  $clamped = 1; }
+    if ( $self->{replay_mode} && defined $self->{replay_cursor} ) {
+        my $min_replay_off = $last - $self->{replay_cursor};
+        if ( $new_off < $min_replay_off ) {
+            $new_off = $min_replay_off;
+            $clamped = 1;
+        }
+    }
 
     $self->{_offset_exact} = $clamped ? $new_off * 1.0 : $new_offset_exact;
 
@@ -1125,14 +1284,25 @@ sub set_replay_callback {
 # ================================================================
 
 sub start_replay {
-    my ($self) = @_;
-    # Tomar el borde derecho actual de la vista como punto de inicio del replay
+    my ($self, $index) = @_;
+    # Usar la vela elegida por click. Si no hay seleccion, conservar el
+    # comportamiento anterior: borde derecho visible actual.
     my ($v_start, $v_end, $d_start, $d_end) = $self->compute_window();
+    my $start_index = defined $index ? $index : $self->{selected_replay_index};
+    $start_index = $d_end unless defined $start_index;
+    my $last = $self->{market}->last_index();
+    return if $last < 0;
+    $start_index = 0     if $start_index < 0;
+    $start_index = $last if $start_index > $last;
+
+    $self->_stop_replay_timer();
     $self->{replay_mode}    = 1;
-    $self->{replay_cursor}  = $d_end;
+    $self->{replay_cursor}  = $start_index;
+    $self->{selected_replay_index} = $start_index;
     $self->{replay_playing} = 0;
     $self->{replay_speed}   = 400;
     $self->{_render_state}  = undef;
+    $self->_anchor_cursor_to_right_edge();
     $self->{on_replay_state_change}->('started') if $self->{on_replay_state_change};
     $self->request_render();
 }
@@ -1143,6 +1313,7 @@ sub exit_replay {
     $self->{replay_mode}    = 0;
     $self->{replay_playing} = 0;
     $self->{replay_cursor}  = undef;
+    $self->{selected_replay_index} = undef;
     $self->{_render_state}  = undef;
     $self->{on_replay_state_change}->('exited') if $self->{on_replay_state_change};
     $self->goto_last();
@@ -1240,6 +1411,10 @@ sub _anchor_cursor_to_right_edge {
     my ($self) = @_;
     my $cursor    = $self->{replay_cursor};
     my $real_last = $self->{market}->last_index();
+    return unless defined $cursor;
+    $cursor = 0          if $cursor < 0;
+    $cursor = $real_last if $cursor > $real_last;
+    $self->{replay_cursor} = $cursor;
 
     # offset tal que v_end = cursor
     my $new_off = $real_last - $cursor;
@@ -1329,6 +1504,39 @@ sub _on_mouse_move_xy {
     $self->_draw_crosshair_all();
 }
 
+sub _draw_replay_marker {
+    my ($self, $canvas, $d_start, $d_end, $scale) = @_;
+    return unless $canvas && $scale;
+    $canvas->delete('replay_marker');
+
+    my $idx = $self->{replay_mode}
+        ? $self->{replay_cursor}
+        : $self->{selected_replay_index};
+    return unless defined $idx;
+    return if $idx < $d_start || $idx > $d_end;
+
+    my $x = int( $scale->index_to_center_x($idx) + 0.5 );
+    return if $x < 0 || $x > $scale->{x_width};
+
+    my $h = $scale->{y_height} || ($canvas->height || 500);
+    my $color = $self->{replay_mode} ? '#f6c90e' : '#83a9ff';
+    my $label = $self->{replay_mode} ? 'REPLAY' : 'RP START';
+
+    $canvas->createLine( $x, 0, $x, $h,
+        -fill  => $color,
+        -width => 1.5,
+        -dash  => [ 5, 4 ],
+        -tags  => [ 'replay_marker' ],
+    );
+    $canvas->createText( $x + 4, 30,
+        -text   => $label,
+        -fill   => $color,
+        -font   => [ 'Helvetica', 8, 'bold' ],
+        -anchor => 'w',
+        -tags   => [ 'replay_marker' ],
+    );
+}
+
 sub _draw_crosshair_all {
     my ($self) = @_;
     return unless defined $self->{crosshair_x} && $self->{price_scale};
@@ -1341,7 +1549,9 @@ sub _draw_crosshair_all {
     my $ix = $scale->x_to_index( $self->{crosshair_x} );
     my $lo = $scale->{data_start_index} // $scale->{start_index};
     $lo    = 0 if $lo < 0;
-    my $hi = $self->{market}->last_index();
+    my $hi = $self->{replay_mode} && defined $self->{replay_cursor}
+        ? $self->{replay_cursor}
+        : $self->{market}->last_index();
     $ix    = $lo if $ix < $lo;
     $ix    = $hi if $ix > $hi;
     my $snapped_x = int( $scale->index_to_center_x($ix) + 0.5 );
@@ -1350,15 +1560,21 @@ sub _draw_crosshair_all {
     my $price_y = ( $self->{_crosshair_source} eq 'price' ) ? $self->{crosshair_y} : undef;
     $self->{price_panel}->draw_crosshair( $snapped_x, $price_y );
 
-    # Label de fecha/hora en el time-axis (precio y ATR sincronizados)
+    # Label de fecha/hora en el time-axis (paneles sincronizados)
     my $ts = $self->{market}->get_timestamp($ix);
-    $self->{price_panel}->draw_crosshair_time_label( $snapped_x, $ts );
-    $self->{atr_panel}->draw_crosshair_time_label(   $snapped_x, $ts );
+    $self->{price_panel}->draw_crosshair_time_label(  $snapped_x, $ts );
+    $self->{volume_panel}->draw_crosshair_time_label( $snapped_x, $ts );
+    $self->{atr_panel}->draw_crosshair_time_label(    $snapped_x, $ts );
 
     # OHLC legend en la esquina superior izquierda del canvas de precio
     my $candle = $self->{market}->get_candle($ix);
     my $prev   = $ix > 0 ? $self->{market}->get_candle($ix - 1) : undef;
     $self->{price_panel}->draw_ohlc_legend($candle, $prev ? $prev->{close} : undef);
+
+    # Valor de volumen en la barra bajo el cursor
+    my $volume_y = ( $self->{_crosshair_source} eq 'volume' ) ? $self->{crosshair_y} : undef;
+    my $volume_val = $candle ? $candle->{volume} : undef;
+    $self->{volume_panel}->draw_crosshair( $snapped_x, $volume_val, $volume_y );
 
     # Valor ATR en la barra bajo el cursor
     my $atr_val;
@@ -1375,6 +1591,13 @@ sub _draw_crosshair_all {
 # Switch active timeframe, recompute indicators, reset view
 sub set_timeframe {
     my ($self, $tf) = @_;
+    my $was_replay = $self->{replay_mode};
+    $self->_stop_replay_timer();
+    $self->{replay_mode}    = 0;
+    $self->{replay_playing} = 0;
+    $self->{replay_cursor}  = undef;
+    $self->{selected_replay_index} = undef;
+    $self->{on_replay_state_change}->('exited') if $was_replay && $self->{on_replay_state_change};
     $self->{market}->set_timeframe($tf);
     $self->{indicators}->reset_all();
     $self->{indicators}->compute_all( $self->{market} );
@@ -1394,6 +1617,13 @@ sub set_timeframe {
 
 sub reset_view {
     my ($self) = @_;
+    my $was_replay = $self->{replay_mode};
+    $self->_stop_replay_timer();
+    $self->{replay_mode}    = 0;
+    $self->{replay_playing} = 0;
+    $self->{replay_cursor}  = undef;
+    $self->{selected_replay_index} = undef;
+    $self->{on_replay_state_change}->('exited') if $was_replay && $self->{on_replay_state_change};
     $self->{visible_bars}  = 100;
     $self->{y_auto}        = 1;
     $self->{y_auto_atr}    = 1;

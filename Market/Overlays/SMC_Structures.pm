@@ -18,11 +18,12 @@ my $COLOR_ZONE_HIGH  = '#f6c90e';   # amarillo — Zona de Alta Reaccion
 sub new {
     my ($class, %args) = @_;
     return bless {
-        indicator   => $args{indicator},
-        visibility  => $args{visibility},
-        show_bos    => $args{show_bos}   // 1,
-        show_fvg    => $args{show_fvg}   // 1,
-        fvg_max_age => $args{fvg_max_age} // 20,  # barras maximas hacia futuro si no hay mitigacion
+        indicator      => $args{indicator},
+        visibility     => $args{visibility},
+        show_bos       => $args{show_bos} // 1,
+        show_fvg       => $args{show_fvg} // 1,
+        fvg_max_age    => exists $args{fvg_max_age} ? $args{fvg_max_age} : undef,
+        fvg_mitigation => $args{fvg_mitigation} // 'full',
     }, $class;
 }
 
@@ -47,6 +48,7 @@ sub render {
     return unless $ind;
 
     $canvas->delete('smc_overlay');
+    $self->{_label_slots} = {};
     return unless $self->_visible('smc_enabled', 1);
 
     # Construir lookup de sweeps recientes para marcar FVGs como Zona de Alta Reaccion
@@ -98,22 +100,26 @@ sub _render_swing_labels {
         my $price = $sh->{price};
         next unless defined $idx && defined $price;
         next if $idx > $current_bar;
+        my $confirmed_at = $sh->{confirmed_at} // $idx;
+        next if defined $confirmed_at && $confirmed_at > $current_bar;
 
         my $label = defined $last_high && $price > $last_high ? 'HH' : 'LH';
         $last_high = $price;
         next if $idx < $d_start || $idx > $d_end;
         my $x = $scale->index_to_center_x($idx);
         my $y = $scale->value_to_y($price);
-        my $scope_color = ($sh->{scope}//'') eq 'external' ? '#f6c90e' : '#b2b5be';
+        my $scope_color = $self->_effective_scope($sh, $current_bar) eq 'external'
+            ? '#f6c90e' : '#b2b5be';
 
-        if (($label eq 'HH' && $show_hh) || ($label eq 'LH' && $show_lh)) {
+        if ((($label eq 'HH' && $show_hh) || ($label eq 'LH' && $show_lh))
+            && $self->_claim_label_slot( $x, $y - 10 )) {
             $canvas->createText( $x, $y - 10,
                 -text => $label, -fill => '#b2b5be',
                 -font => ['Helvetica', 7, 'bold'], -anchor => 'center',
                 -tags => ['smc_overlay', 'smc_label', lc($label)],
             );
         }
-        if ($show_sh) {
+        if ($show_sh && $self->_claim_label_slot( $x, $y - 22 )) {
             $canvas->createText( $x, $y - 22,
                 -text => 'SH', -fill => $scope_color,
                 -font => ['Helvetica', 7, 'bold'], -anchor => 'center',
@@ -128,22 +134,26 @@ sub _render_swing_labels {
         my $price = $sl->{price};
         next unless defined $idx && defined $price;
         next if $idx > $current_bar;
+        my $confirmed_at = $sl->{confirmed_at} // $idx;
+        next if defined $confirmed_at && $confirmed_at > $current_bar;
 
         my $label = defined $last_low && $price > $last_low ? 'HL' : 'LL';
         $last_low = $price;
         next if $idx < $d_start || $idx > $d_end;
         my $x = $scale->index_to_center_x($idx);
         my $y = $scale->value_to_y($price);
-        my $scope_color = ($sl->{scope}//'') eq 'external' ? '#f6c90e' : '#b2b5be';
+        my $scope_color = $self->_effective_scope($sl, $current_bar) eq 'external'
+            ? '#f6c90e' : '#b2b5be';
 
-        if (($label eq 'HL' && $show_hl) || ($label eq 'LL' && $show_ll)) {
+        if ((($label eq 'HL' && $show_hl) || ($label eq 'LL' && $show_ll))
+            && $self->_claim_label_slot( $x, $y + 10 )) {
             $canvas->createText( $x, $y + 10,
                 -text => $label, -fill => '#b2b5be',
                 -font => ['Helvetica', 7, 'bold'], -anchor => 'center',
                 -tags => ['smc_overlay', 'smc_label', lc($label)],
             );
         }
-        if ($show_sl) {
+        if ($show_sl && $self->_claim_label_slot( $x, $y + 22 )) {
             $canvas->createText( $x, $y + 22,
                 -text => 'SL', -fill => $scope_color,
                 -font => ['Helvetica', 7, 'bold'], -anchor => 'center',
@@ -164,7 +174,7 @@ sub _render_fibonacci {
 
     @events = grep {
         defined $_->{index} && defined $_->{from} && defined $_->{level}
-            && $_->{index} <= $current_bar
+            && $self->_event_visible_at($_, $current_bar)
     } @events;
     return unless @events;
 
@@ -201,11 +211,13 @@ sub _render_fibonacci {
             -fill => '#b2b5be', -width => 1, -dash => [2, 3],
             -tags => ['smc_overlay', 'fibonacci'],
         );
-        $canvas->createText( $x2 - 3, $y - 5,
-            -text => sprintf('Fib %.3g', $ratio),
-            -fill => '#b2b5be', -font => ['Helvetica', 7],
-            -anchor => 'e', -tags => ['smc_overlay', 'smc_label', 'fibonacci'],
-        );
+        if ( $self->_claim_label_slot( $x2 - 3, $y - 5 ) ) {
+            $canvas->createText( $x2 - 3, $y - 5,
+                -text => sprintf('Fib %.3g', $ratio),
+                -fill => '#b2b5be', -font => ['Helvetica', 7],
+                -anchor => 'e', -tags => ['smc_overlay', 'smc_label', 'fibonacci'],
+            );
+        }
     }
 }
 
@@ -218,7 +230,7 @@ sub _render_market_regime {
     push @events, @{ $self->{indicator}->get_choch_events() // [] }
         if $self->{indicator}->can('get_choch_events');
 
-    @events = grep { defined $_->{index} && $_->{index} <= $current_bar } @events;
+    @events = grep { defined $_->{index} && $self->_event_visible_at($_, $current_bar) } @events;
     return unless @events;
 
     my ($ev) = sort { $b->{index} <=> $a->{index} } @events;
@@ -246,20 +258,30 @@ sub _render_fvg {
         my $idx = $fvg->{index};
         next unless defined $idx;
         my $formed_at = $fvg->{formed_at} // ($idx + 1);
+        my $left_idx  = $fvg->{left_index} // ($idx - 1);
         next unless defined $formed_at;
+        next unless defined $left_idx;
         next unless defined $fvg->{top} && defined $fvg->{bottom};
         next if $formed_at > $current_bar;     # no mostrar FVGs aun no confirmados en Replay
 
-        my $max_age = $self->{fvg_max_age} // 20;
-        my $max_end = $formed_at + $max_age;
+        my $max_age = $self->{fvg_max_age};
+        my $max_end = defined $max_age && $max_age >= 0
+            ? $formed_at + $max_age
+            : $current_bar;
         my $end_idx = $current_bar < $max_end ? $current_bar : $max_end;
-        my $mitigated_at = _fvg_mitigated_at($fvg, $candles, $formed_at + 1, $end_idx);
+        my $mitigated_at = _fvg_mitigated_at(
+            $fvg,
+            $candles,
+            $formed_at + 1,
+            $end_idx,
+            $self->{fvg_mitigation},
+        );
         $end_idx = $mitigated_at if defined $mitigated_at && $mitigated_at < $end_idx;
 
         next if $end_idx < $d_start;           # el bloque ya termino antes de la vista
-        next if $formed_at > $d_end;           # empieza despues de la vista
+        next if $left_idx > $d_end;            # empieza despues de la vista
 
-        my $draw_start = $formed_at < $d_start ? $d_start : $formed_at;
+        my $draw_start = $left_idx < $d_start ? $d_start : $left_idx;
         my $draw_end   = $end_idx   > $d_end   ? $d_end   : $end_idx;
         next if $draw_start > $draw_end;
 
@@ -270,7 +292,7 @@ sub _render_fvg {
 
         my $x1 = $scale->index_to_center_x($draw_start) - $half_bar;
         my $x2 = defined $mitigated_at && $mitigated_at <= $d_end
-            ? $scale->index_to_center_x($mitigated_at) - $half_bar
+            ? $scale->index_to_center_x($mitigated_at) + $half_bar
             : $scale->index_to_center_x($draw_end) + $half_bar;
         next if $x1 > $scale->{x_width} || $x2 < 0;
         $x1 = 0 if $x1 < 0;
@@ -292,23 +314,26 @@ sub _render_fvg {
         );
 
         my $lbl_y   = ($y1 + $y2) / 2;
-        $canvas->createText( $x1 + 3, $lbl_y,
-            -text   => 'FVG',
-            -fill   => $color,
-            -font   => ['Helvetica', 7, 'bold'],
-            -anchor => 'w',
-            -tags   => ['smc_overlay', 'smc_label', 'fvg'],
-        );
+        if ( $self->_claim_label_slot( $x1 + 3, $lbl_y ) ) {
+            $canvas->createText( $x1 + 3, $lbl_y,
+                -text   => 'FVG',
+                -fill   => $color,
+                -font   => ['Helvetica', 7, 'bold'],
+                -anchor => 'w',
+                -tags   => ['smc_overlay', 'smc_label', 'fvg'],
+            );
+        }
     }
 }
 
 sub _fvg_mitigated_at {
-    my ($fvg, $candles, $from, $to) = @_;
+    my ($fvg, $candles, $from, $to, $mode) = @_;
     return undef unless $candles && @$candles;
     return undef unless defined $fvg->{top} && defined $fvg->{bottom};
     $from = 0 if $from < 0;
     $to = $#$candles if $to > $#$candles;
     return undef if $from > $to;
+    $mode //= 'full';
 
     my ($upper, $lower) = $fvg->{top} >= $fvg->{bottom}
         ? ($fvg->{top}, $fvg->{bottom})
@@ -316,15 +341,30 @@ sub _fvg_mitigated_at {
     my $eps = abs($upper - $lower) * 1e-8;
     $eps = 1e-8 if $eps < 1e-8;
 
+    # Por defecto exigimos fill completo del gap:
+    # bull: el precio baja hasta el borde inferior; bear: sube hasta el borde superior.
+    # El modo 'touch' queda disponible si luego se quiere una vista mas agresiva.
     for my $i ($from .. $to) {
         my $c = $candles->[$i] // next;
         if ( ($fvg->{direction}//'') eq 'bull' ) {
-            return $i if defined $c->{low} && $c->{low} <= $lower + $eps;
+            my $threshold = $mode eq 'touch' ? $upper : $lower;
+            return $i if defined $c->{low} && $c->{low} <= $threshold + $eps;
         } else {
-            return $i if defined $c->{high} && $c->{high} >= $upper - $eps;
+            my $threshold = $mode eq 'touch' ? $lower : $upper;
+            return $i if defined $c->{high} && $c->{high} >= $threshold - $eps;
         }
     }
     return undef;
+}
+
+sub _claim_label_slot {
+    my ($self, $x, $y) = @_;
+    my $slot_x = int( ($x // 0) / 44 );
+    my $slot_y = int( ($y // 0) / 15 );
+    my $key = "$slot_x:$slot_y";
+    return 0 if $self->{_label_slots}{$key};
+    $self->{_label_slots}{$key} = 1;
+    return 1;
 }
 
 # ----------------------------------------------------------------
@@ -339,7 +379,8 @@ sub _render_bos {
         my $idx  = $bos->{index};
         my $from = $bos->{from};
         next unless defined $idx && defined $from && defined $bos->{level};
-        next unless $self->_show_structure_scope($bos);
+        next unless $self->_event_visible_at($bos, $current_bar);
+        next unless $self->_show_structure_scope($bos, $current_bar);
         next if $idx > $current_bar;                    # evento futuro en Replay
         my $line_end = $idx < $current_bar ? $idx : $current_bar;
         next if $line_end < $d_start && $from < $d_start;  # completamente fuera
@@ -363,17 +404,19 @@ sub _render_bos {
 
         # Etiqueta "BOS ▲" o "BOS ▼" en la barra de ruptura
         if ( $idx >= $d_start && $idx <= $d_end && $idx <= $current_bar ) {
-            my $scope = ($bos->{scope}//'internal') eq 'external' ? 'e' : 'i';
+            my $scope = $self->_effective_scope($bos, $current_bar) eq 'external' ? 'e' : 'i';
             my $arrow = $bos->{direction} eq 'bull' ? "BOS-$scope ^" : "BOS-$scope v";
             my $xa    = $scale->index_to_center_x($idx);
             my $offset = $bos->{direction} eq 'bull' ? -12 : 12;
-            $canvas->createText( $xa, $y + $offset,
-                -text   => $arrow,
-                -fill   => $color,
-                -font   => ['Helvetica', 8, 'bold'],
-                -anchor => 'center',
-                -tags   => ['smc_overlay', 'smc_label', 'bos'],
-            );
+            if ( $self->_claim_label_slot( $xa, $y + $offset ) ) {
+                $canvas->createText( $xa, $y + $offset,
+                    -text   => $arrow,
+                    -fill   => $color,
+                    -font   => ['Helvetica', 8, 'bold'],
+                    -anchor => 'center',
+                    -tags   => ['smc_overlay', 'smc_label', 'bos'],
+                );
+            }
         }
     }
 }
@@ -392,7 +435,8 @@ sub _render_choch {
         my $idx  = $ev->{index};
         my $from = $ev->{from};
         next unless defined $idx && defined $from && defined $ev->{level};
-        next unless $self->_show_structure_scope($ev);
+        next unless $self->_event_visible_at($ev, $current_bar);
+        next unless $self->_show_structure_scope($ev, $current_bar);
         next if $idx > $current_bar;
         my $line_end = $idx < $current_bar ? $idx : $current_bar;
         next if $line_end < $d_start && $from < $d_start;
@@ -412,21 +456,47 @@ sub _render_choch {
 
         if ( $idx >= $d_start && $idx <= $d_end && $idx <= $current_bar ) {
             my $xa   = $scale->index_to_center_x($idx);
-            my $scope = ($ev->{scope}//'internal') eq 'external' ? 'e' : 'i';
+            my $scope = $self->_effective_scope($ev, $current_bar) eq 'external' ? 'e' : 'i';
             my $lbl  = $ev->{direction} eq 'bull' ? "CHoCH-$scope ^" : "CHoCH-$scope v";
             my $yoff = $ev->{direction} eq 'bull' ? -14 : 14;
-            $canvas->createText( $xa, $y + $yoff,
-                -text => $lbl, -fill => $color,
-                -font => ['Helvetica', 8, 'bold'], -anchor => 'center',
-                -tags => ['smc_overlay', 'smc_label', 'choch'],
-            );
+            if ( $self->_claim_label_slot( $xa, $y + $yoff ) ) {
+                $canvas->createText( $xa, $y + $yoff,
+                    -text => $lbl, -fill => $color,
+                    -font => ['Helvetica', 8, 'bold'], -anchor => 'center',
+                    -tags => ['smc_overlay', 'smc_label', 'choch'],
+                );
+            }
         }
     }
 }
 
+sub _event_visible_at {
+    my ($self, $event, $current_bar) = @_;
+    return 0 unless $event;
+    return 1 unless defined $current_bar;
+
+    my $idx = $event->{index};
+    return 0 if defined $idx && $idx > $current_bar;
+
+    my $confirmed_at = $event->{confirmed_at} // $idx;
+    return 0 if defined $confirmed_at && $confirmed_at > $current_bar;
+
+    return 1;
+}
+
+sub _effective_scope {
+    my ($self, $item, $current_bar) = @_;
+    return 'internal' unless $item && (($item->{scope}//'internal') eq 'external');
+    return 'external' unless defined $current_bar;
+
+    my $scope_confirmed_at = $item->{scope_confirmed_at};
+    return 'external' unless defined $scope_confirmed_at;
+    return $scope_confirmed_at <= $current_bar ? 'external' : 'internal';
+}
+
 sub _show_structure_scope {
-    my ($self, $event) = @_;
-    my $scope = ($event->{scope}//'internal') eq 'external' ? 'external' : 'internal';
+    my ($self, $event, $current_bar) = @_;
+    my $scope = $self->_effective_scope($event, $current_bar);
     return $scope eq 'external'
         ? $self->_visible('show_external_structure', 1)
         : $self->_visible('show_internal_structure', 1);

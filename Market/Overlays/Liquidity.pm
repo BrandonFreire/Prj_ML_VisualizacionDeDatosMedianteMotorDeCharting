@@ -60,6 +60,8 @@ sub render {
         $bsl = $ind->can('get_swing_highs') ? $ind->get_swing_highs() : [];
         $ssl = $ind->can('get_swing_lows')  ? $ind->get_swing_lows()  : [];
     }
+    $bsl = $self->_limit_levels_for_view( $bsl, $d_start, $d_end, $current_bar );
+    $ssl = $self->_limit_levels_for_view( $ssl, $d_start, $d_end, $current_bar );
 
     $self->_render_resolution_candles( $canvas, $d_start, $d_end, $scale, $current_bar )
         if $ind->can('get_resolved');
@@ -71,6 +73,44 @@ sub render {
     $self->_render_levels( $canvas, $d_start, $d_end, $scale, $current_bar,
         $ssl, $COLOR_SSL, 'SSL', 'sl' )
         if $self->{show_ssl} || $self->_visible('show_eql', 1);
+}
+
+sub _limit_levels_for_view {
+    my ($self, $levels, $d_start, $d_end, $current_bar) = @_;
+    return [] unless $levels && @$levels;
+
+    my $limit = int( $self->{max_levels} // 0 );
+
+    my @visible;
+    for my $lvl (@$levels) {
+        my $start_idx = $lvl->{start_index} // $lvl->{index};
+        next unless defined $start_idx;
+        my $confirmed_at = $lvl->{confirmed_at} // $start_idx;
+        next if $confirmed_at > $current_bar;
+        next if $start_idx > $current_bar;
+
+        my $line_end = defined $lvl->{swept_at} && $lvl->{swept_at} <= $current_bar
+            ? $lvl->{swept_at}
+            : $current_bar;
+        next if $line_end < $d_start || $start_idx > $d_end;
+
+        push @visible, $lvl;
+    }
+
+    return \@visible if $limit <= 0;
+
+    @visible = sort {
+        my $a_swept = defined $a->{swept_at} && $a->{swept_at} <= $current_bar ? 1 : 0;
+        my $b_swept = defined $b->{swept_at} && $b->{swept_at} <= $current_bar ? 1 : 0;
+        (($a_swept ? 0 : 1) <=> ($b_swept ? 0 : 1))
+            || (($a->{index} // 0) <=> ($b->{index} // 0))
+    } @visible;
+
+    if ( @visible > $limit ) {
+        @visible = @visible[ $#visible - $limit + 1 .. $#visible ];
+    }
+
+    return \@visible;
 }
 
 sub _render_resolution_candles {
@@ -86,6 +126,8 @@ sub _render_resolution_candles {
         next unless $self->_show_resolution($lvl);
         my $idx = $lvl->{resolved_at};
         next unless defined $idx;
+        my $confirmed_at = $lvl->{confirmed_at} // $lvl->{index};
+        next if defined $confirmed_at && $confirmed_at > $current_bar;
         next if $idx > $current_bar || $idx < $d_start || $idx > $d_end;
         my $c = $candles->[$idx] // next;
         next unless defined $c->{high} && defined $c->{low};
@@ -117,6 +159,8 @@ sub _render_levels {
     for my $lvl (@$levels) {
         my $start_idx = $lvl->{start_index} // $lvl->{index};
         next unless defined $start_idx;
+        my $confirmed_at = $lvl->{confirmed_at} // $start_idx;
+        next if $confirmed_at > $current_bar;
         next if $start_idx > $current_bar;
 
         my $price = $lvl->{price};
@@ -124,7 +168,7 @@ sub _render_levels {
         my $y     = $scale->value_to_y($price);
         next if defined $scale->{y_height} && ($y < 0 || $y > $scale->{y_height});
 
-        my $level_label = _level_label($lvl, $tag, $side);
+        my $level_label = _level_label($lvl, $tag, $side, $current_bar);
         my $show_base = $side eq 'sh'
             ? $self->_visible('show_bsl', 1)
             : $self->_visible('show_ssl', 1);
@@ -204,6 +248,9 @@ sub _render_eq_connector {
     my $pair_idx  = $lvl->{eq_pair};
     my $start_idx = $lvl->{start_index} // $lvl->{index};
     return unless defined $pair_idx && defined $start_idx;
+    my $confirmed_at = $lvl->{confirmed_at} // $start_idx;
+    my $eq_confirmed_at = $lvl->{eq_confirmed_at} // $confirmed_at;
+    return if $confirmed_at > $current_bar || $eq_confirmed_at > $current_bar;
     return if $pair_idx > $current_bar || $start_idx > $current_bar;
 
     my $from = $pair_idx < $start_idx ? $pair_idx : $start_idx;
@@ -249,9 +296,12 @@ sub _claim_label_slot {
 }
 
 sub _level_label {
-    my ($lvl, $tag, $side) = @_;
-    return 'EQH' if $side eq 'sh' && $lvl->{is_eqh};
-    return 'EQL' if $side eq 'sl' && $lvl->{is_eql};
+    my ($lvl, $tag, $side, $current_bar) = @_;
+    my $eq_ready = !defined $current_bar
+        || !defined $lvl->{eq_confirmed_at}
+        || $lvl->{eq_confirmed_at} <= $current_bar;
+    return 'EQH' if $eq_ready && $side eq 'sh' && $lvl->{is_eqh};
+    return 'EQL' if $eq_ready && $side eq 'sl' && $lvl->{is_eql};
     return $tag;
 }
 

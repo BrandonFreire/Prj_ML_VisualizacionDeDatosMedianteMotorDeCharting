@@ -164,9 +164,6 @@ sub render {
             -fill => $COLOR_GRID, -tags => ['grid'] );
     }
 
-    # Volume histogram, aligned to candles and kept inside the price canvas.
-    $self->render_volume( $canvas, $data, $scale, $volume_max );
-
     # Candles
     # data_start_index es el indice real del primer elemento del slice;
     # puede diferir de start_index (virtual) cuando hay espacio vacio a la izquierda.
@@ -183,7 +180,7 @@ sub render {
     $self->{_last_open}  = $last->{open};
 }
 
-# Draw last visible close price: dashed line + colored label on the right edge
+# Draw last visible close price label on the right edge.
 sub render_last_visible_price {
     my ($self, $canvas) = @_;
     my $scale = $self->{scale};
@@ -195,13 +192,6 @@ sub render_last_visible_price {
 
     my $color = ( defined $self->{_last_open} && $price >= $self->{_last_open} )
         ? $COLOR_UP : $COLOR_DOWN;
-
-    # Dashed horizontal line across the full width
-    $canvas->createLine( 0, $y, $scale->{x_width}, $y,
-        -fill  => $color,
-        -dash  => [ 4, 3 ],
-        -tags  => ['lastprice'],
-    );
 
     my $label = sprintf( "%.2f", $price );
 

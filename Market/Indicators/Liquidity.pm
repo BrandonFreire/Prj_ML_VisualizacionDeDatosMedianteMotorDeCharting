@@ -66,10 +66,10 @@ sub compute_all {
                        || $arr->[$i]{low}  >= $arr->[$i+$j]{low};
         }
         if ($is_sh) {
-            push @sh, _make_level($i, $arr->[$i]{high}, 'BSL', 'sh');
+            push @sh, _make_level($i, $arr->[$i]{high}, 'BSL', 'sh', $i + $k);
         }
         if ($is_sl) {
-            push @sl, _make_level($i, $arr->[$i]{low},  'SSL', 'sl');
+            push @sl, _make_level($i, $arr->[$i]{low},  'SSL', 'sl', $i + $k);
         }
     }
 
@@ -80,8 +80,16 @@ sub compute_all {
         for my $b ($a+1 .. $#sh) {
             my $tol = ($atr[$sh[$b]{index}] // 0) * 0.10;
             if ($tol > 0 && abs($sh[$a]{price} - $sh[$b]{price}) <= $tol) {
+                my $eq_confirmed_at = _max(
+                    $sh[$a]{confirmed_at} // $sh[$a]{index},
+                    $sh[$b]{confirmed_at} // $sh[$b]{index},
+                );
                 $sh[$a]{is_eqh} = 1;
                 $sh[$b]{is_eqh} = 1;
+                $sh[$a]{eq_confirmed_at} = $eq_confirmed_at
+                    if !defined $sh[$a]{eq_confirmed_at}
+                    || $eq_confirmed_at < $sh[$a]{eq_confirmed_at};
+                $sh[$b]{eq_confirmed_at} = $eq_confirmed_at;
                 $sh[$b]{eq_pair} = $sh[$a]{index};
             }
         }
@@ -90,8 +98,16 @@ sub compute_all {
         for my $b ($a+1 .. $#sl) {
             my $tol = ($atr[$sl[$b]{index}] // 0) * 0.10;
             if ($tol > 0 && abs($sl[$a]{price} - $sl[$b]{price}) <= $tol) {
+                my $eq_confirmed_at = _max(
+                    $sl[$a]{confirmed_at} // $sl[$a]{index},
+                    $sl[$b]{confirmed_at} // $sl[$b]{index},
+                );
                 $sl[$a]{is_eql} = 1;
                 $sl[$b]{is_eql} = 1;
+                $sl[$a]{eq_confirmed_at} = $eq_confirmed_at
+                    if !defined $sl[$a]{eq_confirmed_at}
+                    || $eq_confirmed_at < $sl[$a]{eq_confirmed_at};
+                $sl[$b]{eq_confirmed_at} = $eq_confirmed_at;
                 $sl[$b]{eq_pair} = $sl[$a]{index};
             }
         }
@@ -115,12 +131,13 @@ sub compute_all {
 sub _run_state_machine {
     my ($lvl, $arr, $n, $n_accept) = @_;
     my $det_i = $lvl->{index};
+    my $confirmed_at = $lvl->{confirmed_at} // $det_i;
     my $price = $lvl->{price};
     my $side  = $lvl->{side};
 
     # Estado 2: SWEPT — buscar primera barra que cruce el nivel
     my $swept_i = undef;
-    for my $i ($det_i + 1 .. $n - 1) {
+    for my $i ($confirmed_at + 1 .. $n - 1) {
         if ($side eq 'sh' && $arr->[$i]{high} > $price) { $swept_i = $i; last }
         if ($side eq 'sl' && $arr->[$i]{low}  < $price) { $swept_i = $i; last }
     }
@@ -174,14 +191,16 @@ sub _run_state_machine {
 # Helpers
 # ----------------------------------------------------------------
 sub _make_level {
-    my ($index, $price, $type, $side) = @_;
+    my ($index, $price, $type, $side, $confirmed_at) = @_;
     return {
         index          => $index,
         price          => $price,
         type           => $type,   # BSL | SSL
         side           => $side,   # sh  | sl
+        confirmed_at   => $confirmed_at // $index,
         is_eqh         => 0,
         is_eql         => 0,
+        eq_confirmed_at => undef,
         state          => 'DETECTED',
         swept_at       => undef,
         resolved_at    => undef,
@@ -212,6 +231,7 @@ sub _simple_atr {
 }
 
 sub _min { $_[0] < $_[1] ? $_[0] : $_[1] }
+sub _max { $_[0] > $_[1] ? $_[0] : $_[1] }
 
 # ----------------------------------------------------------------
 # Accessors

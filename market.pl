@@ -35,19 +35,25 @@ use Market::IndicatorManager;
 use Market::Indicators::ATR;
 use Market::Indicators::SMC_Structures;
 use Market::Indicators::Liquidity;
+use Market::Indicators::ZigZagDirection;
 use Market::Overlays::SMC_Structures;
 use Market::Overlays::Liquidity;
+use Market::Overlays::ZigZagDirection;
 use Market::ChartEngine;
 
 # ---- Configuration ----
 my $CSV_FILE     = '2026_03.csv';
 my $ATR_PERIOD   = 14;
 my $PRICE_H      = 500;
+my $VOLUME_H     = 90;
 my $ATR_H        = 150;
 my $SCALE_W      = 75;
 my $INITIAL_BARS = 100;
 my $BG           = '#131722';
 my $SCALE_BG     = '#1e222d';
+my $ZZ_EXTERNAL_LENGTH     = 150;
+my $ZZ_INTERNAL_RESOLUTION = 15;
+my $ZZ_INTERNAL_PERIOD     = 2;
 
 # ---- 1. Load CSV data ----
 print "Loading $CSV_FILE...\n";
@@ -88,9 +94,20 @@ printf "Loaded: 1m=%d  5m=%d  15m=%d  1h=%d  2h=%d  4h=%d  D=%d  W=%d candles\n"
 # ---- 3. Compute indicators for 1m timeframe ----
 my $indicators = Market::IndicatorManager->new();
 $indicators->register( 'ATR', Market::Indicators::ATR->new($ATR_PERIOD) );
+my $zz_ind = Market::Indicators::ZigZagDirection->new(
+    external_length     => $ZZ_EXTERNAL_LENGTH,
+    internal_resolution => $ZZ_INTERNAL_RESOLUTION,
+    internal_period     => $ZZ_INTERNAL_PERIOD,
+);
+$indicators->register( 'ZigZagDirection', $zz_ind );
 
-print "Computing ATR($ATR_PERIOD) with Wilder smoothing...\n";
+print "Computing ATR($ATR_PERIOD) and ZigZag direction layers...\n";
 $indicators->compute_all($market);
+printf "  ZigZag externo: %d pivotes / %d segmentos  |  interno: %d pivotes / %d segmentos\n",
+    scalar @{ $zz_ind->get_external_pivots() },
+    scalar @{ $zz_ind->get_external_segments() },
+    scalar @{ $zz_ind->get_internal_pivots() },
+    scalar @{ $zz_ind->get_internal_segments() };
 print "Done.\n";
 
 # ---- 3b. Computar indicador SMC (Swing Points, BOS, FVG) ----
@@ -178,6 +195,23 @@ my $price_scale_canvas = $price_row->Canvas(
     -highlightthickness => 0,
 )->pack( -side => 'right', -fill => 'y' );
 
+# Volume chart row
+my $volume_row = $mw->Frame( -bg => $BG )
+    ->pack( -fill => 'x' );
+
+my $volume_canvas = $volume_row->Canvas(
+    -bg                 => $BG,
+    -height             => $VOLUME_H,
+    -highlightthickness => 0,
+)->pack( -side => 'left', -fill => 'both', -expand => 1 );
+
+my $volume_scale_canvas = $volume_row->Canvas(
+    -bg                 => $SCALE_BG,
+    -width              => $SCALE_W,
+    -height             => $VOLUME_H,
+    -highlightthickness => 0,
+)->pack( -side => 'right', -fill => 'y' );
+
 # ATR chart row
 my $atr_row = $mw->Frame( -bg => $BG )
     ->pack( -fill => 'x' );
@@ -201,6 +235,8 @@ $engine = Market::ChartEngine->new(
     indicators         => $indicators,
     price_canvas       => $price_canvas,
     price_scale_canvas => $price_scale_canvas,
+    volume_canvas      => $volume_canvas,
+    volume_scale_canvas => $volume_scale_canvas,
     atr_canvas         => $atr_canvas,
     atr_scale_canvas   => $atr_scale_canvas,
     visible_bars       => $INITIAL_BARS,
@@ -231,6 +267,9 @@ my %overlay_visibility = (
     show_grab          => 1,
     show_sweep         => 1,
     show_run           => 1,
+
+    show_zz_external   => 1,
+    show_zz_internal   => 1,
 );
 
 my $refresh_overlays = sub {
@@ -437,6 +476,9 @@ $add_overlay_toggle = sub {
         if ( $key eq 'show_manual_fibonacci' && defined $engine ) {
             $engine->set_manual_fibonacci_visible( $overlay_visibility{$key} );
         }
+        if ( $key =~ /^show_zz_/ && defined $engine && $engine->{price_canvas} ) {
+            $engine->{price_canvas}->delete('zz_overlay');
+        }
         $update_overlay_menu_state->();
         $refresh_overlays->();
     };
@@ -540,6 +582,9 @@ $build_overlay_detail = sub {
         $add_overlay_toggle->( 'Liquidity Grab',  'show_grab', 0 );
         $add_overlay_toggle->( 'Sweep',           'show_sweep', 0 );
         $add_overlay_toggle->( 'Run',             'show_run', 0 );
+    } elsif ( $group eq 'zigzag' ) {
+        $add_overlay_toggle->( 'Direccion Externa', 'show_zz_external', 0 );
+        $add_overlay_toggle->( 'Direccion Interna', 'show_zz_internal', 0 );
     } else {
         $add_overlay_action->( 'Seleccionar zona', sub {
             $overlay_visibility{show_manual_fibonacci} = 1;
@@ -650,6 +695,7 @@ my $add_overlay_category = sub {
 
 $add_overlay_category->( 'SMC',       'smc' );
 $add_overlay_category->( 'Liquidez',  'liquidity' );
+$add_overlay_category->( 'ZigZag',    'zigzag' );
 $add_overlay_category->( 'Fibonacci', 'fibonacci' );
 
 $hide_overlay_menu = sub {
@@ -820,6 +866,10 @@ $fs_btn = $toolbar->Button(
 # Registrar overlays SMC y Liquidez
 $engine->set_lq_indicator($lq_ind);
 $engine->set_smc_indicator($smc_ind);
+$engine->add_overlay( Market::Overlays::ZigZagDirection->new(
+    indicator  => $zz_ind,
+    visibility => \%overlay_visibility,
+) );
 $engine->add_overlay( Market::Overlays::SMC_Structures->new(
     indicator  => $smc_ind,
     visibility => \%overlay_visibility,
@@ -836,7 +886,7 @@ $engine->bind_events();
 # Pan horizontal + vertical (Ev('X','Y') = coords globales de pantalla)
 # El pan vertical solo actua en modo manual (ChartEngine lo verifica internamente)
 $mw->bind( '<ButtonPress-1>',   [ sub { $engine->drag_start( $_[1], $_[2] ) }, Ev('X'), Ev('Y') ] );
-$mw->bind( '<ButtonRelease-1>', sub { $engine->drag_end() } );
+$mw->bind( '<ButtonRelease-1>', [ sub { $engine->drag_end( $_[1], $_[2] ) }, Ev('X'), Ev('Y') ] );
 $mw->bind( '<B1-Motion>',       [ sub { $engine->drag_move( $_[1], $_[2] ) }, Ev('X'), Ev('Y') ] );
 
 # Zoom: rueda del mouse
@@ -858,6 +908,7 @@ $engine->render();
 
 # Re-render on window resize
 $price_canvas->bind( '<Configure>', sub { $engine->request_render(); } );
+$volume_canvas->bind( '<Configure>', sub { $engine->request_render(); } );
 $atr_canvas->bind(   '<Configure>', sub { $engine->request_render(); } );
 
 MainLoop();

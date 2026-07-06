@@ -57,8 +57,18 @@ sub compute_all {
             $is_sl = 0 if $arr->[$i]{low}  >= $arr->[$i-$j]{low}
                        || $arr->[$i]{low}  >= $arr->[$i+$j]{low};
         }
-        push @sh, { index => $i, price => $arr->[$i]{high}, swept => 0 } if $is_sh;
-        push @sl, { index => $i, price => $arr->[$i]{low},  swept => 0 } if $is_sl;
+        push @sh, {
+            index        => $i,
+            price        => $arr->[$i]{high},
+            swept        => 0,
+            confirmed_at => $i + $k,
+        } if $is_sh;
+        push @sl, {
+            index        => $i,
+            price        => $arr->[$i]{low},
+            swept        => 0,
+            confirmed_at => $i + $k,
+        } if $is_sl;
     }
 
     my (%external_sh, %external_sl);
@@ -71,12 +81,28 @@ sub compute_all {
                 $is_sl = 0 if $arr->[$i]{low}  >= $arr->[$i-$j]{low}
                            || $arr->[$i]{low}  >= $arr->[$i+$j]{low};
             }
-            $external_sh{$i} = 1 if $is_sh;
-            $external_sl{$i} = 1 if $is_sl;
+            $external_sh{$i} = $i + $external_k if $is_sh;
+            $external_sl{$i} = $i + $external_k if $is_sl;
         }
     }
-    $_->{scope} = $external_sh{ $_->{index} } ? 'external' : 'internal' for @sh;
-    $_->{scope} = $external_sl{ $_->{index} } ? 'external' : 'internal' for @sl;
+    for my $s (@sh) {
+        if ( defined $external_sh{ $s->{index} } ) {
+            $s->{scope} = 'external';
+            $s->{scope_confirmed_at} = $external_sh{ $s->{index} };
+        } else {
+            $s->{scope} = 'internal';
+            $s->{scope_confirmed_at} = $s->{confirmed_at};
+        }
+    }
+    for my $s (@sl) {
+        if ( defined $external_sl{ $s->{index} } ) {
+            $s->{scope} = 'external';
+            $s->{scope_confirmed_at} = $external_sl{ $s->{index} };
+        } else {
+            $s->{scope} = 'internal';
+            $s->{scope_confirmed_at} = $s->{confirmed_at};
+        }
+    }
     $self->{_sh} = \@sh;
     $self->{_sl} = \@sl;
 
@@ -106,11 +132,11 @@ sub compute_all {
     }
 
     for my $i ( $k .. $n - 1 ) {
-        while ($shi < @sh && $sh[$shi]{index} + $k <= $i) {
+        while ($shi < @sh && ($sh[$shi]{confirmed_at} // ($sh[$shi]{index} + $k)) <= $i) {
             $last_sh = $sh[$shi] unless $sh[$shi]{swept};
             $shi++;
         }
-        while ($sli < @sl && $sl[$sli]{index} + $k <= $i) {
+        while ($sli < @sl && ($sl[$sli]{confirmed_at} // ($sl[$sli]{index} + $k)) <= $i) {
             $last_sl = $sl[$sli] unless $sl[$sli]{swept};
             $sli++;
         }
@@ -126,6 +152,9 @@ sub compute_all {
                 from      => $last_sh->{index},
                 direction => 'bull',
                 scope     => $last_sh->{scope} // 'internal',
+                confirmed_at => $i,
+                pivot_confirmed_at => $last_sh->{confirmed_at},
+                scope_confirmed_at => $last_sh->{scope_confirmed_at} // $last_sh->{confirmed_at},
                 boosted   => $boosted // 0,
             };
             if ($is_choch) { push @{ $self->{_choch} }, $event }
@@ -145,6 +174,9 @@ sub compute_all {
                 from      => $last_sl->{index},
                 direction => 'bear',
                 scope     => $last_sl->{scope} // 'internal',
+                confirmed_at => $i,
+                pivot_confirmed_at => $last_sl->{confirmed_at},
+                scope_confirmed_at => $last_sl->{scope_confirmed_at} // $last_sl->{confirmed_at},
                 boosted   => $boosted // 0,
             };
             if ($is_choch) { push @{ $self->{_choch} }, $event }
@@ -160,20 +192,35 @@ sub compute_all {
     #    Bearish FVG:  High[i+1] < Low[i-1]  (hueco a la baja)
     # ----------------------------------------------------------------
     for my $i ( 1 .. $n - 2 ) {
-        if ( $arr->[$i+1]{low} > $arr->[$i-1]{high} ) {
+        my $left  = $i - 1;
+        my $right = $i + 1;
+        next unless defined $arr->[$left]{high}
+                 && defined $arr->[$left]{low}
+                 && defined $arr->[$right]{high}
+                 && defined $arr->[$right]{low};
+
+        if ( $arr->[$right]{low} > $arr->[$left]{high} ) {
             push @{ $self->{_fvg} }, {
                 index     => $i,
+                left_index => $left,
+                mid_index  => $i,
+                formed_at  => $right,
+                right_index => $right,
                 direction => 'bull',
-                top       => $arr->[$i+1]{low},
-                bottom    => $arr->[$i-1]{high},
+                top       => $arr->[$right]{low},
+                bottom    => $arr->[$left]{high},
             };
         }
-        elsif ( $arr->[$i+1]{high} < $arr->[$i-1]{low} ) {
+        elsif ( $arr->[$right]{high} < $arr->[$left]{low} ) {
             push @{ $self->{_fvg} }, {
                 index     => $i,
+                left_index => $left,
+                mid_index  => $i,
+                formed_at  => $right,
+                right_index => $right,
                 direction => 'bear',
-                top       => $arr->[$i-1]{low},
-                bottom    => $arr->[$i+1]{high},
+                top       => $arr->[$left]{low},
+                bottom    => $arr->[$right]{high},
             };
         }
     }
