@@ -13,6 +13,7 @@ use Market::Panels::ATRPanel;
 # No global variables; all state is encapsulated here.
 
 my $TIME_AXIS_H = 30;   # pixels reserved at bottom of price canvas for time axis
+my $RIGHT_SPACE_RATIO = 0.15;  # empty slots kept after the last visible candle
 
 sub new {
     my ($class, %args) = @_;
@@ -66,8 +67,9 @@ sub new {
 
         # --- Sistema Replay ---
         replay_mode    => 0,       # 1 = en modo replay
+        replay_selecting => 0,     # 1 = boton Replay armado para elegir vela inicial
         replay_cursor  => undef,   # indice de la ultima vela visible (barrera temporal)
-        selected_replay_index => undef, # vela elegida por click para iniciar Replay
+        selected_replay_index => undef, # ultima vela seleccionada dentro de Replay
         replay_playing => 0,       # 1 = avanzando automaticamente
         replay_speed   => 400,     # ms entre pasos en modo play normal
         _replay_timer  => undef,   # ID del after() activo
@@ -104,10 +106,24 @@ sub new {
     return $self;
 }
 
+sub _right_space_bars {
+    my ($self, $bars) = @_;
+    my $n = $bars || $self->{visible_bars} || 100;
+    my $pad = int( $n * $RIGHT_SPACE_RATIO + 0.5 );
+    $pad = 1 if $pad < 1;
+    $pad = $n - 1 if $pad >= $n;
+    return $pad;
+}
+
+sub _offset_for_index_with_right_space {
+    my ($self, $index, $bars) = @_;
+    return $self->{market}->last_index() - $index - $self->_right_space_bars($bars);
+}
+
 # Calcula la ventana virtual y los indices de datos reales visibles.
 # Retorna: (v_start, v_end, d_start, d_end)
 #   v_start/v_end = indices virtuales (pueden ser negativos o > last para espacio vacio)
-#   d_start/d_end = indices reales con datos, clampeados a [0, last]
+#   d_start/d_end = indices reales con datos, clampeados al historico permitido
 # Cuando v_start < 0 se ve espacio vacio a la izquierda (antes de la primera vela).
 # Cuando v_end > last se ve espacio vacio a la derecha (despues de la ultima vela).
 sub compute_window {
@@ -115,29 +131,28 @@ sub compute_window {
     my $last    = $self->{market}->last_index();
     my $n       = $self->{visible_bars};
 
-    my $max_end = $last;
+    my $data_end_limit = $last;
     if ( $self->{replay_mode} && defined $self->{replay_cursor} ) {
         $self->{replay_cursor} = 0     if $self->{replay_cursor} < 0;
         $self->{replay_cursor} = $last if $self->{replay_cursor} > $last;
-        $max_end = $self->{replay_cursor};
+        $data_end_limit = $self->{replay_cursor};
     }
 
     my $v_end   = $last - $self->{offset};
-    $v_end = $max_end if $v_end > $max_end;
     my $v_start = $v_end - $n + 1;
 
     my $d_start = $v_start < 0     ? 0     : $v_start;
-    my $d_end   = $v_end   > $last ? $last : $v_end;
+    my $d_end   = $v_end   > $data_end_limit ? $data_end_limit : $v_end;
 
     # Rango vacio cuando la ventana esta completamente fuera de los datos
-    if ( $d_end < 0 || $d_start > $last ) {
+    if ( $d_end < 0 || $d_start > $data_end_limit ) {
         $d_end = $d_start - 1;
     }
 
     return ( $v_start, $v_end, $d_start, $d_end );
 }
 
-# Ancla explicitamente la ultima vela historica al borde derecho (offset=0).
+# Ancla explicitamente la ultima vela historica dejando espacio vacio a la derecha.
 # Llamado por reset_view y por el atajo de teclado End.
 sub goto_last {
     my ($self) = @_;
@@ -148,8 +163,9 @@ sub goto_last {
         return;
     }
 
-    $self->{offset}        = 0;
-    $self->{_offset_exact} = 0.0;
+    my $new_off = $self->_offset_for_index_with_right_space( $self->{market}->last_index() );
+    $self->{offset}        = $new_off;
+    $self->{_offset_exact} = $new_off * 1.0;
     $self->{_x_offset}     = 0.0;
     $self->{_render_state} = undef;
     $self->request_render();
@@ -180,8 +196,8 @@ sub render {
         $cv->configure( -scrollregion => [ 0, 0, $w, $h ] );
     }
 
-    # v_start/v_end = ventana virtual (puede salir del rango de datos → espacio vacio)
-    # d_start/d_end = indices reales con datos [0, last]
+    # v_start/v_end = ventana virtual (puede salir del rango de datos -> espacio vacio)
+    # d_start/d_end = indices reales con datos dentro del historico permitido
     my ( $v_start, $v_end, $d_start, $d_end ) = $self->compute_window();
     my $data_slice = $d_end >= $d_start
         ? $self->{market}->get_slice( $d_start, $d_end )
@@ -592,7 +608,7 @@ sub bind_events {
 sub _bind_all_canvas {
     my ($self, $c) = @_;
 
-    # Zoom normal (sin Ctrl): ajusta visible_bars manteniendo el borde derecho fijo
+    # Zoom normal (sin Ctrl): ajusta visible_bars manteniendo el rango horizontal actual
     $c->bind( '<Button-4>', sub { $self->zoom(-1) } );
     $c->bind( '<Button-5>', sub { $self->zoom( 1) } );
     $c->bind( '<MouseWheel>', sub {
@@ -695,6 +711,7 @@ sub _index_from_global_point {
 
 sub set_replay_start_index {
     my ($self, $index) = @_;
+    return unless $self->{replay_mode} || $self->{replay_selecting};
     return unless defined $index;
     my $last = $self->{market}->last_index();
     return if $last < 0;
@@ -702,11 +719,14 @@ sub set_replay_start_index {
     $index = $last if $index > $last;
 
     $self->{selected_replay_index} = $index;
-    if ( $self->{replay_mode} ) {
-        $self->pause_replay() if $self->{replay_playing};
-        $self->{replay_cursor} = $index;
-        $self->_anchor_cursor_to_right_edge();
+    if ( $self->{replay_selecting} && !$self->{replay_mode} ) {
+        $self->start_replay($index);
+        return;
     }
+
+    $self->pause_replay() if $self->{replay_playing};
+    $self->{replay_cursor} = $index;
+    $self->_anchor_cursor_to_right_edge();
     $self->{_render_state} = undef;
     $self->request_render();
 }
@@ -1061,7 +1081,7 @@ sub drag_move {
     my $max_off = $self->{market}->last_index() + $pad;
     my $min_off = -$pad;
     if ( $self->{replay_mode} && defined $self->{replay_cursor} ) {
-        my $replay_min_off = $self->{market}->last_index() - $self->{replay_cursor};
+        my $replay_min_off = $self->_offset_for_index_with_right_space( $self->{replay_cursor} );
         $min_off = $replay_min_off if $replay_min_off > $min_off;
     }
     $new_off = $min_off if $new_off < $min_off;
@@ -1162,15 +1182,13 @@ sub zoom_at {
     my $new_off          = int( $new_offset_exact + 0.5 );
 
     my $clamped = 0;
-    if ( $new_off < 0 )     { $new_off = 0;     $clamped = 1; }
-    if ( $new_off > $last ) { $new_off = $last;  $clamped = 1; }
+    my $min_off = -$self->_right_space_bars($new_bars);
     if ( $self->{replay_mode} && defined $self->{replay_cursor} ) {
-        my $min_replay_off = $last - $self->{replay_cursor};
-        if ( $new_off < $min_replay_off ) {
-            $new_off = $min_replay_off;
-            $clamped = 1;
-        }
+        my $min_replay_off = $self->_offset_for_index_with_right_space( $self->{replay_cursor}, $new_bars );
+        $min_off = $min_replay_off if $min_replay_off > $min_off;
     }
+    if ( $new_off < $min_off ) { $new_off = $min_off; $clamped = 1; }
+    if ( $new_off > $last ) { $new_off = $last;  $clamped = 1; }
 
     $self->{_offset_exact} = $clamped ? $new_off * 1.0 : $new_offset_exact;
 
@@ -1283,10 +1301,33 @@ sub set_replay_callback {
 # el slice los limita al rango visible.
 # ================================================================
 
+sub begin_replay_selection {
+    my ($self) = @_;
+    $self->_stop_replay_timer();
+    $self->{replay_mode}    = 0;
+    $self->{replay_selecting} = 1;
+    $self->{replay_playing} = 0;
+    $self->{replay_cursor}  = undef;
+    $self->{selected_replay_index} = undef;
+    $self->{_render_state}  = undef;
+    $self->{on_replay_state_change}->('selecting') if $self->{on_replay_state_change};
+    $self->request_render();
+}
+
+sub cancel_replay_selection {
+    my ($self) = @_;
+    return unless $self->{replay_selecting} && !$self->{replay_mode};
+    $self->{replay_selecting} = 0;
+    $self->{selected_replay_index} = undef;
+    $self->{_render_state} = undef;
+    $self->{on_replay_state_change}->('exited') if $self->{on_replay_state_change};
+    $self->request_render();
+}
+
 sub start_replay {
     my ($self, $index) = @_;
-    # Usar la vela elegida por click. Si no hay seleccion, conservar el
-    # comportamiento anterior: borde derecho visible actual.
+    # Usar la vela indicada por argumento. Si no hay, conservar el
+    # comportamiento anterior: ultima vela real visible actual.
     my ($v_start, $v_end, $d_start, $d_end) = $self->compute_window();
     my $start_index = defined $index ? $index : $self->{selected_replay_index};
     $start_index = $d_end unless defined $start_index;
@@ -1297,6 +1338,7 @@ sub start_replay {
 
     $self->_stop_replay_timer();
     $self->{replay_mode}    = 1;
+    $self->{replay_selecting} = 0;
     $self->{replay_cursor}  = $start_index;
     $self->{selected_replay_index} = $start_index;
     $self->{replay_playing} = 0;
@@ -1311,6 +1353,7 @@ sub exit_replay {
     my ($self) = @_;
     $self->_stop_replay_timer();
     $self->{replay_mode}    = 0;
+    $self->{replay_selecting} = 0;
     $self->{replay_playing} = 0;
     $self->{replay_cursor}  = undef;
     $self->{selected_replay_index} = undef;
@@ -1320,7 +1363,7 @@ sub exit_replay {
 }
 
 # Avanza el cursor una barra hacia el futuro y actualiza el offset
-# para que el cursor quede visible en el borde derecho de la vista.
+# para que el cursor quede visible antes del espacio vacio derecho.
 sub step_forward {
     my ($self) = @_;
     return unless $self->{replay_mode};
@@ -1405,7 +1448,7 @@ sub _stop_replay_timer {
     }
 }
 
-# Ajusta el offset para que replay_cursor quede en el borde derecho visible.
+# Ajusta el offset para que replay_cursor conserve espacio vacio a la derecha.
 # Si el cursor retrocede mas alla del borde izquierdo, ajusta en esa direccion.
 sub _anchor_cursor_to_right_edge {
     my ($self) = @_;
@@ -1416,9 +1459,7 @@ sub _anchor_cursor_to_right_edge {
     $cursor = $real_last if $cursor > $real_last;
     $self->{replay_cursor} = $cursor;
 
-    # offset tal que v_end = cursor
-    my $new_off = $real_last - $cursor;
-    $new_off = 0 if $new_off < 0;
+    my $new_off = $self->_offset_for_index_with_right_space($cursor);
 
     $self->{offset}        = $new_off;
     $self->{_offset_exact} = $new_off * 1.0;
@@ -1511,7 +1552,7 @@ sub _draw_replay_marker {
 
     my $idx = $self->{replay_mode}
         ? $self->{replay_cursor}
-        : $self->{selected_replay_index};
+        : ( $self->{replay_selecting} ? $self->{selected_replay_index} : undef );
     return unless defined $idx;
     return if $idx < $d_start || $idx > $d_end;
 
@@ -1519,7 +1560,7 @@ sub _draw_replay_marker {
     return if $x < 0 || $x > $scale->{x_width};
 
     my $h = $scale->{y_height} || ($canvas->height || 500);
-    my $color = $self->{replay_mode} ? '#f6c90e' : '#83a9ff';
+    my $color = '#83a9ff';
     my $label = $self->{replay_mode} ? 'REPLAY' : 'RP START';
 
     $canvas->createLine( $x, 0, $x, $h,
@@ -1591,9 +1632,10 @@ sub _draw_crosshair_all {
 # Switch active timeframe, recompute indicators, reset view
 sub set_timeframe {
     my ($self, $tf) = @_;
-    my $was_replay = $self->{replay_mode};
+    my $was_replay = $self->{replay_mode} || $self->{replay_selecting};
     $self->_stop_replay_timer();
     $self->{replay_mode}    = 0;
+    $self->{replay_selecting} = 0;
     $self->{replay_playing} = 0;
     $self->{replay_cursor}  = undef;
     $self->{selected_replay_index} = undef;
@@ -1617,9 +1659,10 @@ sub set_timeframe {
 
 sub reset_view {
     my ($self) = @_;
-    my $was_replay = $self->{replay_mode};
+    my $was_replay = $self->{replay_mode} || $self->{replay_selecting};
     $self->_stop_replay_timer();
     $self->{replay_mode}    = 0;
+    $self->{replay_selecting} = 0;
     $self->{replay_playing} = 0;
     $self->{replay_cursor}  = undef;
     $self->{selected_replay_index} = undef;

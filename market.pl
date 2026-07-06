@@ -156,9 +156,8 @@ sub _toggle_fullscreen {
         $fs_btn->configure( -text => '[  ]',  -fg => '#b2b5be' );
     }
     # Esperar 50ms a que el gestor de ventanas termine el resize,
-    # luego anclar la ultima vela al borde derecho.
-    # Sin esto el canvas crece pero el offset queda donde estaba,
-    # dejando espacio vacio a la derecha.
+    # luego mantener la ultima vela con el margen derecho obligatorio.
+    # Sin esto el canvas crece pero el offset queda donde estaba.
     $mw->after( 50, sub { $engine->goto_last() if defined $engine } );
 }
 
@@ -756,6 +755,9 @@ sub _update_replay_ui {
     if ( $state eq 'exited' ) {
         $replay_btn->configure( -text => 'Replay', -fg => '#b2b5be' );
         $play_btn->configure(   -text => '>',       -fg => '#b2b5be' ) if defined $play_btn;
+    } elsif ( $state eq 'selecting' ) {
+        $replay_btn->configure( -text => 'CANCEL RP', -fg => '#83a9ff' );
+        $play_btn->configure(   -text => '>',         -fg => '#b2b5be' ) if defined $play_btn;
     } elsif ( $state eq 'started' ) {
         $replay_btn->configure( -text => 'EXIT RP', -fg => '#f6c90e' );
         $play_btn->configure(   -text => '>',        -fg => '#26a69a' ) if defined $play_btn;
@@ -777,8 +779,10 @@ $replay_btn = $toolbar->Button(
     -command          => sub {
         if ( $engine->{replay_mode} ) {
             $engine->exit_replay();
+        } elsif ( $engine->{replay_selecting} ) {
+            $engine->cancel_replay_selection();
         } else {
-            $engine->start_replay();
+            $engine->begin_replay_selection();
         }
     },
 )->pack( -side => 'left', -padx => 1, -pady => 2 );
@@ -901,7 +905,7 @@ $mw->bind( '<minus>',   sub { $engine->zoom( 1) } );
 $mw->bind( '<KP_Add>',  sub { $engine->zoom(-1) } );   # teclado numerico
 $mw->bind( '<KP_Subtract>', sub { $engine->zoom( 1) } );
 $mw->bind( '<0>',       sub { $engine->reset_view() } );
-$mw->bind( '<End>',     sub { $engine->goto_last() } );   # ancla ultima vela al borde derecho
+$mw->bind( '<End>',     sub { $engine->goto_last() } );   # ultima vela con margen derecho
 
 $mw->update();    # ensure canvas dimensions are resolved
 $engine->render();
