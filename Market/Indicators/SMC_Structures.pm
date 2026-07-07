@@ -16,6 +16,8 @@ sub new {
         _bos         => [],   # BOS events  [{index,level,from,direction}]
         _choch       => [],   # CHoCH events [{index,level,from,direction}]
         _fvg         => [],   # FVG zones
+        _major_highs => [],   # external swing highs used as major structure
+        _major_lows  => [],   # external swing lows used as major structure
         _candles     => undef, # referencia al arreglo activo para mitigacion visual de FVG
         _lq_ref      => undef, # referencia opcional al indicador Liquidity
     }, $class;
@@ -29,7 +31,7 @@ sub set_liquidity_indicator {
 
 sub reset {
     my ($self) = @_;
-    $self->{$_} = [] for qw(_sh _sl _bos _choch _fvg);
+    $self->{$_} = [] for qw(_sh _sl _bos _choch _fvg _major_highs _major_lows);
 }
 
 sub compute_all {
@@ -105,6 +107,8 @@ sub compute_all {
     }
     $self->{_sh} = \@sh;
     $self->{_sl} = \@sl;
+    $self->{_major_highs} = [ grep { ($_->{scope}//'internal') eq 'external' } @sh ];
+    $self->{_major_lows}  = [ grep { ($_->{scope}//'internal') eq 'external' } @sl ];
 
     # ----------------------------------------------------------------
     # 2. BOS y CHoCH con vinculacion a vectores de liquidez
@@ -231,6 +235,8 @@ sub get_swing_lows   { return $_[0]->{_sl}    }
 sub get_bos_events   { return $_[0]->{_bos}   }
 sub get_choch_events { return $_[0]->{_choch} }
 sub get_fvg_zones    { return $_[0]->{_fvg}   }
+sub get_major_highs  { return $_[0]->{_major_highs} }
+sub get_major_lows   { return $_[0]->{_major_lows}  }
 
 # Devuelve true si hay un evento SWEEP/GRAB en el indicador Liquidity
 # dentro de las ultimas $window barras antes de $bar_i, del tipo $side (sh/sl).

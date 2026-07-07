@@ -19,7 +19,7 @@ sub new {
     return bless {
         indicator  => $args{indicator},
         visibility => $args{visibility},
-        max_levels => $args{max_levels} // 5,   # cuantos niveles mostrar como maximo
+        max_levels => $args{max_levels} // 8,   # cuantos niveles mostrar como maximo por lado
         show_bsl   => $args{show_bsl}   // 1,
         show_ssl   => $args{show_ssl}   // 1,
     }, $class;
@@ -88,6 +88,7 @@ sub _limit_levels_for_view {
         my $confirmed_at = $lvl->{confirmed_at} // $start_idx;
         next if $confirmed_at > $current_bar;
         next if $start_idx > $current_bar;
+        next unless $self->_show_level_scope($lvl, $current_bar);
 
         my $line_end = defined $lvl->{swept_at} && $lvl->{swept_at} <= $current_bar
             ? $lvl->{swept_at}
@@ -100,16 +101,20 @@ sub _limit_levels_for_view {
     return \@visible if $limit <= 0;
 
     @visible = sort {
+        my $a_ext = $self->_effective_scope($a, $current_bar) eq 'external' ? 1 : 0;
+        my $b_ext = $self->_effective_scope($b, $current_bar) eq 'external' ? 1 : 0;
         my $a_swept = defined $a->{swept_at} && $a->{swept_at} <= $current_bar ? 1 : 0;
         my $b_swept = defined $b->{swept_at} && $b->{swept_at} <= $current_bar ? 1 : 0;
-        (($a_swept ? 0 : 1) <=> ($b_swept ? 0 : 1))
-            || (($a->{index} // 0) <=> ($b->{index} // 0))
+        $b_ext <=> $a_ext
+            || (($b_swept ? 0 : 1) <=> ($a_swept ? 0 : 1))
+            || (($b->{index} // 0) <=> ($a->{index} // 0))
     } @visible;
 
     if ( @visible > $limit ) {
-        @visible = @visible[ $#visible - $limit + 1 .. $#visible ];
+        @visible = @visible[ 0 .. $limit - 1 ];
     }
 
+    @visible = sort { ($a->{index}//0) <=> ($b->{index}//0) } @visible;
     return \@visible;
 }
 
@@ -128,6 +133,7 @@ sub _render_resolution_candles {
         next unless defined $idx;
         my $confirmed_at = $lvl->{confirmed_at} // $lvl->{index};
         next if defined $confirmed_at && $confirmed_at > $current_bar;
+        next unless $self->_show_level_scope($lvl, $current_bar);
         next if $idx > $current_bar || $idx < $d_start || $idx > $d_end;
         my $c = $candles->[$idx] // next;
         next unless defined $c->{high} && defined $c->{low};
@@ -162,13 +168,18 @@ sub _render_levels {
         my $confirmed_at = $lvl->{confirmed_at} // $start_idx;
         next if $confirmed_at > $current_bar;
         next if $start_idx > $current_bar;
+        next unless $self->_show_level_scope($lvl, $current_bar);
 
         my $price = $lvl->{price};
         next unless defined $price;
         my $y     = $scale->value_to_y($price);
         next if defined $scale->{y_height} && ($y < 0 || $y > $scale->{y_height});
 
+        my $scope = $self->_effective_scope($lvl, $current_bar);
         my $level_label = _level_label($lvl, $tag, $side, $current_bar);
+        my $line_color = $scope eq 'external' ? $color : _soft_color($color);
+        my $line_width = $scope eq 'external' ? 1.4 : 1;
+        my $line_dash  = $scope eq 'external' ? [6, 4] : [2, 5];
         my $show_base = $side eq 'sh'
             ? $self->_visible('show_bsl', 1)
             : $self->_visible('show_ssl', 1);
@@ -193,9 +204,9 @@ sub _render_levels {
 
             if ( $x1 <= $scale->{x_width} && $x2 >= 0 && $x1 <= $x2 ) {
                 $canvas->createLine( $x1, $y, $x2, $y,
-                    -fill  => $color,
-                    -width => 1,
-                    -dash  => [6, 4],
+                    -fill  => $line_color,
+                    -width => $line_width,
+                    -dash  => $line_dash,
                     -tags  => ['lq_overlay', "lq_$tag"],
                 );
 
@@ -205,7 +216,7 @@ sub _render_levels {
                 ) {
                     $canvas->createText( $x2 - 4, $y - 6,
                         -text   => $tag,
-                        -fill   => $color,
+                        -fill   => $line_color,
                         -font   => ['Helvetica', 7, 'bold'],
                         -anchor => 'e',
                         -tags   => ['lq_overlay', 'lq_label', "lq_$tag", "lq_$level_label"],
@@ -293,6 +304,31 @@ sub _claim_label_slot {
     return 0 if $self->{_label_slots}{$key};
     $self->{_label_slots}{$key} = 1;
     return 1;
+}
+
+sub _effective_scope {
+    my ($self, $lvl, $current_bar) = @_;
+    return 'internal' unless $lvl && (($lvl->{scope}//'internal') eq 'external');
+    return 'external' unless defined $current_bar;
+
+    my $scope_confirmed_at = $lvl->{scope_confirmed_at};
+    return 'external' unless defined $scope_confirmed_at;
+    return $scope_confirmed_at <= $current_bar ? 'external' : 'internal';
+}
+
+sub _show_level_scope {
+    my ($self, $lvl, $current_bar) = @_;
+    my $scope = $self->_effective_scope($lvl, $current_bar);
+    return $scope eq 'external'
+        ? $self->_visible('show_external_structure', 1)
+        : $self->_visible('show_internal_structure', 1);
+}
+
+sub _soft_color {
+    my ($color) = @_;
+    return '#b66b6b' if ($color // '') eq $COLOR_BSL;
+    return '#6fa99a' if ($color // '') eq $COLOR_SSL;
+    return $color;
 }
 
 sub _level_label {

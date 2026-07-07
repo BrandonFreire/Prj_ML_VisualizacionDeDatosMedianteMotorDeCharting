@@ -19,14 +19,15 @@ use warnings;
 #   |               |               |
 # [5 RUN]        [5 GRAB]       [5 SWEEP]
 #
-# SWEEP: High>BSL + Close<BSL (regresa al rango previo, >3 velas)
-# GRAB:  como sweep pero retorno en <=3 velas (rechazo rapido)
+# SWEEP: High>BSL/Low<SSL + cierre de rechazo en la misma vela, o reclaim tardio
+# GRAB:  reclaim rapido despues de 1..3 cierres fuera del nivel
 # RUN:   N=3 cierres consecutivos fuera del nivel (aceptacion institucional)
 
 sub new {
     my ($class, %args) = @_;
     return bless {
         depth      => $args{depth}      // 3,   # k: vecindad swing points
+        external_depth => $args{external_depth},
         n_accept   => $args{n_accept}   // 3,   # velas consecutivas para RUN
         atr_period => $args{atr_period} // 14,  # para tolerancia EQH/EQL
         _levels    => [],
@@ -46,6 +47,8 @@ sub compute_all {
     my $n   = scalar @$arr;
     my $k   = $self->{depth};
     return if $n < 2 * $k + 2;
+    my $external_k = $self->{external_depth} // ($k * 3);
+    $external_k = $k + 2 if $external_k <= $k;
 
     # ----------------------------------------------------------------
     # 1. ATR simple para tolerancia EQH/EQL (tolerancia = ATR * 0.10)
@@ -70,6 +73,41 @@ sub compute_all {
         }
         if ($is_sl) {
             push @sl, _make_level($i, $arr->[$i]{low},  'SSL', 'sl', $i + $k);
+        }
+    }
+
+    # Estructura externa: pivotes con vecindad mas amplia. Se usa solo como
+    # metadato de prioridad visual/logica; no elimina niveles internos.
+    my (%external_sh, %external_sl);
+    if ( $n >= 2 * $external_k + 2 ) {
+        for my $i ( $external_k .. $n - $external_k - 1 ) {
+            my ($is_sh, $is_sl) = (1, 1);
+            for my $j (1 .. $external_k) {
+                $is_sh = 0 if $arr->[$i]{high} <= $arr->[$i-$j]{high}
+                           || $arr->[$i]{high} <= $arr->[$i+$j]{high};
+                $is_sl = 0 if $arr->[$i]{low}  >= $arr->[$i-$j]{low}
+                           || $arr->[$i]{low}  >= $arr->[$i+$j]{low};
+            }
+            $external_sh{$i} = $i + $external_k if $is_sh;
+            $external_sl{$i} = $i + $external_k if $is_sl;
+        }
+    }
+    for my $lvl (@sh) {
+        if ( defined $external_sh{ $lvl->{index} } ) {
+            $lvl->{scope} = 'external';
+            $lvl->{scope_confirmed_at} = $external_sh{ $lvl->{index} };
+        } else {
+            $lvl->{scope} = 'internal';
+            $lvl->{scope_confirmed_at} = $lvl->{confirmed_at};
+        }
+    }
+    for my $lvl (@sl) {
+        if ( defined $external_sl{ $lvl->{index} } ) {
+            $lvl->{scope} = 'external';
+            $lvl->{scope_confirmed_at} = $external_sl{ $lvl->{index} };
+        } else {
+            $lvl->{scope} = 'internal';
+            $lvl->{scope_confirmed_at} = $lvl->{confirmed_at};
         }
     }
 
@@ -172,10 +210,14 @@ sub _run_state_machine {
         } else {
             # Cierre dentro del rango: RECLAIMED
             my $bars_out = $i - $swept_i;
-            my $class = ($bars_out <= 3) ? 'GRAB' : 'SWEEP';
+            my $class = $bars_out == 0 ? 'SWEEP'
+                      : $bars_out <= 3 ? 'GRAB'
+                      :                  'SWEEP';
             $lvl->{state}          = 'RECLAIMED';
             $lvl->{resolved_at}    = $i;
             $lvl->{classification} = $class;
+            $lvl->{bars_out}       = $bars_out;
+            $lvl->{max_consec_out} = $consec_out;
             $lvl->{state}          = 'RESOLVED';
             return;
         }
@@ -185,6 +227,8 @@ sub _run_state_machine {
     $lvl->{state}          = 'RESOLVED';
     $lvl->{resolved_at}    = $max_look;
     $lvl->{classification} = 'SWEEP';
+    $lvl->{bars_out}       = $max_look - $swept_i;
+    $lvl->{max_consec_out} = $consec_out;
 }
 
 # ----------------------------------------------------------------
@@ -198,6 +242,8 @@ sub _make_level {
         type           => $type,   # BSL | SSL
         side           => $side,   # sh  | sl
         confirmed_at   => $confirmed_at // $index,
+        scope          => 'internal',
+        scope_confirmed_at => $confirmed_at // $index,
         is_eqh         => 0,
         is_eql         => 0,
         eq_confirmed_at => undef,

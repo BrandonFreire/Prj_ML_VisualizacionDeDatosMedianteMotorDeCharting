@@ -256,6 +256,9 @@ my %overlay_visibility = (
     show_external_structure => 1,
     show_fvg           => 1,
     show_market_regime => 0,
+    show_major_levels  => 1,
+    show_premium_discount => 1,
+    show_fibonacci_auto => 0,
     show_manual_fibonacci => 1,
 
     liquidity_enabled  => 1,
@@ -366,6 +369,9 @@ my %overlay_parent_for = (
     show_external_structure => 'smc_enabled',
     show_fvg           => 'smc_enabled',
     show_market_regime => 'smc_enabled',
+    show_major_levels  => 'smc_enabled',
+    show_premium_discount => 'smc_enabled',
+    show_fibonacci_auto => 'smc_enabled',
     show_bsl           => 'liquidity_enabled',
     show_ssl           => 'liquidity_enabled',
     show_eqh           => 'liquidity_enabled',
@@ -568,7 +574,10 @@ $build_overlay_detail = sub {
         $add_overlay_toggle->( 'BOS',           'show_bos', 0 );
         $add_overlay_toggle->( 'Internal',      'show_internal_structure', 0 );
         $add_overlay_toggle->( 'External',      'show_external_structure', 0 );
+        $add_overlay_toggle->( 'Major High/Low','show_major_levels', 0 );
+        $add_overlay_toggle->( 'Premium/Discount','show_premium_discount', 0 );
         $add_overlay_toggle->( 'FVG fade',      'show_fvg', 0 );
+        $add_overlay_toggle->( 'Fibonacci auto','show_fibonacci_auto', 0 );
         $add_overlay_toggle->( 'Market Regime', 'show_market_regime', 0 );
     } elsif ( $group eq 'liquidity' ) {
         $add_overlay_toggle->( 'Modulo completo', 'liquidity_enabled', 1 );
@@ -596,6 +605,7 @@ $build_overlay_detail = sub {
         });
         $add_overlay_separator->();
         $add_overlay_toggle->( 'Mostrar manual', 'show_manual_fibonacci', 0 );
+        $add_overlay_toggle->( 'Mostrar auto SMC', 'show_fibonacci_auto', 0 );
         $add_overlay_separator->();
         $add_overlay_action->( 'Quitar manual', sub {
             $engine->clear_manual_fibonacci() if defined $engine;

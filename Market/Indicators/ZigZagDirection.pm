@@ -40,7 +40,10 @@ sub compute_all {
     $self->{_candles} = $arr;
     return unless $arr && @$arr;
 
-    my $external_depth = _positive_int( $self->{external_length}, 150 );
+    my $external_depth = _adaptive_external_depth(
+        scalar(@$arr),
+        _positive_int( $self->{external_length}, 150 ),
+    );
     my @external_raw = _confirmed_pivots_from_candles( $arr, $external_depth );
     my $external_pivots = _compress_to_zigzag(\@external_raw);
     $self->{_external_pivots} = $external_pivots;
@@ -74,6 +77,16 @@ sub _positive_int {
     my ($value, $default) = @_;
     $value = defined $value ? int($value) : $default;
     return $value > 0 ? $value : $default;
+}
+
+sub _adaptive_external_depth {
+    my ($n, $configured) = @_;
+    $configured = _positive_int($configured, 150);
+
+    my $cap = int($n / 8);
+    $cap = 2 if $cap < 2;
+    $cap = $configured if $cap > $configured;
+    return $cap;
 }
 
 sub _confirmed_pivots_from_candles {
