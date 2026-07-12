@@ -14,8 +14,10 @@ sub new {
         internal_resolution  => $args{internal_resolution}  // 15,
         internal_period      => $args{internal_period}      // 2,
         _external_pivots     => [],
+        _external_raw        => [],
         _external_segments   => [],
         _internal_pivots     => [],
+        _internal_raw        => [],
         _internal_segments   => [],
         _internal_candles    => [],
         _candles             => undef,
@@ -25,8 +27,10 @@ sub new {
 sub reset {
     my ($self) = @_;
     $self->{_external_pivots}   = [];
+    $self->{_external_raw}      = [];
     $self->{_external_segments} = [];
     $self->{_internal_pivots}   = [];
+    $self->{_internal_raw}      = [];
     $self->{_internal_segments} = [];
     $self->{_internal_candles}  = [];
     $self->{_candles}           = undef;
@@ -45,6 +49,7 @@ sub compute_all {
         _positive_int( $self->{external_length}, 150 ),
     );
     my @external_raw = _confirmed_pivots_from_candles( $arr, $external_depth );
+    $self->{_external_raw} = [ @external_raw ];
     my $external_pivots = _compress_to_zigzag(\@external_raw);
     $self->{_external_pivots} = $external_pivots;
     $self->{_external_segments} = _segments_from_pivots( $external_pivots, 'external' );
@@ -55,6 +60,7 @@ sub compute_all {
     $self->{_internal_candles} = $mtf;
 
     my @internal_raw = _confirmed_pivots_from_resolution_candles( $mtf, $period );
+    $self->{_internal_raw} = [ @internal_raw ];
     my $internal_pivots = _compress_to_zigzag(\@internal_raw);
     $self->{_internal_pivots} = $internal_pivots;
     $self->{_internal_segments} = _segments_from_pivots( $internal_pivots, 'internal' );
@@ -72,6 +78,26 @@ sub get_external_segments { return $_[0]->{_external_segments} }
 sub get_internal_pivots   { return $_[0]->{_internal_pivots}   }
 sub get_internal_segments { return $_[0]->{_internal_segments} }
 sub get_internal_candles  { return $_[0]->{_internal_candles}  }
+
+sub get_external_pivots_until {
+    my ($self, $current_bar) = @_;
+    return _pivots_until($self->{_external_raw}, $current_bar, $self->{_candles});
+}
+
+sub get_external_segments_until {
+    my ($self, $current_bar) = @_;
+    return _segments_from_pivots( $self->get_external_pivots_until($current_bar), 'external' );
+}
+
+sub get_internal_pivots_until {
+    my ($self, $current_bar) = @_;
+    return _pivots_until($self->{_internal_raw}, $current_bar, $self->{_candles});
+}
+
+sub get_internal_segments_until {
+    my ($self, $current_bar) = @_;
+    return _segments_from_pivots( $self->get_internal_pivots_until($current_bar), 'internal' );
+}
 
 sub _positive_int {
     my ($value, $default) = @_;
@@ -259,6 +285,95 @@ sub _compress_to_zigzag {
     }
 
     return \@zz;
+}
+
+sub _pivots_until {
+    my ($raw, $current_bar, $candles) = @_;
+    return [] unless $raw && @$raw;
+    return _compress_to_zigzag($raw) unless defined $current_bar;
+
+    my @ready = grep {
+        defined $_->{index}
+            && defined $_->{confirmed_at}
+            && $_->{index} <= $current_bar
+            && $_->{confirmed_at} <= $current_bar
+    } @$raw;
+    my $pivots = _compress_to_zigzag(\@ready);
+    return _append_developing_pivot($pivots, $candles, $current_bar);
+}
+
+sub _append_developing_pivot {
+    my ($pivots, $candles, $current_bar) = @_;
+    return $pivots unless $candles && @$candles && defined $current_bar;
+    return $pivots unless $pivots && @$pivots;
+
+    $current_bar = $#$candles if $current_bar > $#$candles;
+    return $pivots if $current_bar < 0;
+
+    my @zz = map { { %$_ } } @$pivots;
+    return \@zz unless @zz;
+
+    my $last = $zz[-1];
+    return \@zz unless defined $last->{index} && defined $last->{type};
+    return \@zz if $last->{index} >= $current_bar;
+
+    my $from = $last->{index} + 1;
+    my $to   = $current_bar;
+    return \@zz if $from > $to;
+
+    my $high = _range_extreme($candles, $from, $to, 'high');
+    my $low  = _range_extreme($candles, $from, $to, 'low');
+    return \@zz unless $high && $low;
+
+    if ( $last->{type} eq 'high' ) {
+        if ( defined $high->{price} && defined $last->{price} && $high->{price} >= $last->{price} ) {
+            $zz[-1] = { %$high, type => 'high', confirmed_at => $current_bar, provisional => 1 };
+            my $next_low = _range_extreme($candles, $high->{index} + 1, $to, 'low');
+            push @zz, { %$next_low, type => 'low', confirmed_at => $current_bar, provisional => 1 }
+                if $next_low && $next_low->{index} > $high->{index};
+            return \@zz;
+        }
+        push @zz, { %$low, type => 'low', confirmed_at => $current_bar, provisional => 1 }
+            if $low->{index} > $last->{index};
+        return \@zz;
+    }
+
+    if ( defined $low->{price} && defined $last->{price} && $low->{price} <= $last->{price} ) {
+        $zz[-1] = { %$low, type => 'low', confirmed_at => $current_bar, provisional => 1 };
+        my $next_high = _range_extreme($candles, $low->{index} + 1, $to, 'high');
+        push @zz, { %$next_high, type => 'high', confirmed_at => $current_bar, provisional => 1 }
+            if $next_high && $next_high->{index} > $low->{index};
+        return \@zz;
+    }
+    push @zz, { %$high, type => 'high', confirmed_at => $current_bar, provisional => 1 }
+        if $high->{index} > $last->{index};
+    return \@zz;
+}
+
+sub _range_extreme {
+    my ($candles, $from, $to, $field) = @_;
+    return unless $candles && @$candles;
+    $from = 0 if $from < 0;
+    $to = $#$candles if $to > $#$candles;
+    return if $from > $to;
+
+    my $best;
+    for my $i ($from .. $to) {
+        my $c = $candles->[$i] // next;
+        my $price = $c->{$field};
+        next unless defined $price;
+        if (
+            !$best
+            || ($field eq 'high' && $price >= $best->{price})
+            || ($field eq 'low'  && $price <= $best->{price})
+        ) {
+            $best = {
+                index => $i,
+                price => $price,
+            };
+        }
+    }
+    return $best;
 }
 
 sub _segments_from_pivots {

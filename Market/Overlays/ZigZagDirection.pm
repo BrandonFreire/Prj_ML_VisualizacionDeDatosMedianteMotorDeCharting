@@ -36,17 +36,23 @@ sub render {
     return unless $ind;
 
     if ( $self->_visible('show_zz_internal', 1) && $ind->can('get_internal_segments') ) {
+        my $segments = $ind->can('get_internal_segments_until')
+            ? $ind->get_internal_segments_until($current_bar)
+            : $ind->get_internal_segments();
         $self->_render_segments(
             $canvas, $d_start, $d_end, $scale, $current_bar,
-            $ind->get_internal_segments() // [],
+            $segments // [],
             undef, 2, 'zz_internal'
         );
     }
 
     if ( $self->_visible('show_zz_external', 1) && $ind->can('get_external_segments') ) {
+        my $segments = $ind->can('get_external_segments_until')
+            ? $ind->get_external_segments_until($current_bar)
+            : $ind->get_external_segments();
         $self->_render_segments(
             $canvas, $d_start, $d_end, $scale, $current_bar,
-            $ind->get_external_segments() // [],
+            $segments // [],
             $COLOR_EXTERNAL, 3, 'zz_external'
         );
         if ( $self->_visible('show_zz_hldv', 1) && $ind->can('get_external_pivots') ) {

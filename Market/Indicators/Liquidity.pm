@@ -47,8 +47,11 @@ sub compute_all {
     my $n   = scalar @$arr;
     my $k   = $self->{depth};
     return if $n < 2 * $k + 2;
-    my $external_k = $self->{external_depth} // ($k * 3);
-    $external_k = $k + 2 if $external_k <= $k;
+    my $external_k = _adaptive_external_depth(
+        $n,
+        $self->{external_depth} // ($k * 3),
+        $k,
+    );
 
     # ----------------------------------------------------------------
     # 1. ATR simple para tolerancia EQH/EQL (tolerancia = ATR * 0.10)
@@ -128,8 +131,9 @@ sub compute_all {
                     if !defined $sh[$a]{eq_confirmed_at}
                     || $eq_confirmed_at < $sh[$a]{eq_confirmed_at};
                 $sh[$b]{eq_confirmed_at} = $eq_confirmed_at;
-                $sh[$b]{eq_pair}       = $sh[$a]{index};
+                $sh[$b]{eq_pair} = $sh[$a]{index};
                 $sh[$b]{eq_pair_price} = $sh[$a]{price};
+                $sh[$b]{eq_pair_confirmed_at} = $sh[$a]{confirmed_at} // $sh[$a]{index};
             }
         }
     }
@@ -147,8 +151,9 @@ sub compute_all {
                     if !defined $sl[$a]{eq_confirmed_at}
                     || $eq_confirmed_at < $sl[$a]{eq_confirmed_at};
                 $sl[$b]{eq_confirmed_at} = $eq_confirmed_at;
-                $sl[$b]{eq_pair}       = $sl[$a]{index};
+                $sl[$b]{eq_pair} = $sl[$a]{index};
                 $sl[$b]{eq_pair_price} = $sl[$a]{price};
+                $sl[$b]{eq_pair_confirmed_at} = $sl[$a]{confirmed_at} // $sl[$a]{index};
             }
         }
     }
@@ -280,6 +285,17 @@ sub _simple_atr {
 
 sub _min { $_[0] < $_[1] ? $_[0] : $_[1] }
 sub _max { $_[0] > $_[1] ? $_[0] : $_[1] }
+
+sub _adaptive_external_depth {
+    my ($n, $configured, $internal_k) = @_;
+    $configured = defined $configured ? int($configured) : ($internal_k * 3);
+    $configured = $internal_k + 2 if $configured <= $internal_k;
+
+    my $cap = int($n / 8);
+    $cap = $internal_k + 2 if $cap < $internal_k + 2;
+    $cap = $configured if $cap > $configured;
+    return $cap;
+}
 
 # ----------------------------------------------------------------
 # Accessors

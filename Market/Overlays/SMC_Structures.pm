@@ -461,7 +461,18 @@ sub _render_fvg {
             $end_idx,
             $self->{fvg_mitigation},
         );
-        next if defined $mitigated_at && $mitigated_at <= $current_bar;  # FVG mitigado: ocultar
+        $end_idx = $mitigated_at if defined $mitigated_at && $mitigated_at < $end_idx;
+        my $bounds_to = defined $mitigated_at && $mitigated_at <= $end_idx
+            ? $mitigated_at - 1
+            : $end_idx;
+        my ($visible_top, $visible_bottom) = _fvg_visible_bounds_until(
+            $fvg,
+            $candles,
+            $formed_at + 1,
+            $bounds_to,
+            $self->{fvg_mitigation},
+        );
+        next unless defined $visible_top && defined $visible_bottom;
 
         next if $end_idx < $d_start;           # el bloque ya termino antes de la vista
         next if $left_idx > $d_end;            # empieza despues de la vista
@@ -484,8 +495,8 @@ sub _render_fvg {
         $x2 = $scale->{x_width} if $x2 > $scale->{x_width};
         next if $x2 <= $x1;
 
-        my $yt = $scale->value_to_y( $fvg->{top} );
-        my $yb = $scale->value_to_y( $fvg->{bottom} );
+        my $yt = $scale->value_to_y( $visible_top );
+        my $yb = $scale->value_to_y( $visible_bottom );
         my $y1 = $yt < $yb ? $yt : $yb;
         my $y2 = $yt < $yb ? $yb : $yt;
         my $zone_key = join ':',
@@ -712,6 +723,44 @@ sub _fvg_mitigated_at {
         }
     }
     return undef;
+}
+
+sub _fvg_visible_bounds_until {
+    my ($fvg, $candles, $from, $to, $mode) = @_;
+    return unless $fvg && defined $fvg->{top} && defined $fvg->{bottom};
+    my ($upper, $lower) = $fvg->{top} >= $fvg->{bottom}
+        ? ($fvg->{top}, $fvg->{bottom})
+        : ($fvg->{bottom}, $fvg->{top});
+    return ($upper, $lower) if ($mode // 'full') eq 'touch';
+    return ($upper, $lower) unless $candles && @$candles;
+
+    $from = 0 if $from < 0;
+    $to = $#$candles if $to > $#$candles;
+    return ($upper, $lower) if $from > $to;
+
+    if ( ($fvg->{direction}//'') eq 'bull' ) {
+        my $visible_top = $upper;
+        for my $i ($from .. $to) {
+            my $low = $candles->[$i]{low};
+            next unless defined $low;
+            next if $low >= $upper;
+            $visible_top = $low if $low > $lower && $low < $visible_top;
+            return if $low <= $lower;
+        }
+        return if $visible_top <= $lower;
+        return ($visible_top, $lower);
+    }
+
+    my $visible_bottom = $lower;
+    for my $i ($from .. $to) {
+        my $high = $candles->[$i]{high};
+        next unless defined $high;
+        next if $high <= $lower;
+        $visible_bottom = $high if $high < $upper && $high > $visible_bottom;
+        return if $high >= $upper;
+    }
+    return if $visible_bottom >= $upper;
+    return ($upper, $visible_bottom);
 }
 
 sub _claim_label_slot {

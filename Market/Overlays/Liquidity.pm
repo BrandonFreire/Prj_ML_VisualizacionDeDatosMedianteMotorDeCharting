@@ -190,7 +190,7 @@ sub _render_levels {
                 : 0;
 
         $self->_render_eq_connector(
-            $canvas, $d_start, $d_end, $scale, $current_bar, $lvl, $color, $side, $y
+            $canvas, $d_start, $d_end, $scale, $current_bar, $lvl, $color, $side
         ) if $show_eq;
 
         my $swept_now = defined $lvl->{swept_at} && $lvl->{swept_at} <= $current_bar;
@@ -251,26 +251,26 @@ sub _render_levels {
 }
 
 sub _render_eq_connector {
-    my ($self, $canvas, $d_start, $d_end, $scale, $current_bar, $lvl, $color, $side, $y) = @_;
+    my ($self, $canvas, $d_start, $d_end, $scale, $current_bar, $lvl, $color, $side) = @_;
 
     my $is_eq = ($side eq 'sh' && $lvl->{is_eqh}) || ($side eq 'sl' && $lvl->{is_eql});
     return unless $is_eq;
 
-    my $pair_idx   = $lvl->{eq_pair};
-    my $pair_price = $lvl->{eq_pair_price};
-    my $start_idx  = $lvl->{start_index} // $lvl->{index};
+    my $pair_idx  = $lvl->{eq_pair};
+    my $start_idx = $lvl->{start_index} // $lvl->{index};
     return unless defined $pair_idx && defined $start_idx;
 
     my $confirmed_at    = $lvl->{confirmed_at} // $start_idx;
     my $eq_confirmed_at = $lvl->{eq_confirmed_at} // $confirmed_at;
+    my $pair_confirmed_at = $lvl->{eq_pair_confirmed_at} // $pair_idx;
     return if $confirmed_at > $current_bar || $eq_confirmed_at > $current_bar;
+    return if $pair_confirmed_at > $current_bar;
     return if $pair_idx > $current_bar || $start_idx > $current_bar;
+    return unless defined $lvl->{price};
 
     # pair_idx es el pivote anterior (indice menor), start_idx el posterior
     my $from = $pair_idx < $start_idx ? $pair_idx : $start_idx;
     my $to   = $pair_idx < $start_idx ? $start_idx : $pair_idx;
-    # No extender mas alla del to — la linea es solo entre los dos pivotes
-    $to = $current_bar if $to > $current_bar;
 
     my $draw_start = $from < $d_start ? $d_start : $from;
     my $draw_end   = $to   > $d_end   ? $d_end   : $to;
@@ -280,28 +280,14 @@ sub _render_eq_connector {
     my $x2 = $scale->index_to_center_x($draw_end);
     return if $x1 > $scale->{x_width} || $x2 < 0 || $x1 > $x2;
 
-    # Linea ligeramente inclinada: usar el precio real de cada pivote
-    my ($y_pair, $y_level);
-    if (defined $pair_price) {
-        $y_pair  = $scale->value_to_y($pair_price);
-        $y_level = $y;
-    } else {
-        $y_pair = $y_level = $y;
-    }
-
-    # y1 y y2 interpolados en los extremos del segmento visible
-    my $span = $to - $from;
-    my ($y1, $y2);
-    if ($span > 0 && defined $pair_price) {
-        my $y_at_from = $pair_idx < $start_idx ? $y_pair  : $y_level;
-        my $y_at_to   = $pair_idx < $start_idx ? $y_level : $y_pair;
-        my $t1 = ($draw_start - $from) / $span;
-        my $t2 = ($draw_end   - $from) / $span;
-        $y1 = $y_at_from + ($y_at_to - $y_at_from) * $t1;
-        $y2 = $y_at_from + ($y_at_to - $y_at_from) * $t2;
-    } else {
-        $y1 = $y2 = $y;
-    }
+    my $pair_price = defined $lvl->{eq_pair_price} ? $lvl->{eq_pair_price} : $lvl->{price};
+    my $p1 = _interpolate_eq_price($pair_idx, $pair_price, $start_idx, $lvl->{price}, $draw_start);
+    my $p2 = _interpolate_eq_price($pair_idx, $pair_price, $start_idx, $lvl->{price}, $draw_end);
+    return unless defined $p1 && defined $p2;
+    my $y1 = $scale->value_to_y($p1);
+    my $y2 = $scale->value_to_y($p2);
+    return if defined $scale->{y_height}
+         && (($y1 < -30 && $y2 < -30) || ($y1 > $scale->{y_height} + 30 && $y2 > $scale->{y_height} + 30));
 
     my $label = $side eq 'sh' ? 'EQH' : 'EQL';
     $canvas->createLine( $x1, $y1, $x2, $y2,
@@ -311,9 +297,8 @@ sub _render_eq_connector {
         -tags  => ['lq_overlay', "lq_$label"],
     );
 
-    my $lx   = ($x1 + $x2) / 2;
-    my $ly_m = ($y1 + $y2) / 2;
-    my $ly   = $side eq 'sh' ? $ly_m - 8 : $ly_m + 8;
+    my $lx = ($x1 + $x2) / 2;
+    my $ly = (($y1 + $y2) / 2) + ($side eq 'sh' ? -8 : 8);
     return unless $self->_claim_label_slot( $lx, $ly );
     $canvas->createText( $lx, $ly,
         -text   => $label,
@@ -322,6 +307,14 @@ sub _render_eq_connector {
         -anchor => 'center',
         -tags   => ['lq_overlay', 'lq_label', "lq_$label"],
     );
+}
+
+sub _interpolate_eq_price {
+    my ($i0, $p0, $i1, $p1, $idx) = @_;
+    return undef unless defined $i0 && defined $i1 && defined $p0 && defined $p1 && defined $idx;
+    return $p1 if $i0 == $i1;
+    my $t = ($idx - $i0) / ($i1 - $i0);
+    return $p0 + ($p1 - $p0) * $t;
 }
 
 sub _claim_label_slot {

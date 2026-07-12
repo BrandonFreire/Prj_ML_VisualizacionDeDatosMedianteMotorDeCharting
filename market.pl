@@ -113,7 +113,11 @@ print "Done.\n";
 # ---- 3b. Computar indicador SMC (Swing Points, BOS, FVG) ----
 # ---- 3b. Maquina de estados de Liquidez (SWEEP / GRAB / RUN) ----
 print "Computing Liquidity state machine (SWEEP/GRAB/RUN)...\n";
-my $lq_ind = Market::Indicators::Liquidity->new( depth => 3, atr_period => $ATR_PERIOD );
+my $lq_ind = Market::Indicators::Liquidity->new(
+    depth          => 3,
+    external_depth => $ZZ_EXTERNAL_LENGTH,
+    atr_period     => $ATR_PERIOD,
+);
 $lq_ind->compute_all($market);
 my $lq_res = $lq_ind->get_resolved();
 printf "  Niveles detectados: %d  Resueltos: %d  (SWEEP=%d GRAB=%d RUN=%d)\n",

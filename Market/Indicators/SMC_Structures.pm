@@ -44,8 +44,11 @@ sub compute_all {
     my $n   = scalar @$arr;
     my $k   = $self->{depth};
     return if $n < 2 * $k + 2;
-    my $external_k = $self->{external_depth} // ($k * 5);
-    $external_k = $k + 2 if $external_k <= $k;
+    my $external_k = _adaptive_external_depth(
+        $n,
+        $self->{external_depth} // ($k * 5),
+        $k,
+    );
 
     # ----------------------------------------------------------------
     # 1. Swing Highs y Swing Lows INTERNOS (depth k)
@@ -376,6 +379,17 @@ sub _detect_trendlines {
     }
 
     return \@tls;
+}
+
+sub _adaptive_external_depth {
+    my ($n, $configured, $internal_k) = @_;
+    $configured = defined $configured ? int($configured) : ($internal_k * 5);
+    $configured = $internal_k + 2 if $configured <= $internal_k;
+
+    my $cap = int($n / 8);
+    $cap = $internal_k + 2 if $cap < $internal_k + 2;
+    $cap = $configured if $cap > $configured;
+    return $cap;
 }
 
 # Devuelve true si hay un evento SWEEP/GRAB en el indicador Liquidity
