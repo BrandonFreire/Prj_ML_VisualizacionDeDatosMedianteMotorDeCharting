@@ -259,7 +259,7 @@ my %overlay_visibility = (
     show_internal_structure => 1,
     show_external_structure => 1,
     show_ob            => 1,
-    show_trendlines    => 1,
+    show_trendlines    => 0,
     show_fvg           => 1,
     show_market_regime => 0,
     show_major_levels  => 1,
@@ -277,8 +277,8 @@ my %overlay_visibility = (
     show_run           => 1,
 
     show_zz_external   => 1,
-    show_zz_internal   => 1,
-    show_zz_hldv       => 1,
+    show_zz_internal   => 0,
+    show_zz_hldv       => 0,
 );
 
 my $refresh_overlays = sub {

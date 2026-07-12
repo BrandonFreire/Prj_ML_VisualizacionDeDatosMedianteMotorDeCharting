@@ -642,16 +642,17 @@ sub _render_trendlines {
     my @candidates = grep {
         defined $_->{confirmed_at} && $_->{confirmed_at} <= $current_bar
             && defined $_->{from_index} && $_->{from_index} <= $current_bar
+            && (!defined $_->{break_at} || $_->{break_at} > $current_bar)
             && $self->_show_structure_scope($_, $current_bar)
     } @$tls;
 
-    # Mostrar solo las ultimas 5 por direccion
+    # Mostrar solo la ultima linea activa por direccion para evitar duplicar el ZigZag visual.
     my @bull = sort { ($b->{confirmed_at}//0) <=> ($a->{confirmed_at}//0) }
                grep { ($_->{direction}//'') eq 'bull' } @candidates;
     my @bear = sort { ($b->{confirmed_at}//0) <=> ($a->{confirmed_at}//0) }
                grep { ($_->{direction}//'') eq 'bear' } @candidates;
-    @bull = @bull[0..4] if @bull > 5;
-    @bear = @bear[0..4] if @bear > 5;
+    @bull = @bull[0..0] if @bull > 1;
+    @bear = @bear[0..0] if @bear > 1;
     @candidates = (@bull, @bear);
 
     for my $tl (@candidates) {

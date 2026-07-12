@@ -56,9 +56,12 @@ sub render {
             $COLOR_EXTERNAL, 3, 'zz_external'
         );
         if ( $self->_visible('show_zz_hldv', 1) && $ind->can('get_external_pivots') ) {
+            my $pivots = $ind->can('get_external_pivots_until')
+                ? $ind->get_external_pivots_until($current_bar)
+                : $ind->get_external_pivots();
             $self->_render_hldv_labels(
                 $canvas, $d_start, $d_end, $scale, $current_bar,
-                $ind->get_external_pivots() // []
+                $pivots // []
             );
         }
     }
