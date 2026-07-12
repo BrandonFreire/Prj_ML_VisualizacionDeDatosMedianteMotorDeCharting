@@ -49,6 +49,12 @@ sub render {
             $ind->get_external_segments() // [],
             $COLOR_EXTERNAL, 3, 'zz_external'
         );
+        if ( $self->_visible('show_zz_hldv', 1) && $ind->can('get_external_pivots') ) {
+            $self->_render_hldv_labels(
+                $canvas, $d_start, $d_end, $scale, $current_bar,
+                $ind->get_external_pivots() // []
+            );
+        }
     }
 }
 
@@ -91,6 +97,41 @@ sub _render_segments {
             -fill  => $color,
             -width => $width,
             -tags  => ['zz_overlay', $tag],
+        );
+    }
+}
+
+sub _render_hldv_labels {
+    my ($self, $canvas, $d_start, $d_end, $scale, $current_bar, $pivots) = @_;
+    return unless $pivots && @$pivots;
+
+    my ($last_high, $last_low);
+    for my $p (@$pivots) {
+        my ($idx, $price, $type) = @{$p}{qw(index price type)};
+        next unless defined $idx && defined $price && defined $type;
+        next if $idx > $current_bar;
+        next if ($p->{confirmed_at} // $idx) > $current_bar;
+
+        my $label;
+        if ($type eq 'high') {
+            $label      = (defined $last_high && $price > $last_high) ? 'HH' : 'LH';
+            $last_high  = $price;
+        } else {
+            $label      = (defined $last_low  && $price > $last_low)  ? 'HL' : 'LL';
+            $last_low   = $price;
+        }
+        next unless $idx >= $d_start && $idx <= $d_end;
+
+        my $x    = $scale->index_to_center_x($idx);
+        my $y    = $scale->value_to_y($price);
+        my $yoff = $type eq 'high' ? -14 : 14;
+
+        $canvas->createText($x, $y + $yoff,
+            -text   => $label,
+            -fill   => $COLOR_EXTERNAL,
+            -font   => ['Helvetica', 8, 'bold'],
+            -anchor => 'center',
+            -tags   => ['zz_overlay', 'zz_hldv', lc($label)],
         );
     }
 }

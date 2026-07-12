@@ -126,7 +126,7 @@ print "Done.\n";
 
 # ---- 3c. SMC Structures vinculado con Liquidity ----
 print "Computing SMC Structures (BOS, CHoCH, FVG)...\n";
-my $smc_ind = Market::Indicators::SMC_Structures->new( depth => 3 );
+my $smc_ind = Market::Indicators::SMC_Structures->new( depth => 5, external_depth => 25 );
 $smc_ind->set_liquidity_indicator($lq_ind);   # vincula para boosted CHoCH
 $smc_ind->compute_all($market);
 printf "  SH: %d  SL: %d  BOS: %d  CHoCH: %d  FVG: %d\n",
@@ -254,6 +254,8 @@ my %overlay_visibility = (
     show_bos           => 1,
     show_internal_structure => 1,
     show_external_structure => 1,
+    show_ob            => 1,
+    show_trendlines    => 1,
     show_fvg           => 1,
     show_market_regime => 0,
     show_major_levels  => 1,
@@ -272,6 +274,7 @@ my %overlay_visibility = (
 
     show_zz_external   => 1,
     show_zz_internal   => 1,
+    show_zz_hldv       => 1,
 );
 
 my $refresh_overlays = sub {
@@ -367,6 +370,8 @@ my %overlay_parent_for = (
     show_bos           => 'smc_enabled',
     show_internal_structure => 'smc_enabled',
     show_external_structure => 'smc_enabled',
+    show_ob            => 'smc_enabled',
+    show_trendlines    => 'smc_enabled',
     show_fvg           => 'smc_enabled',
     show_market_regime => 'smc_enabled',
     show_major_levels  => 'smc_enabled',
@@ -570,15 +575,17 @@ $build_overlay_detail = sub {
         $add_overlay_toggle->( 'SH',            'show_sh', 0 );
         $add_overlay_toggle->( 'SL',            'show_sl', 0 );
         $add_overlay_separator->();
-        $add_overlay_toggle->( 'CHoCH',         'show_choch', 0 );
-        $add_overlay_toggle->( 'BOS',           'show_bos', 0 );
-        $add_overlay_toggle->( 'Internal',      'show_internal_structure', 0 );
-        $add_overlay_toggle->( 'External',      'show_external_structure', 0 );
-        $add_overlay_toggle->( 'Major High/Low','show_major_levels', 0 );
+        $add_overlay_toggle->( 'CHoCH',           'show_choch', 0 );
+        $add_overlay_toggle->( 'BOS',             'show_bos', 0 );
+        $add_overlay_toggle->( 'Internal',        'show_internal_structure', 0 );
+        $add_overlay_toggle->( 'External',        'show_external_structure', 0 );
+        $add_overlay_toggle->( 'Order Blocks',    'show_ob', 0 );
+        $add_overlay_toggle->( 'Trend Lines',     'show_trendlines', 0 );
+        $add_overlay_toggle->( 'Major High/Low',  'show_major_levels', 0 );
         $add_overlay_toggle->( 'Premium/Discount','show_premium_discount', 0 );
-        $add_overlay_toggle->( 'FVG fade',      'show_fvg', 0 );
-        $add_overlay_toggle->( 'Fibonacci auto','show_fibonacci_auto', 0 );
-        $add_overlay_toggle->( 'Market Regime', 'show_market_regime', 0 );
+        $add_overlay_toggle->( 'FVG (activos)',   'show_fvg', 0 );
+        $add_overlay_toggle->( 'Fibonacci auto',  'show_fibonacci_auto', 0 );
+        $add_overlay_toggle->( 'Market Regime',   'show_market_regime', 0 );
     } elsif ( $group eq 'liquidity' ) {
         $add_overlay_toggle->( 'Modulo completo', 'liquidity_enabled', 1 );
         $add_overlay_separator->();
@@ -591,8 +598,9 @@ $build_overlay_detail = sub {
         $add_overlay_toggle->( 'Sweep',           'show_sweep', 0 );
         $add_overlay_toggle->( 'Run',             'show_run', 0 );
     } elsif ( $group eq 'zigzag' ) {
-        $add_overlay_toggle->( 'Direccion Externa', 'show_zz_external', 0 );
-        $add_overlay_toggle->( 'Direccion Interna', 'show_zz_internal', 0 );
+        $add_overlay_toggle->( 'Direccion Externa',  'show_zz_external', 0 );
+        $add_overlay_toggle->( 'Direccion Interna',  'show_zz_internal', 0 );
+        $add_overlay_toggle->( 'HLDV (HH/HL/LH/LL)','show_zz_hldv',     0 );
     } else {
         $add_overlay_action->( 'Seleccionar zona', sub {
             $overlay_visibility{show_manual_fibonacci} = 1;

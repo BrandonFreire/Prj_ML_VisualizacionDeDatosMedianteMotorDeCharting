@@ -128,7 +128,8 @@ sub compute_all {
                     if !defined $sh[$a]{eq_confirmed_at}
                     || $eq_confirmed_at < $sh[$a]{eq_confirmed_at};
                 $sh[$b]{eq_confirmed_at} = $eq_confirmed_at;
-                $sh[$b]{eq_pair} = $sh[$a]{index};
+                $sh[$b]{eq_pair}       = $sh[$a]{index};
+                $sh[$b]{eq_pair_price} = $sh[$a]{price};
             }
         }
     }
@@ -146,7 +147,8 @@ sub compute_all {
                     if !defined $sl[$a]{eq_confirmed_at}
                     || $eq_confirmed_at < $sl[$a]{eq_confirmed_at};
                 $sl[$b]{eq_confirmed_at} = $eq_confirmed_at;
-                $sl[$b]{eq_pair} = $sl[$a]{index};
+                $sl[$b]{eq_pair}       = $sl[$a]{index};
+                $sl[$b]{eq_pair_price} = $sl[$a]{price};
             }
         }
     }

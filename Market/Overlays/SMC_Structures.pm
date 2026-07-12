@@ -7,13 +7,17 @@ use warnings;
 # No hace calculos — lee del indicador Market::Indicators::SMC_Structures.
 # Cumple la separacion Calculo / Renderizado de la Tabla 1 de la especificacion.
 
-my $COLOR_BOS_BULL   = '#26a69a';   # verde  — BOS alcista
-my $COLOR_BOS_BEAR   = '#ef5350';   # rojo   — BOS bajista
-my $COLOR_CHOCH_BULL = '#64b5f6';   # azul claro — CHoCH alcista
-my $COLOR_CHOCH_BEAR = '#ff9800';   # naranja    — CHoCH bajista
-my $COLOR_FVG_BULL   = '#26a69a';   # verde  — FVG alcista
-my $COLOR_FVG_BEAR   = '#ef5350';   # rojo   — FVG bajista
-my $COLOR_ZONE_HIGH  = '#f6c90e';   # amarillo — Zona de Alta Reaccion
+my $COLOR_BOS_BULL   = '#26a69a';
+my $COLOR_BOS_BEAR   = '#ef5350';
+my $COLOR_CHOCH_BULL = '#64b5f6';
+my $COLOR_CHOCH_BEAR = '#ff9800';
+my $COLOR_FVG_BULL   = '#26a69a';
+my $COLOR_FVG_BEAR   = '#ef5350';
+my $COLOR_ZONE_HIGH  = '#f6c90e';
+my $COLOR_OB_BULL    = '#26a69a';
+my $COLOR_OB_BEAR    = '#ef5350';
+my $COLOR_TL_BULL    = '#26a69a';
+my $COLOR_TL_BEAR    = '#ef5350';
 
 sub new {
     my ($class, %args) = @_;
@@ -72,6 +76,10 @@ sub render {
 
     $self->_render_premium_discount( $canvas, $d_start, $d_end, $scale, $current_bar )
         if $self->_visible('show_premium_discount', 1);
+    $self->_render_trendlines( $canvas, $d_start, $d_end, $scale, $current_bar )
+        if $self->_visible('show_trendlines', 1);
+    $self->_render_order_blocks( $canvas, $d_start, $d_end, $scale, $current_bar )
+        if $self->_visible('show_ob', 1);
     $self->_render_swing_labels( $canvas, $d_start, $d_end, $scale, $current_bar );
     $self->_render_major_levels( $canvas, $d_start, $d_end, $scale, $current_bar )
         if $self->_visible('show_major_levels', 1);
@@ -453,7 +461,7 @@ sub _render_fvg {
             $end_idx,
             $self->{fvg_mitigation},
         );
-        $end_idx = $mitigated_at if defined $mitigated_at && $mitigated_at < $end_idx;
+        next if defined $mitigated_at && $mitigated_at <= $current_bar;  # FVG mitigado: ocultar
 
         next if $end_idx < $d_start;           # el bloque ya termino antes de la vista
         next if $left_idx > $d_end;            # empieza despues de la vista
@@ -534,6 +542,145 @@ sub _fvg_high_reaction {
         return 1 if $by_side->{$wanted_side};
     }
     return 0;
+}
+
+sub _render_order_blocks {
+    my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
+    return unless $self->{indicator}->can('get_ob_zones');
+    my $obs     = $self->{indicator}->get_ob_zones() // [];
+    my $candles = $self->{indicator}{_candles} // [];
+    my $bar_w   = $scale->{x_width} / ($scale->{visible_bars} || 1);
+    my $half_bar = $bar_w * 0.5;
+
+    my @candidates = grep {
+        defined $_->{confirmed_at} && $_->{confirmed_at} <= $current_bar
+            && defined $_->{index}  && $_->{index} <= $d_end
+            && $self->_show_structure_scope($_, $current_bar)
+    } @$obs;
+
+    @candidates = sort { ($b->{confirmed_at}//0) <=> ($a->{confirmed_at}//0) } @candidates;
+    @candidates = @candidates[0..19] if @candidates > 20;
+    @candidates = sort { ($a->{index}//0) <=> ($b->{index}//0) } @candidates;
+
+    for my $ob (@candidates) {
+        next unless defined $ob->{top} && defined $ob->{bottom};
+        my $start_idx = ($ob->{triggered_by} // $ob->{index}) + 1;
+        my $mitig = _ob_mitigated_at($ob, $candles, $start_idx, $current_bar);
+        next if defined $mitig && $mitig <= $current_bar;   # OB ya mitigado: ocultar
+
+        my $end_idx    = $current_bar;
+        my $draw_start = $ob->{index} < $d_start ? $d_start : $ob->{index};
+        my $draw_end   = $end_idx > $d_end ? $d_end : $end_idx;
+        next if $draw_start > $draw_end || $end_idx < $d_start || $ob->{index} > $d_end;
+
+        my $x1 = $scale->index_to_center_x($draw_start) - $half_bar;
+        my $x2 = $scale->index_to_center_x($draw_end)   + $half_bar;
+        next if $x1 > $scale->{x_width} || $x2 < 0 || $x2 <= $x1;
+
+        my $yt  = $scale->value_to_y($ob->{top});
+        my $yb  = $scale->value_to_y($ob->{bottom});
+        my ($y1, $y2) = $yt < $yb ? ($yt, $yb) : ($yb, $yt);
+
+        my $is_bull  = ($ob->{direction}//'') eq 'bull';
+        my $scope    = $self->_effective_scope($ob, $current_bar);
+        my $color    = $is_bull ? $COLOR_OB_BULL : $COLOR_OB_BEAR;
+        my $stipple  = $scope eq 'external' ? 'gray50' : 'gray25';
+
+        $canvas->createRectangle($x1, $y1, $x2, $y2,
+            -fill    => $color,
+            -outline => $color,
+            -stipple => $stipple,
+            -tags    => ['smc_overlay', 'ob'],
+        );
+        if ($self->_claim_label_slot($x1 + 3, ($y1 + $y2) / 2)) {
+            my $sc = $scope eq 'external' ? 'e' : 'i';
+            $canvas->createText($x1 + 3, ($y1 + $y2) / 2,
+                -text   => ($is_bull ? 'OB+' : 'OB-') . $sc,
+                -fill   => $color,
+                -font   => ['Helvetica', 7, 'bold'],
+                -anchor => 'w',
+                -tags   => ['smc_overlay', 'smc_label', 'ob'],
+            );
+        }
+    }
+}
+
+sub _ob_mitigated_at {
+    my ($ob, $candles, $from, $to) = @_;
+    return undef unless $candles && @$candles;
+    $from = 0        if $from < 0;
+    $to   = $#$candles if $to > $#$candles;
+    return undef if $from > $to;
+    my $dir = $ob->{direction} // '';
+    for my $i ($from .. $to) {
+        my $c = $candles->[$i] // next;
+        if ($dir eq 'bull') {
+            return $i if defined $c->{low}  && $c->{low}  <= $ob->{top};
+        } else {
+            return $i if defined $c->{high} && $c->{high} >= $ob->{bottom};
+        }
+    }
+    return undef;
+}
+
+sub _render_trendlines {
+    my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
+    return unless $self->{indicator}->can('get_trendlines');
+    my $tls = $self->{indicator}->get_trendlines() // [];
+
+    my @candidates = grep {
+        defined $_->{confirmed_at} && $_->{confirmed_at} <= $current_bar
+            && defined $_->{from_index} && $_->{from_index} <= $current_bar
+            && $self->_show_structure_scope($_, $current_bar)
+    } @$tls;
+
+    # Mostrar solo las ultimas 5 por direccion
+    my @bull = sort { ($b->{confirmed_at}//0) <=> ($a->{confirmed_at}//0) }
+               grep { ($_->{direction}//'') eq 'bull' } @candidates;
+    my @bear = sort { ($b->{confirmed_at}//0) <=> ($a->{confirmed_at}//0) }
+               grep { ($_->{direction}//'') eq 'bear' } @candidates;
+    @bull = @bull[0..4] if @bull > 5;
+    @bear = @bear[0..4] if @bear > 5;
+    @candidates = (@bull, @bear);
+
+    for my $tl (@candidates) {
+        next unless defined $tl->{from_index} && defined $tl->{to_index};
+        next unless defined $tl->{from_price} && defined $tl->{to_price};
+        my $span = $tl->{to_index} - $tl->{from_index};
+        next if $span == 0;
+
+        my $end_i = (defined $tl->{break_at} && $tl->{break_at} <= $current_bar)
+            ? $tl->{break_at} : $current_bar;
+        next if $tl->{from_index} > $d_end || $end_i < $d_start;
+
+        my $draw_start = $tl->{from_index} < $d_start ? $d_start : $tl->{from_index};
+        my $draw_end   = $end_i > $d_end ? $d_end : $end_i;
+        next if $draw_start > $draw_end;
+
+        my $slope = ($tl->{to_price} - $tl->{from_price}) / $span;
+        my $p1 = $tl->{from_price} + $slope * ($draw_start - $tl->{from_index});
+        my $p2 = $tl->{from_price} + $slope * ($draw_end   - $tl->{from_index});
+
+        my $x1 = $scale->index_to_center_x($draw_start);
+        my $x2 = $scale->index_to_center_x($draw_end);
+        next if $x1 > $scale->{x_width} || $x2 < 0 || $x1 >= $x2;
+
+        my $y1 = $scale->value_to_y($p1);
+        my $y2 = $scale->value_to_y($p2);
+
+        my $scope   = $self->_effective_scope($tl, $current_bar);
+        my $is_bull = ($tl->{direction}//'') eq 'bull';
+        my $color   = $is_bull ? $COLOR_TL_BULL : $COLOR_TL_BEAR;
+        my $width   = $scope eq 'external' ? 2 : 1;
+        my $broken  = defined $tl->{break_at} && $tl->{break_at} <= $current_bar;
+
+        $canvas->createLine($x1, $y1, $x2, $y2,
+            -fill  => $color,
+            -width => $width,
+            ($broken ? (-dash => [3, 5]) : ()),
+            -tags  => ['smc_overlay', 'trendline'],
+        );
+    }
 }
 
 sub _fvg_mitigated_at {
