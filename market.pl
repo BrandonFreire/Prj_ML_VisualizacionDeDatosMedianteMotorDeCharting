@@ -584,7 +584,6 @@ $build_overlay_detail = sub {
         $add_overlay_toggle->( 'Internal',        'show_internal_structure', 0 );
         $add_overlay_toggle->( 'External',        'show_external_structure', 0 );
         $add_overlay_toggle->( 'Order Blocks',    'show_ob', 0 );
-        $add_overlay_toggle->( 'Trend Lines',     'show_trendlines', 0 );
         $add_overlay_toggle->( 'Major High/Low',  'show_major_levels', 0 );
         $add_overlay_toggle->( 'Premium/Discount','show_premium_discount', 0 );
         $add_overlay_toggle->( 'FVG (activos)',   'show_fvg', 0 );

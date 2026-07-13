@@ -1173,14 +1173,19 @@ sub _draw_regression_channel_set {
     my $b = ($N * $sum_xy - $sum_x * $sum_y) / $denom;
     my $a = ($sum_y - $b * $sum_x) / $N;
 
-    # ---- Desviacion estandar de los residuos ----
-    my $sum_res2 = 0;
+    # ---- Desviacion maxima real usando High y Low ----
+    # En lugar de sigma simetrica sobre close, calculamos la maxima distancia
+    # que cualquier High queda POR ENCIMA de la recta y cualquier Low queda
+    # POR DEBAJO. Esto garantiza que el canal envuelva todas las mechas.
+    my $max_dev_up   = 0;   # max(high_j - predicted_j)
+    my $max_dev_down = 0;   # max(predicted_j - low_j)
     for my $j (0 .. $N - 1) {
         my $predicted = $a + $b * $j;
-        my $residual  = $data_slice->[$j]{close} - $predicted;
-        $sum_res2 += $residual * $residual;
+        my $dev_up   = $data_slice->[$j]{high} - $predicted;
+        my $dev_down = $predicted - $data_slice->[$j]{low};
+        $max_dev_up   = $dev_up   if $dev_up   > $max_dev_up;
+        $max_dev_down = $dev_down if $dev_down > $max_dev_down;
     }
-    my $sigma = sqrt($sum_res2 / $N);
 
     # ---- Coordenadas de pantalla para los extremos ----
     my $x_left  = $scale->index_to_center_x($i_start);
@@ -1191,11 +1196,11 @@ sub _draw_regression_channel_set {
     my $p_left  = $a;                        # x=0
     my $p_right = $a + $b * ($N - 1);        # x=N-1
 
-    # Lineas de +/- 1 sigma
-    my $p_upper_left  = $p_left  + $sigma;
-    my $p_upper_right = $p_right + $sigma;
-    my $p_lower_left  = $p_left  - $sigma;
-    my $p_lower_right = $p_right - $sigma;
+    # Limites: la banda superior usa max_dev_up, la inferior usa max_dev_down
+    my $p_upper_left  = $p_left  + $max_dev_up;
+    my $p_upper_right = $p_right + $max_dev_up;
+    my $p_lower_left  = $p_left  - $max_dev_down;
+    my $p_lower_right = $p_right - $max_dev_down;
 
     # Convertir a coordenadas Y de pantalla
     my $y_center_l = $scale->value_to_y($p_left);
