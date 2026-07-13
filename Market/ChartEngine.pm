@@ -59,6 +59,12 @@ sub new {
         manual_fib           => undef,
         manual_fib_preview   => undef,
 
+        # Regression Channel drawing tool
+        reg_channel_selecting => 0,    # 1 = modo seleccion activo (cursor crosshair)
+        reg_channel_visible   => 1,    # toggle visibilidad
+        reg_channel           => undef, # {from_index, to_index} — canal anclado
+        reg_channel_preview   => undef, # preview durante el drag
+
         on_scale_mode_change => undef,
 
         # --- Overlays SMC y Liquidez ---
@@ -372,6 +378,7 @@ sub _full_render {
     for my $ov ( @{ $self->{overlays} } ) {
         $ov->render( $pc, $d_start, $d_end, $pscale, $cur_bar );
     }
+    $self->_render_regression_channel( $pc, $pscale, $cur_bar );
     $self->_render_manual_fibonacci( $pc, $pscale, $cur_bar );
     $self->_draw_replay_marker( $pc, $d_start, $d_end, $pscale );
     $self->_raise_overlay_labels($pc);
@@ -466,6 +473,7 @@ sub _incremental_pan {
     for my $ov ( @{ $self->{overlays} } ) {
         $ov->render( $pc, $d_start, $d_end, $pscale, $cur_bar2 );
     }
+    $self->_render_regression_channel( $pc, $pscale, $cur_bar2 );
     $self->_render_manual_fibonacci( $pc, $pscale, $cur_bar2 );
     $self->_draw_replay_marker( $pc, $d_start, $d_end, $pscale );
     $self->_raise_overlay_labels($pc);
@@ -992,6 +1000,281 @@ sub _draw_manual_fib_set {
     }
 }
 
+# ================================================================
+# REGRESSION CHANNEL — Herramienta de dibujo interactiva
+# ================================================================
+# Calcula regresion lineal + desviacion estandar sobre un rango
+# de velas seleccionado por el usuario via click-drag.
+# El canal queda anclado a los indices de inicio/fin.
+# ================================================================
+
+sub _reg_channel_index_from_global {
+    my ($self, $global_x, $global_y) = @_;
+    my $pc    = $self->{price_canvas};
+    my $scale = $self->{price_scale};
+    return unless $pc && $scale;
+
+    my $x = $global_x - $pc->rootx;
+    my $y = $global_y - $pc->rooty;
+    my $w = $pc->width  || 900;
+    my $h = $scale->{y_height} || ($pc->height || 500);
+    return if $x < 0 || $x > $w || $y < 0 || $y > $h;
+
+    my $ix = $scale->x_to_index($x);
+    my ( undef, undef, $d_start, $d_end ) = $self->compute_window();
+    my $hi = $self->{replay_mode} && defined $self->{replay_cursor}
+        ? $self->{replay_cursor}
+        : $d_end;
+    my $last = $self->{market}->last_index();
+    $ix = 0     if $ix < 0;
+    $ix = $hi   if $ix > $hi;
+    $ix = $last if $ix > $last;
+    return $ix;
+}
+
+sub _set_reg_channel_cursor {
+    my ($self) = @_;
+    return unless $self->{price_canvas};
+    my $cursor = $self->{reg_channel_selecting} ? 'crosshair' : 'arrow';
+    $self->{price_canvas}->configure( -cursor => $cursor );
+}
+
+sub start_regression_channel_selection {
+    my ($self) = @_;
+    $self->{reg_channel_selecting} = 1;
+    $self->{reg_channel_preview}   = undef;
+    $self->_set_reg_channel_cursor();
+}
+
+sub set_regression_channel_visible {
+    my ($self, $visible) = @_;
+    $self->{reg_channel_visible} = $visible ? 1 : 0;
+    $self->{_render_state} = undef;
+    $self->request_render();
+}
+
+sub clear_regression_channel {
+    my ($self) = @_;
+    $self->{reg_channel}           = undef;
+    $self->{reg_channel_preview}   = undef;
+    $self->{reg_channel_selecting} = 0;
+    $self->_set_reg_channel_cursor();
+    $self->{price_canvas}->delete('reg_channel')         if $self->{price_canvas};
+    $self->{price_canvas}->delete('reg_channel_preview') if $self->{price_canvas};
+    $self->{_render_state} = undef;
+    $self->request_render();
+}
+
+sub _reg_channel_start {
+    my ($self, $global_x, $global_y) = @_;
+    my $ix = $self->_reg_channel_index_from_global($global_x, $global_y);
+    return unless defined $ix;
+    $self->{reg_channel_preview} = {
+        from_index => $ix,
+        to_index   => $ix,
+    };
+    $self->{price_canvas}->delete('reg_channel_preview');
+}
+
+sub _reg_channel_drag_to {
+    my ($self, $global_x, $global_y) = @_;
+    return unless $self->{reg_channel_preview};
+    my $ix = $self->_reg_channel_index_from_global($global_x, $global_y);
+    return unless defined $ix;
+    $self->{reg_channel_preview}{to_index} = $ix;
+    $self->{price_canvas}->delete('reg_channel_preview');
+    $self->_draw_regression_channel_set(
+        $self->{price_canvas}, $self->{price_scale},
+        $self->{reg_channel_preview}, 'reg_channel_preview', 1,
+    );
+}
+
+sub _reg_channel_finish {
+    my ($self) = @_;
+    my $ch = $self->{reg_channel_preview};
+    $self->{reg_channel_preview}   = undef;
+    $self->{reg_channel_selecting} = 0;
+    $self->_set_reg_channel_cursor();
+    $self->{price_canvas}->delete('reg_channel_preview') if $self->{price_canvas};
+
+    if ($ch) {
+        my $di = abs( $ch->{to_index} - $ch->{from_index} );
+        if ( $di >= 2 ) {
+            $self->{reg_channel} = $ch;
+            $self->{reg_channel_visible} = 1;
+        }
+    }
+
+    $self->{_render_state} = undef;
+    $self->request_render();
+}
+
+sub _render_regression_channel {
+    my ($self, $canvas, $scale, $current_bar) = @_;
+    $canvas->delete('reg_channel');
+    return unless $self->{reg_channel_visible};
+    return unless $self->{reg_channel};
+    $self->_draw_regression_channel_set(
+        $canvas, $scale,
+        $self->{reg_channel}, 'reg_channel', 0, $current_bar,
+    );
+}
+
+# Calcula regresion lineal y desviacion estandar, luego dibuja:
+#   - Poligono superior (azul semitransparente)
+#   - Poligono inferior (rojo semitransparente)
+#   - Linea central de regresion (solida)
+#   - Limites superior/inferior a +/-1 sigma (dashed)
+#   - Manejadores circulares en los extremos
+sub _draw_regression_channel_set {
+    my ($self, $canvas, $scale, $ch, $tag, $is_preview, $current_bar) = @_;
+    return unless $canvas && $scale && $ch;
+    return unless defined $ch->{from_index} && defined $ch->{to_index};
+
+    my $i0 = $ch->{from_index};
+    my $i1 = $ch->{to_index};
+    # Normalizar: i_start siempre <= i_end
+    my $i_start = $i0 < $i1 ? $i0 : $i1;
+    my $i_end   = $i0 < $i1 ? $i1 : $i0;
+    return if $i_end - $i_start < 2;   # necesitamos al menos 3 puntos
+
+    # Limitar al current_bar en modo replay
+    if ( defined $current_bar ) {
+        return if $i_start > $current_bar;
+        $i_end = $current_bar if $i_end > $current_bar;
+    }
+
+    # Limitar al rango de datos disponible
+    my $last = $self->{market}->last_index();
+    $i_start = 0     if $i_start < 0;
+    $i_end   = $last  if $i_end > $last;
+    return if $i_end - $i_start < 2;
+
+    # ---- Obtener precios de cierre para el rango ----
+    my $data_slice = $self->{market}->get_slice($i_start, $i_end);
+    return unless $data_slice && @$data_slice >= 3;
+
+    my $N = scalar @$data_slice;
+
+    # ---- Regresion lineal: y = a + b*x ----
+    # x = posicion relativa (0..N-1), y = close
+    my ($sum_x, $sum_y, $sum_xy, $sum_x2) = (0, 0, 0, 0);
+    for my $j (0 .. $N - 1) {
+        my $close = $data_slice->[$j]{close};
+        $sum_x  += $j;
+        $sum_y  += $close;
+        $sum_xy += $j * $close;
+        $sum_x2 += $j * $j;
+    }
+
+    my $denom = $N * $sum_x2 - $sum_x * $sum_x;
+    return if abs($denom) < 1e-12;
+
+    my $b = ($N * $sum_xy - $sum_x * $sum_y) / $denom;
+    my $a = ($sum_y - $b * $sum_x) / $N;
+
+    # ---- Desviacion estandar de los residuos ----
+    my $sum_res2 = 0;
+    for my $j (0 .. $N - 1) {
+        my $predicted = $a + $b * $j;
+        my $residual  = $data_slice->[$j]{close} - $predicted;
+        $sum_res2 += $residual * $residual;
+    }
+    my $sigma = sqrt($sum_res2 / $N);
+
+    # ---- Coordenadas de pantalla para los extremos ----
+    my $x_left  = $scale->index_to_center_x($i_start);
+    my $x_right = $scale->index_to_center_x($i_end);
+    return if $x_right < 0 || $x_left > $scale->{x_width};
+
+    # Precio en los extremos de la linea central
+    my $p_left  = $a;                        # x=0
+    my $p_right = $a + $b * ($N - 1);        # x=N-1
+
+    # Lineas de +/- 1 sigma
+    my $p_upper_left  = $p_left  + $sigma;
+    my $p_upper_right = $p_right + $sigma;
+    my $p_lower_left  = $p_left  - $sigma;
+    my $p_lower_right = $p_right - $sigma;
+
+    # Convertir a coordenadas Y de pantalla
+    my $y_center_l = $scale->value_to_y($p_left);
+    my $y_center_r = $scale->value_to_y($p_right);
+    my $y_upper_l  = $scale->value_to_y($p_upper_left);
+    my $y_upper_r  = $scale->value_to_y($p_upper_right);
+    my $y_lower_l  = $scale->value_to_y($p_lower_left);
+    my $y_lower_r  = $scale->value_to_y($p_lower_right);
+
+    my @tags = ($tag);
+    my $blue = '#2962ff';
+    my $red  = '#ef5350';
+    my $stipple = $is_preview ? 'gray12' : 'gray25';
+
+    # ---- Poligono superior: central → +1σ (azul) ----
+    $canvas->createPolygon(
+        $x_left,  $y_center_l,
+        $x_right, $y_center_r,
+        $x_right, $y_upper_r,
+        $x_left,  $y_upper_l,
+        -fill    => $blue,
+        -outline => '',
+        -stipple => $stipple,
+        -tags    => \@tags,
+    );
+
+    # ---- Poligono inferior: central → -1σ (rojo) ----
+    $canvas->createPolygon(
+        $x_left,  $y_center_l,
+        $x_right, $y_center_r,
+        $x_right, $y_lower_r,
+        $x_left,  $y_lower_l,
+        -fill    => $red,
+        -outline => '',
+        -stipple => $stipple,
+        -tags    => \@tags,
+    );
+
+    # ---- Linea central de regresion (solida) ----
+    $canvas->createLine(
+        $x_left, $y_center_l, $x_right, $y_center_r,
+        -fill  => $blue,
+        -width => 2,
+        -tags  => \@tags,
+    );
+
+    # ---- Limite superior +1σ (dashed) ----
+    $canvas->createLine(
+        $x_left, $y_upper_l, $x_right, $y_upper_r,
+        -fill  => $blue,
+        -width => 1,
+        -dash  => [4, 3],
+        -tags  => \@tags,
+    );
+
+    # ---- Limite inferior -1σ (dashed) ----
+    $canvas->createLine(
+        $x_left, $y_lower_l, $x_right, $y_lower_r,
+        -fill  => $red,
+        -width => 1,
+        -dash  => [4, 3],
+        -tags  => \@tags,
+    );
+
+    # ---- Manejadores circulares en los extremos ----
+    my $hr = 5;   # radio del handler
+    my $handler_fill = $is_preview ? '' : '#131722';
+    for my $pt ( [$x_left, $y_center_l], [$x_right, $y_center_r] ) {
+        $canvas->createOval(
+            $pt->[0] - $hr, $pt->[1] - $hr,
+            $pt->[0] + $hr, $pt->[1] + $hr,
+            -outline => $blue,
+            -fill    => $handler_fill,
+            -width   => 2,
+            -tags    => \@tags,
+        );
+    }
+}
+
 # --- Public pan methods (called from market.pl) ---
 
 sub drag_start {
@@ -999,6 +1282,12 @@ sub drag_start {
     $self->{_drag_started_in_chart} = 0;
     $self->{_drag_start_replay_index} = undef;
     $self->{_drag_moved} = 0;
+
+    if ( $self->{reg_channel_selecting} ) {
+        $self->_reg_channel_start( $global_x, $global_y )
+            if $self->_point_in_widget( $self->{price_canvas}, $global_x, $global_y );
+        return;
+    }
 
     if ( $self->{manual_fib_selecting} ) {
         $self->_manual_fib_start( $global_x, $global_y )
@@ -1028,6 +1317,15 @@ sub drag_start {
 
 sub drag_end {
     my ($self, $global_x, $global_y) = @_;
+
+    if ( $self->{reg_channel_selecting} && !$self->{reg_channel_preview} ) {
+        return;
+    }
+    if ( $self->{reg_channel_preview} ) {
+        $self->_reg_channel_finish();
+        return;
+    }
+
     if ( $self->{manual_fib_selecting} && !$self->{manual_fib_preview} ) {
         return;
     }
@@ -1056,6 +1354,13 @@ sub drag_end {
 
 sub drag_move {
     my ($self, $global_x, $global_y) = @_;
+
+    if ( $self->{reg_channel_selecting} ) {
+        $self->_reg_channel_drag_to( $global_x, $global_y )
+            if $self->{reg_channel_preview};
+        return;
+    }
+
     if ( $self->{manual_fib_selecting} ) {
         $self->_manual_fib_drag_to( $global_x, $global_y )
             if $self->{manual_fib_preview};

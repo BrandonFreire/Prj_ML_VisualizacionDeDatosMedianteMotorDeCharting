@@ -605,6 +605,17 @@ $build_overlay_detail = sub {
         $add_overlay_toggle->( 'Direccion Externa',  'show_zz_external', 0 );
         $add_overlay_toggle->( 'Direccion Interna',  'show_zz_internal', 0 );
         $add_overlay_toggle->( 'HLDV (HH/HL/LH/LL)','show_zz_hldv',     0 );
+    } elsif ( $group eq 'herramientas' ) {
+        $add_overlay_action->( "\x{1F4C8} Dibujar Canal de Regresi\x{f3}n", sub {
+            $hide_overlay_menu->() if defined $hide_overlay_menu;
+            $mw->after( 50, sub {
+                $engine->start_regression_channel_selection() if defined $engine;
+            });
+        });
+        $add_overlay_separator->();
+        $add_overlay_action->( 'Quitar Canal de Regresi' . "\x{f3}n", sub {
+            $engine->clear_regression_channel() if defined $engine;
+        });
     } else {
         $add_overlay_action->( 'Seleccionar zona', sub {
             $overlay_visibility{show_manual_fibonacci} = 1;
@@ -714,10 +725,11 @@ my $add_overlay_category = sub {
     };
 };
 
-$add_overlay_category->( 'SMC',       'smc' );
-$add_overlay_category->( 'Liquidez',  'liquidity' );
-$add_overlay_category->( 'ZigZag',    'zigzag' );
-$add_overlay_category->( 'Fibonacci', 'fibonacci' );
+$add_overlay_category->( 'SMC',          'smc' );
+$add_overlay_category->( 'Liquidez',     'liquidity' );
+$add_overlay_category->( 'ZigZag',       'zigzag' );
+$add_overlay_category->( 'Herramientas', 'herramientas' );
+$add_overlay_category->( 'Fibonacci',    'fibonacci' );
 
 $hide_overlay_menu = sub {
     return unless $overlay_menu_visible;
