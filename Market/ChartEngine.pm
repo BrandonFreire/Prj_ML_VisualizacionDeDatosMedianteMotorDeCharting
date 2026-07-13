@@ -65,6 +65,13 @@ sub new {
         reg_channel           => undef, # {from_index, to_index} — canal anclado
         reg_channel_preview   => undef, # preview durante el drag
 
+        # --- Volume Profile manual drawing tool ---
+        vp_selecting => 0,
+        vp_preview   => undef,
+
+        # --- Anchored VWAP manual tool ---
+        vwap_selecting => 0,
+
         on_scale_mode_change => undef,
 
         # --- Overlays SMC y Liquidez ---
@@ -350,8 +357,11 @@ sub _raise_overlay_labels {
     my ($self, $canvas) = @_;
     return unless $canvas;
 
-    $canvas->raise('lq_label')  if $canvas->find( 'withtag', 'lq_label' );
-    $canvas->raise('smc_label') if $canvas->find( 'withtag', 'smc_label' );
+    $canvas->raise('lq_label')       if $canvas->find( 'withtag', 'lq_label' );
+    $canvas->raise('smc_label')      if $canvas->find( 'withtag', 'smc_label' );
+    $canvas->raise('strategy_label') if $canvas->find( 'withtag', 'strategy_label' );
+    $canvas->raise('vp_label')       if $canvas->find( 'withtag', 'vp_label' );
+    $canvas->raise('vwap_label')     if $canvas->find( 'withtag', 'vwap_label' );
 }
 
 # Complete redraw of all panels and scales
@@ -1043,7 +1053,53 @@ sub start_regression_channel_selection {
     my ($self) = @_;
     $self->{reg_channel_selecting} = 1;
     $self->{reg_channel_preview}   = undef;
+    $self->{vp_selecting} = 0;
+    $self->{vwap_selecting} = 0;
     $self->_set_reg_channel_cursor();
+}
+
+sub start_vp_selection {
+    my ($self) = @_;
+    $self->{reg_channel_selecting} = 0;
+    $self->{vwap_selecting} = 0;
+    $self->{vp_selecting} = 1;
+    $self->{vp_preview} = undef;
+    $self->{price_canvas}->configure(-cursor => 'crosshair') if $self->{price_canvas};
+}
+
+sub clear_vp {
+    my ($self) = @_;
+    $self->{vp_selecting} = 0;
+    $self->{vp_preview} = undef;
+    $self->{price_canvas}->configure(-cursor => 'arrow') if $self->{price_canvas};
+    my $ind = $self->{indicators}->get('VolumeProfile') if $self->{indicators};
+    if ($ind) {
+        $ind->clear_manual_anchors();
+        $ind->compute_all($self->{market});
+        $self->{_render_state} = undef;
+        $self->request_render();
+    }
+}
+
+sub start_vwap_selection {
+    my ($self) = @_;
+    $self->{reg_channel_selecting} = 0;
+    $self->{vp_selecting} = 0;
+    $self->{vwap_selecting} = 1;
+    $self->{price_canvas}->configure(-cursor => 'crosshair') if $self->{price_canvas};
+}
+
+sub clear_vwap {
+    my ($self) = @_;
+    $self->{vwap_selecting} = 0;
+    $self->{price_canvas}->configure(-cursor => 'arrow') if $self->{price_canvas};
+    my $ind = $self->{indicators}->get('AnchoredVWAP') if $self->{indicators};
+    if ($ind) {
+        $ind->clear_manual_anchors();
+        $ind->compute_all($self->{market});
+        $self->{_render_state} = undef;
+        $self->request_render();
+    }
 }
 
 sub set_regression_channel_visible {
@@ -1280,6 +1336,76 @@ sub _draw_regression_channel_set {
     }
 }
 
+# --- VWAP handlers ---
+sub _vwap_start {
+    my ($self, $global_x, $global_y) = @_;
+    my $ix = $self->_reg_channel_index_from_global($global_x, $global_y);
+    return unless defined $ix;
+
+    $self->{vwap_selecting} = 0;
+    $self->{price_canvas}->configure(-cursor => 'arrow') if $self->{price_canvas};
+
+    my $ind = $self->{indicators}->get('AnchoredVWAP');
+    if ($ind) {
+        $ind->add_manual_anchor($ix);
+        $ind->compute_all($self->{market});
+        $self->{_render_state} = undef;
+        $self->request_render();
+    }
+}
+
+# --- Volume Profile handlers ---
+sub _vp_start {
+    my ($self, $global_x, $global_y) = @_;
+    my $ix = $self->_reg_channel_index_from_global($global_x, $global_y);
+    return unless defined $ix;
+
+    $self->{vp_preview} = { from_index => $ix, to_index => $ix };
+}
+
+sub _vp_drag_to {
+    my ($self, $global_x, $global_y) = @_;
+    return unless $self->{vp_preview};
+    my $ix = $self->_reg_channel_index_from_global($global_x, $global_y);
+    return unless defined $ix;
+
+    $self->{vp_preview}{to_index} = $ix;
+    
+    # Draw preview box
+    $self->{price_canvas}->delete('vp_preview') if $self->{price_canvas};
+    my $pscale = $self->{price_scale};
+    return unless $pscale;
+    my $idx1 = $self->{vp_preview}{from_index};
+    my $idx2 = $self->{vp_preview}{to_index};
+    ($idx1, $idx2) = ($idx2, $idx1) if $idx1 > $idx2;
+    my $x1 = $pscale->index_to_center_x($idx1);
+    my $x2 = $pscale->index_to_center_x($idx2);
+    $self->{price_canvas}->createRectangle($x1, 0, $x2, $pscale->{y_height} // 500,
+        -fill => '#3b4452', -stipple => 'gray25', -outline => '#83a9ff', -tags => ['vp_preview']
+    );
+}
+
+sub _vp_finish {
+    my ($self) = @_;
+    return unless $self->{vp_preview};
+    my $start = $self->{vp_preview}{from_index};
+    my $end   = $self->{vp_preview}{to_index};
+    ($start, $end) = ($end, $start) if $start > $end;
+
+    $self->{vp_selecting} = 0;
+    $self->{vp_preview} = undef;
+    $self->{price_canvas}->configure(-cursor => 'arrow') if $self->{price_canvas};
+    $self->{price_canvas}->delete('vp_preview') if $self->{price_canvas};
+
+    my $ind = $self->{indicators}->get('VolumeProfile');
+    if ($ind) {
+        $ind->add_manual_anchor($start, $end);
+        $ind->compute_all($self->{market});
+        $self->{_render_state} = undef;
+        $self->request_render();
+    }
+}
+
 # --- Public pan methods (called from market.pl) ---
 
 sub drag_start {
@@ -1290,6 +1416,18 @@ sub drag_start {
 
     if ( $self->{reg_channel_selecting} ) {
         $self->_reg_channel_start( $global_x, $global_y )
+            if $self->_point_in_widget( $self->{price_canvas}, $global_x, $global_y );
+        return;
+    }
+
+    if ( $self->{vp_selecting} ) {
+        $self->_vp_start( $global_x, $global_y )
+            if $self->_point_in_widget( $self->{price_canvas}, $global_x, $global_y );
+        return;
+    }
+
+    if ( $self->{vwap_selecting} ) {
+        $self->_vwap_start( $global_x, $global_y )
             if $self->_point_in_widget( $self->{price_canvas}, $global_x, $global_y );
         return;
     }
@@ -1331,6 +1469,14 @@ sub drag_end {
         return;
     }
 
+    if ( $self->{vp_selecting} && !$self->{vp_preview} ) {
+        return;
+    }
+    if ( $self->{vp_preview} ) {
+        $self->_vp_finish();
+        return;
+    }
+
     if ( $self->{manual_fib_selecting} && !$self->{manual_fib_preview} ) {
         return;
     }
@@ -1364,6 +1510,16 @@ sub drag_move {
         $self->_reg_channel_drag_to( $global_x, $global_y )
             if $self->{reg_channel_preview};
         return;
+    }
+
+    if ( $self->{vp_selecting} ) {
+        $self->_vp_drag_to( $global_x, $global_y )
+            if $self->{vp_preview};
+        return;
+    }
+
+    if ( $self->{vwap_selecting} ) {
+        return; # Nothing to drag for VWAP
     }
 
     if ( $self->{manual_fib_selecting} ) {
@@ -1594,6 +1750,21 @@ sub set_smc_indicator {
 sub set_lq_indicator {
     my ($self, $ind) = @_;
     $self->{_lq_indicator} = $ind;
+}
+
+sub set_strategy_indicator {
+    my ($self, $ind) = @_;
+    $self->{_strategy_indicator} = $ind;
+}
+
+sub set_vp_indicator {
+    my ($self, $ind) = @_;
+    $self->{_vp_indicator} = $ind;
+}
+
+sub set_vwap_indicator {
+    my ($self, $ind) = @_;
+    $self->{_vwap_indicator} = $ind;
 }
 
 sub set_replay_callback {
@@ -1951,6 +2122,7 @@ sub set_timeframe {
     $self->{selected_replay_index} = undef;
     $self->{on_replay_state_change}->('exited') if $was_replay && $self->{on_replay_state_change};
     $self->{market}->set_timeframe($tf);
+    $self->{market}->build_volume_index($tf);   # Reconstruir indice de volumen multi-temporal
     $self->{indicators}->reset_all();
     $self->{indicators}->compute_all( $self->{market} );
 
@@ -1962,6 +2134,19 @@ sub set_timeframe {
     if ( $self->{_smc_indicator} ) {
         $self->{_smc_indicator}->reset();
         $self->{_smc_indicator}->compute_all( $self->{market} );
+    }
+    # Recomputar nuevos indicadores (Fase 2)
+    if ( $self->{_strategy_indicator} ) {
+        $self->{_strategy_indicator}->reset();
+        $self->{_strategy_indicator}->compute_all( $self->{market} );
+    }
+    if ( $self->{_vp_indicator} ) {
+        $self->{_vp_indicator}->reset();
+        $self->{_vp_indicator}->compute_all( $self->{market} );
+    }
+    if ( $self->{_vwap_indicator} ) {
+        $self->{_vwap_indicator}->reset();
+        $self->{_vwap_indicator}->compute_all( $self->{market} );
     }
 
     $self->reset_view();

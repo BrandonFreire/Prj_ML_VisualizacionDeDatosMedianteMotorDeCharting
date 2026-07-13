@@ -33,6 +33,7 @@ sub new {
         _levels    => [],
         _atr       => [],
         _candles   => undef,
+        _market    => undef,   # referencia a MarketData para volumen multi-temporal
     }, $class;
 }
 
@@ -41,6 +42,7 @@ sub reset { my ($self) = @_; $self->{_levels} = []; $self->{_atr} = []; }
 sub compute_all {
     my ($self, $market) = @_;
     $self->reset();
+    $self->{_market} = $market;
 
     my $arr = $market->_active_array();
     $self->{_candles} = $arr;
@@ -167,7 +169,41 @@ sub compute_all {
         _run_state_machine($lvl, $arr, $n, $self->{n_accept});
     }
 
+    # Attach multi-temporal volume weights to each level
+    $self->_attach_volume_weights(\@all, $arr);
+
     $self->{_levels} = \@all;
+}
+
+# Vincula volumen multi-temporal de 1m/5m/15m a cada nivel de liquidez.
+# Si MarketData tiene un volume_index construido, lo usa; si no, usa el
+# volumen de la vela directamente.
+sub _attach_volume_weights {
+    my ($self, $levels, $arr) = @_;
+    my $market = $self->{_market};
+    return unless $market;
+
+    my $vi = $market->can('get_volume_index') ? $market->get_volume_index() : {};
+
+    for my $lvl (@$levels) {
+        my $ref_idx = $lvl->{swept_at} // $lvl->{index};
+        next unless defined $ref_idx && defined $arr->[$ref_idx];
+
+        my $candle_time = $arr->[$ref_idx]{time};
+        my $vol_data    = $vi->{$candle_time};
+
+        if ($vol_data) {
+            $lvl->{volume_weight} = {
+                v1m  => $vol_data->{v1m}  // 0,
+                v5m  => $vol_data->{v5m}  // 0,
+                v15m => $vol_data->{v15m} // 0,
+            };
+        } else {
+            # Fallback: usar el volumen de la vela directamente
+            my $v = $arr->[$ref_idx]{volume} // 0;
+            $lvl->{volume_weight} = { v1m => $v, v5m => $v, v15m => $v };
+        }
+    }
 }
 
 # ----------------------------------------------------------------
@@ -258,6 +294,7 @@ sub _make_level {
         swept_at       => undef,
         resolved_at    => undef,
         classification => undef,   # SWEEP | GRAB | RUN (cuando RESOLVED)
+        volume_weight  => undef,   # {v1m, v5m, v15m} — pesado multi-temporal
     };
 }
 
@@ -329,6 +366,30 @@ sub get_eqh {
 }
 sub get_eql {
     return [ grep { $_->{is_eql} } @{ $_[0]->{_levels} } ];
+}
+
+# Devuelve niveles filtrados por volumen multi-temporal.
+# Solo pasa niveles cuyo volumen combinado supera el percentil p del ATR de volumen.
+# Separa niveles institucionales reales del ruido.
+sub get_weighted_levels {
+    my ($self, $min_percentile) = @_;
+    $min_percentile //= 0.5;   # percentil 50 por defecto
+    my $levels = $self->{_levels} // [];
+
+    # Calcular umbral: percentil del volumen v1m entre todos los niveles
+    my @vols = sort { $a <=> $b }
+               grep { $_ > 0 }
+               map  { ($_->{volume_weight}{v1m} // 0) } @$levels;
+    return $levels unless @vols;
+
+    my $idx = int($min_percentile * $#vols + 0.5);
+    $idx = 0      if $idx < 0;
+    $idx = $#vols if $idx > $#vols;
+    my $threshold = $vols[$idx];
+
+    return [ grep {
+        ($_->{volume_weight}{v1m} // 0) >= $threshold
+    } @$levels ];
 }
 
 1;

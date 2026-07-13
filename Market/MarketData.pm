@@ -101,6 +101,41 @@ sub build_timeframes {
     }
 }
 
+## ----------------------------------------------------------------
+# Índice de volumen multi-temporal (Sección 4.4 de la especificación)
+#
+# Para cada vela de la temporalidad macro activa, almacena la suma de
+# volumen de las sub-velas de 1m, 5m y 15m que caen dentro de ese
+# bucket temporal.  Se construye O(N) una sola vez; lookup O(1).
+# ----------------------------------------------------------------
+sub build_volume_index {
+    my ($self, $tf_macro) = @_;
+    $tf_macro //= $self->{current_tf} // '1';
+    my $tf_secs = $tf_macro * 60;
+
+    my %index;
+    for my $sub_tf (qw(1 5 15)) {
+        my $sub_arr = $self->{data}{$sub_tf} // [];
+        next unless @$sub_arr;
+        my $key = "v${sub_tf}m";
+        for my $c (@$sub_arr) {
+            my $bucket = int($c->{time} / $tf_secs) * $tf_secs;
+            $index{$bucket}{$key} = ($index{$bucket}{$key} // 0) + ($c->{volume} // 0);
+        }
+    }
+    $self->{_volume_index} = \%index;
+    return \%index;
+}
+
+sub get_volume_index { return $_[0]->{_volume_index} // {} }
+
+sub get_volume_for_candle {
+    my ($self, $candle_time) = @_;
+    return undef unless defined $candle_time;
+    my $vi = $self->{_volume_index} // {};
+    return $vi->{$candle_time};
+}
+
 sub set_timeframe {
     my ($self, $tf) = @_;
     $self->{current_tf} = $tf;

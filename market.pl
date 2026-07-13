@@ -36,9 +36,15 @@ use Market::Indicators::ATR;
 use Market::Indicators::SMC_Structures;
 use Market::Indicators::Liquidity;
 use Market::Indicators::ZigZagDirection;
+use Market::Indicators::Strategy_Builder;
+use Market::Indicators::VolumeProfile;
+use Market::Indicators::AnchoredVWAP;
 use Market::Overlays::SMC_Structures;
 use Market::Overlays::Liquidity;
 use Market::Overlays::ZigZagDirection;
+use Market::Overlays::Strategy_Builder;
+use Market::Overlays::VolumeProfile;
+use Market::Overlays::AnchoredVWAP;
 use Market::ChartEngine;
 
 # ---- Configuration ----
@@ -80,6 +86,7 @@ close $fh;
 
 # ---- 2. Build higher timeframes (5m, 15m, 1h, 2h, 4h, D, W) ----
 $market->build_timeframes();
+$market->build_volume_index();   # Indice de volumen multi-temporal (Seccion 4.4)
 my $d = $market->get_data();
 printf "Loaded: 1m=%d  5m=%d  15m=%d  1h=%d  2h=%d  4h=%d  D=%d  W=%d candles\n",
     scalar @{ $d->{'1'}     // [] },
@@ -139,6 +146,48 @@ printf "  SH: %d  SL: %d  BOS: %d  CHoCH: %d  FVG: %d\n",
     scalar @{ $smc_ind->get_bos_events()   },
     scalar @{ $smc_ind->get_choch_events() },
     scalar @{ $smc_ind->get_fvg_zones()    };
+print "Done.\n";
+
+# ---- 3d. Strategy Builder (SuperTrend, HalfTrend, RangeFilter, Supply/Demand) ----
+print "Computing Strategy Builder...\n";
+my $strategy_ind = Market::Indicators::Strategy_Builder->new(
+    st_multiplier => 3.0,
+    st_period     => 10,
+    ht_amplitude  => 2,
+    rf_period     => 100,
+    rf_multiplier => 3.0,
+);
+$strategy_ind->set_smc_indicator($smc_ind);
+$strategy_ind->compute_all($market);
+printf "  SuperTrend: %d  HalfTrend: %d  RangeFilter: %d  Supply: %d  Demand: %d\n",
+    scalar @{ $strategy_ind->get_supertrend()   },
+    scalar @{ $strategy_ind->get_halftrend()    },
+    scalar @{ $strategy_ind->get_range_filter() },
+    scalar @{ $strategy_ind->get_supply_zones() },
+    scalar @{ $strategy_ind->get_demand_zones() };
+print "Done.\n";
+
+# ---- 3e. Volume Profile (POC, VAH, VAL) ----
+print "Computing Volume Profile...\n";
+my $vp_ind = Market::Indicators::VolumeProfile->new(
+    mode     => 'session',
+    num_bins => 50,
+);
+$vp_ind->set_smc_indicator($smc_ind);
+$vp_ind->compute_all($market);
+printf "  Perfiles generados: %d\n", scalar @{ $vp_ind->get_profiles() };
+print "Done.\n";
+
+# ---- 3f. Anchored VWAP Multipivot (5 anchors) ----
+print "Computing Anchored VWAP...\n";
+my $vwap_ind = Market::Indicators::AnchoredVWAP->new(
+    market_open_hour   => 8,
+    market_open_minute => 30,
+);
+$vwap_ind->set_smc_indicator($smc_ind);
+$vwap_ind->set_vp_indicator($vp_ind);
+$vwap_ind->compute_all($market);
+printf "  Lineas VWAP: %d\n", scalar @{ $vwap_ind->get_vwap_lines() };
 print "Done.\n";
 
 # ---- 4. Build Tk window ----
@@ -279,6 +328,25 @@ my %overlay_visibility = (
     show_zz_external   => 1,
     show_zz_internal   => 0,
     show_zz_hldv       => 0,
+
+    # Strategy Builder
+    strategy_enabled   => 1,
+    show_supertrend    => 1,
+    show_halftrend     => 1,
+    show_range_filter  => 1,
+    show_supply_demand => 1,
+
+    # Volume Profile
+    vp_enabled         => 1,
+    show_vp_poc        => 1,
+    show_vp_vah        => 1,
+    show_vp_val        => 1,
+
+    # Anchored VWAP
+    vwap_enabled       => 1,
+    show_vwap_band1    => 1,
+    show_vwap_band2    => 1,
+    show_vwap_band3    => 0,
 );
 
 my $refresh_overlays = sub {
@@ -604,6 +672,45 @@ $build_overlay_detail = sub {
         $add_overlay_toggle->( 'Direccion Externa',  'show_zz_external', 0 );
         $add_overlay_toggle->( 'Direccion Interna',  'show_zz_internal', 0 );
         $add_overlay_toggle->( 'HLDV (HH/HL/LH/LL)','show_zz_hldv',     0 );
+    } elsif ( $group eq 'strategy' ) {
+        $add_overlay_toggle->( 'Strategy Builder',  'strategy_enabled', 1 );
+        $add_overlay_separator->();
+        $add_overlay_toggle->( 'SuperTrend',        'show_supertrend', 0 );
+        $add_overlay_toggle->( 'HalfTrend',         'show_halftrend', 0 );
+        $add_overlay_toggle->( 'Range Filter',      'show_range_filter', 0 );
+        $add_overlay_toggle->( 'Supply/Demand',     'show_supply_demand', 0 );
+    } elsif ( $group eq 'volumeprofile' ) {
+        $add_overlay_action->( "\x{1F4C8} Dibujar Rango de Perfil", sub {
+            $hide_overlay_menu->() if defined $hide_overlay_menu;
+            $mw->after( 50, sub {
+                $engine->start_vp_selection() if defined $engine;
+            });
+        });
+        $add_overlay_separator->();
+        $add_overlay_action->( 'Quitar Perfiles', sub {
+            $engine->clear_vp() if defined $engine;
+        });
+        $add_overlay_separator->();
+        $add_overlay_toggle->( 'Volume Profile',    'vp_enabled', 1 );
+        $add_overlay_toggle->( 'POC',               'show_vp_poc', 0 );
+        $add_overlay_toggle->( 'VAH',               'show_vp_vah', 0 );
+        $add_overlay_toggle->( 'VAL',               'show_vp_val', 0 );
+    } elsif ( $group eq 'vwap' ) {
+        $add_overlay_action->( "\x{1F4CC} Anclar VWAP", sub {
+            $hide_overlay_menu->() if defined $hide_overlay_menu;
+            $mw->after( 50, sub {
+                $engine->start_vwap_selection() if defined $engine;
+            });
+        });
+        $add_overlay_separator->();
+        $add_overlay_action->( 'Quitar VWAP', sub {
+            $engine->clear_vwap() if defined $engine;
+        });
+        $add_overlay_separator->();
+        $add_overlay_toggle->( 'Anchored VWAP',     'vwap_enabled', 1 );
+        $add_overlay_toggle->( 'Banda 1x',          'show_vwap_band1', 0 );
+        $add_overlay_toggle->( 'Banda 2x',          'show_vwap_band2', 0 );
+        $add_overlay_toggle->( 'Banda 3x',          'show_vwap_band3', 0 );
     } elsif ( $group eq 'herramientas' ) {
         $add_overlay_action->( "\x{1F4C8} Dibujar Canal de Regresi\x{f3}n", sub {
             $hide_overlay_menu->() if defined $hide_overlay_menu;
@@ -729,6 +836,9 @@ $add_overlay_category->( 'Liquidez',     'liquidity' );
 $add_overlay_category->( 'ZigZag',       'zigzag' );
 $add_overlay_category->( 'Herramientas', 'herramientas' );
 $add_overlay_category->( 'Fibonacci',    'fibonacci' );
+$add_overlay_category->( 'Strategy',     'strategy' );
+$add_overlay_category->( 'Vol. Profile', 'volumeprofile' );
+$add_overlay_category->( 'VWAP',         'vwap' );
 
 $hide_overlay_menu = sub {
     return unless $overlay_menu_visible;
@@ -903,6 +1013,9 @@ $fs_btn = $toolbar->Button(
 # Registrar overlays SMC y Liquidez
 $engine->set_lq_indicator($lq_ind);
 $engine->set_smc_indicator($smc_ind);
+$engine->set_strategy_indicator($strategy_ind);
+$engine->set_vp_indicator($vp_ind);
+$engine->set_vwap_indicator($vwap_ind);
 $engine->add_overlay( Market::Overlays::ZigZagDirection->new(
     indicator  => $zz_ind,
     visibility => \%overlay_visibility,
@@ -913,6 +1026,18 @@ $engine->add_overlay( Market::Overlays::SMC_Structures->new(
 ) );
 $engine->add_overlay( Market::Overlays::Liquidity->new(
     indicator  => $lq_ind,
+    visibility => \%overlay_visibility,
+) );
+$engine->add_overlay( Market::Overlays::Strategy_Builder->new(
+    indicator  => $strategy_ind,
+    visibility => \%overlay_visibility,
+) );
+$engine->add_overlay( Market::Overlays::VolumeProfile->new(
+    indicator  => $vp_ind,
+    visibility => \%overlay_visibility,
+) );
+$engine->add_overlay( Market::Overlays::AnchoredVWAP->new(
+    indicator  => $vwap_ind,
     visibility => \%overlay_visibility,
 ) );
 
