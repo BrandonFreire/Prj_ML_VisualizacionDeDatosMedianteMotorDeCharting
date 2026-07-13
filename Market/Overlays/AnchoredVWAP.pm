@@ -87,15 +87,15 @@ sub render {
             $last_x = $x;
             $last_y = $y;
 
-            if ($self->_visible('show_vwap_band1', 1)) {
+            if (($line->{band_1_enabled} // 1) && $self->_visible('show_vwap_band1', 1)) {
                 push @coords_u1, $x, $scale->value_to_y($v + $sd * $m1);
                 push @coords_l1, $x, $scale->value_to_y($v - $sd * $m1);
             }
-            if ($self->_visible('show_vwap_band2', 1)) {
+            if (($line->{band_2_enabled} // 1) && $self->_visible('show_vwap_band2', 1)) {
                 push @coords_u2, $x, $scale->value_to_y($v + $sd * $m2);
                 push @coords_l2, $x, $scale->value_to_y($v - $sd * $m2);
             }
-            if ($self->_visible('show_vwap_band3', 0)) {
+            if (($line->{band_3_enabled} // 0) && $self->_visible('show_vwap_band3', 0)) {
                 push @coords_u3, $x, $scale->value_to_y($v + $sd * $m3);
                 push @coords_l3, $x, $scale->value_to_y($v - $sd * $m3);
             }

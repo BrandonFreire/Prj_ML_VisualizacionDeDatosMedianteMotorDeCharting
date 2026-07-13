@@ -17,9 +17,14 @@ my $VALUE_AREA_PCT     = 0.70;  # 70% del volumen total para Value Area
 sub new {
     my ($class, %args) = @_;
     return bless {
-        mode           => 'manual',
+        # El perfil sólo existe cuando el usuario dibuja un anclaje.  No se
+        # generan perfiles de sesión/globales como efecto de compute_all().
+        mode           => $args{mode} // 'manual',
         num_bins       => $args{num_bins}       // $DEFAULT_BINS,
         value_area_pct => $args{value_area_pct} // $VALUE_AREA_PCT,
+        session_open_hour   => $args{session_open_hour}   // 0,
+        session_open_minute => $args{session_open_minute} // 0,
+        contingency_bars    => $args{contingency_bars}    // 500,
 
         _manual_anchors => [],
         _profiles      => [],
@@ -41,13 +46,28 @@ sub reset {
 
 sub add_manual_anchor {
     my ($self, $start_idx, $end_idx) = @_;
-    push @{ $self->{_manual_anchors} }, { start => $start_idx, end => $end_idx };
+    return unless defined $start_idx;
+
+    # end_idx indefinido representa un perfil anclado "desde esta vela hasta
+    # la última vela disponible".  Un end_idx explícito representa Fixed Range.
+    push @{ $self->{_manual_anchors} }, {
+        start => int($start_idx),
+        end   => defined $end_idx ? int($end_idx) : undef,
+    };
 }
 
 sub clear_manual_anchors {
     my ($self) = @_;
     $self->{_manual_anchors} = [];
 }
+
+sub set_mode {
+    my ($self, $mode) = @_;
+    return unless defined $mode && $mode =~ /^(?:manual|session|bos_choch|contingency)$/;
+    $self->{mode} = $mode;
+}
+
+sub get_mode { return $_[0]->{mode} }
 
 sub compute_all {
     my ($self, $market) = @_;
@@ -58,17 +78,95 @@ sub compute_all {
     my $n = scalar @$arr;
     return if $n < 2;
 
-    my @segments = @{ $self->{_manual_anchors} // [] };
+    my @segments = $self->_segments_for_mode($arr);
+    # Estrictamente manual: sin un anclaje no hay nada que calcular/renderizar.
+    return unless @segments;
 
     # Calcular perfil para cada segmento
     my @profiles;
     for my $seg (@segments) {
-        my $profile = $self->_compute_profile($arr, $seg->{start}, $seg->{end});
+        my $start = $seg->{start};
+        my $end   = defined $seg->{end} ? $seg->{end} : $n - 1;
+        my $profile = $self->_compute_profile($arr, $start, $end);
         next unless $profile;
+        $profile->{open_ended} = !defined $seg->{end};
+        $profile->{source} = $seg->{source} // $self->{mode};
         push @profiles, $profile;
     }
 
     @{ $self->{_profiles} } = @profiles;
+}
+
+# Selecciona segmentos sin mezclar los modos automáticos con la herramienta
+# manual. Los modos session/bos_choch/contingency sólo se activan si el caller
+# los selecciona con set_mode(), por lo que la UI no vuelve a dibujar perfiles
+# globales inesperados.
+sub _segments_for_mode {
+    my ($self, $arr) = @_;
+    my $mode = $self->{mode} // 'manual';
+    my $n = scalar @$arr;
+
+    if ($mode eq 'manual') {
+        return @{ $self->{_manual_anchors} // [] };
+    }
+
+    if ($mode eq 'session') {
+        my @segments;
+        my $open_seconds = 3600 * $self->{session_open_hour}
+                         + 60   * $self->{session_open_minute};
+        my ($start, $last_session);
+        for my $i (0 .. $n - 1) {
+            my $time = $arr->[$i]{time};
+            next unless defined $time;
+            my $session = int(($time - $open_seconds) / 86400);
+            if (!defined $last_session || $session != $last_session) {
+                push @segments, { start => $start, end => $i - 1, source => 'session' }
+                    if defined $start && $i > $start;
+                $start = $i;
+                $last_session = $session;
+            }
+        }
+        push @segments, { start => $start, end => $n - 1, source => 'session' }
+            if defined $start && $start < $n;
+        return @segments;
+    }
+
+    if ($mode eq 'bos_choch') {
+        my $smc = $self->{_smc_ref};
+        my @events;
+        if ($smc) {
+            push @events, @{ $smc->get_bos_events()   // [] } if $smc->can('get_bos_events');
+            push @events, @{ $smc->get_choch_events() // [] } if $smc->can('get_choch_events');
+        }
+        # Sólo estructura externa: representa los pivotes macro disponibles
+        # para la temporalidad activa.
+        my %seen;
+        my @starts = sort { $a <=> $b }
+            grep { $_ >= 0 && $_ < $n && !$seen{$_}++ }
+            map { $_->{confirmed_at} // $_->{index} }
+            grep { ($_->{scope} // 'internal') eq 'external' } @events;
+        return $self->_contingency_segments($n) unless @starts;
+        unshift @starts, 0 if $starts[0] != 0;
+        my @segments;
+        for my $i (0 .. $#starts) {
+            my $end = $i < $#starts ? $starts[$i + 1] - 1 : $n - 1;
+            push @segments, { start => $starts[$i], end => $end, source => 'bos_choch' }
+                if $starts[$i] <= $end;
+        }
+        return @segments;
+    }
+
+    return $self->_contingency_segments($n);
+}
+
+sub _contingency_segments {
+    my ($self, $n) = @_;
+    return () unless $n;
+    my $bars = $self->{contingency_bars} // 500;
+    $bars = 2 if $bars < 2;
+    my $start = $n - $bars;
+    $start = 0 if $start < 0;
+    return ({ start => $start, end => $n - 1, source => 'contingency' });
 }
 
 # ================================================================
@@ -166,12 +264,26 @@ sub _compute_profile {
     my $vah = $bins[$va_high_bin]{price_high};
     my $val = $bins[$va_low_bin]{price_low};
 
+    # El POC es un precio, no un índice de bin. Para que AnchoredVWAP pueda
+    # usarlo como pivote temporal escogemos la vela del segmento cuyo precio
+    # típico está más cerca del nodo POC.
+    my ($poc_index, $poc_distance);
+    for my $i ($start .. $end) {
+        my $c = $arr->[$i];
+        next unless defined $c->{high} && defined $c->{low} && defined $c->{close};
+        my $typical = ($c->{high} + $c->{low} + $c->{close}) / 3.0;
+        my $distance = abs($typical - $poc);
+        if (!defined $poc_distance || $distance < $poc_distance) {
+            ($poc_index, $poc_distance) = ($i, $distance);
+        }
+    }
+
     return {
         start_idx => $start,
         end_idx   => $end,
         bins      => \@bins,
         poc       => $poc,
-        poc_index => $poc_bin + $start,   # índice absoluto aproximado para VWAP anchor
+        poc_index => $poc_index,           # vela temporal más próxima al nodo POC
         vah       => $vah,
         val       => $val,
         total_vol => $total_vol,

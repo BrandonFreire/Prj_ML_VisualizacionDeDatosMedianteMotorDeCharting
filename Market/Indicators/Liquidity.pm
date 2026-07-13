@@ -198,11 +198,20 @@ sub _attach_volume_weights {
                 v5m  => $vol_data->{v5m}  // 0,
                 v15m => $vol_data->{v15m} // 0,
             };
+            $lvl->{volume_weight_source} = 'multi_timeframe_index';
         } else {
-            # Fallback: usar el volumen de la vela directamente
+            # No inventar los marcos 5m/15m: si el índice no está disponible,
+            # sólo se conserva el volumen nativo y los demás pesos quedan en 0.
             my $v = $arr->[$ref_idx]{volume} // 0;
-            $lvl->{volume_weight} = { v1m => $v, v5m => $v, v15m => $v };
+            $lvl->{volume_weight} = { v1m => $v, v5m => 0, v15m => 0 };
+            $lvl->{volume_weight_source} = 'native_fallback';
         }
+        my $w = $lvl->{volume_weight};
+        # Peso persistente usado por los consumidores analíticos. Se guarda
+        # junto al vector por timeframe, no se recalcula al renderizar.
+        $lvl->{volume_score} = ($w->{v1m} // 0)
+                             + ($w->{v5m} // 0)
+                             + ($w->{v15m} // 0);
     }
 }
 
@@ -295,6 +304,8 @@ sub _make_level {
         resolved_at    => undef,
         classification => undef,   # SWEEP | GRAB | RUN (cuando RESOLVED)
         volume_weight  => undef,   # {v1m, v5m, v15m} — pesado multi-temporal
+        volume_weight_source => undef,
+        volume_score   => 0,
     };
 }
 
@@ -376,10 +387,10 @@ sub get_weighted_levels {
     $min_percentile //= 0.5;   # percentil 50 por defecto
     my $levels = $self->{_levels} // [];
 
-    # Calcular umbral: percentil del volumen v1m entre todos los niveles
+    # Calcular umbral del peso combinado 1m/5m/15m entre los niveles.
     my @vols = sort { $a <=> $b }
                grep { $_ > 0 }
-               map  { ($_->{volume_weight}{v1m} // 0) } @$levels;
+               map  { $_->{volume_score} // 0 } @$levels;
     return $levels unless @vols;
 
     my $idx = int($min_percentile * $#vols + 0.5);
@@ -388,7 +399,7 @@ sub get_weighted_levels {
     my $threshold = $vols[$idx];
 
     return [ grep {
-        ($_->{volume_weight}{v1m} // 0) >= $threshold
+        ($_->{volume_score} // 0) >= $threshold
     } @$levels ];
 }
 

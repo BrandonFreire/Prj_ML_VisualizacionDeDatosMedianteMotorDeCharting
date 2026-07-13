@@ -115,16 +115,16 @@ sub compute_all {
     # flags swept, eliminando la contaminacion cruzada del enfoque
     # anterior de pasada unica.
     # ----------------------------------------------------------------
-    my %sweep_at_index;
+    my %liquidity_at_index;
     if ( $self->{_lq_ref} ) {
         for my $ev ( @{ $self->{_lq_ref}->get_resolved() } ) {
-            next unless ($ev->{classification}//'') eq 'SWEEP'
-                     || ($ev->{classification}//'') eq 'GRAB';
-            $sweep_at_index{ $ev->{resolved_at} // 0 } = $ev;
+            my $at = $ev->{resolved_at};
+            next unless defined $at;
+            push @{ $liquidity_at_index{$at} }, $ev;
         }
     }
 
-    my ($int_bos, $int_choch) = _detect_bos_choch($arr, \@sh_int, \@sl_int, 'internal', $k, \%sweep_at_index);
+    my ($int_bos, $int_choch) = _detect_bos_choch($arr, \@sh_int, \@sl_int, 'internal', $k, \%liquidity_at_index);
     my ($ext_bos, $ext_choch) = _detect_bos_choch($arr, \@sh_ext, \@sl_ext, 'external', $external_k, {});
 
     $self->{_bos}   = [ sort { $a->{index} <=> $b->{index} } (@$int_bos,   @$ext_bos)   ];
@@ -166,6 +166,7 @@ sub compute_all {
                 direction   => 'bull',
                 top         => $arr->[$right]{low},
                 bottom      => $arr->[$left]{high},
+                high_reaction => _fvg_liquidity_reaction(\%liquidity_at_index, $right),
             };
         }
         elsif ( $arr->[$right]{high} < $arr->[$left]{low} ) {
@@ -178,6 +179,7 @@ sub compute_all {
                 direction   => 'bear',
                 top         => $arr->[$left]{low},
                 bottom      => $arr->[$right]{high},
+                high_reaction => _fvg_liquidity_reaction(\%liquidity_at_index, $right),
             };
         }
     }
@@ -199,8 +201,8 @@ sub _make_pivot {
 # Detecta BOS y CHoCH en UNA sola coleccion de pivotes independiente.
 # Cada llamada mantiene su propio estado de tendencia y flags swept.
 sub _detect_bos_choch {
-    my ($arr, $sh, $sl, $scope, $k, $sweep_lookup) = @_;
-    $sweep_lookup //= {};
+    my ($arr, $sh, $sl, $scope, $k, $liquidity_lookup) = @_;
+    $liquidity_lookup //= {};
     my (@bos, @choch);
     my ($last_sh, $last_sl) = (undef, undef);
     my ($shi, $sli)         = (0, 0);
@@ -224,7 +226,10 @@ sub _detect_bos_choch {
                 && defined $arr->[$i]{close} && $arr->[$i]{close} > $last_sh->{price}) {
             $last_sh->{swept} = 1;
             my $is_choch = ($trend == -1);
-            my $boosted  = $is_choch && _recent_sweep($sweep_lookup, $i, 'sl', 10);
+            my $signal = $is_choch
+                ? _recent_liquidity_signal($liquidity_lookup, $i, 'sl', 'reversal', 10)
+                : _recent_liquidity_signal($liquidity_lookup, $i, 'sh', 'continuation', 10);
+            my $boosted  = $signal ? 1 : 0;
             my $ev = {
                 index              => $i,
                 level              => $last_sh->{price},
@@ -235,6 +240,8 @@ sub _detect_bos_choch {
                 pivot_confirmed_at => $last_sh->{confirmed_at},
                 scope_confirmed_at => $last_sh->{scope_confirmed_at} // $last_sh->{confirmed_at},
                 boosted            => $boosted // 0,
+                probability_weight => $signal ? $signal->{probability_weight} : 0.50,
+                liquidity_signal   => $signal ? $signal->{classification} : undef,
             };
             push @{ $is_choch ? \@choch : \@bos }, $ev;
             $trend   = 1;
@@ -246,7 +253,10 @@ sub _detect_bos_choch {
                 && defined $arr->[$i]{close} && $arr->[$i]{close} < $last_sl->{price}) {
             $last_sl->{swept} = 1;
             my $is_choch = ($trend == 1);
-            my $boosted  = $is_choch && _recent_sweep($sweep_lookup, $i, 'sh', 10);
+            my $signal = $is_choch
+                ? _recent_liquidity_signal($liquidity_lookup, $i, 'sh', 'reversal', 10)
+                : _recent_liquidity_signal($liquidity_lookup, $i, 'sl', 'continuation', 10);
+            my $boosted  = $signal ? 1 : 0;
             my $ev = {
                 index              => $i,
                 level              => $last_sl->{price},
@@ -257,6 +267,8 @@ sub _detect_bos_choch {
                 pivot_confirmed_at => $last_sl->{confirmed_at},
                 scope_confirmed_at => $last_sl->{scope_confirmed_at} // $last_sl->{confirmed_at},
                 boosted            => $boosted // 0,
+                probability_weight => $signal ? $signal->{probability_weight} : 0.50,
+                liquidity_signal   => $signal ? $signal->{classification} : undef,
             };
             push @{ $is_choch ? \@choch : \@bos }, $ev;
             $trend   = -1;
@@ -392,14 +404,39 @@ sub _adaptive_external_depth {
     return $cap;
 }
 
-# Devuelve true si hay un evento SWEEP/GRAB en el indicador Liquidity
-# dentro de las ultimas $window barras antes de $bar_i, del tipo $side (sh/sl).
-sub _recent_sweep {
-    my ($lookup, $bar_i, $side_filter, $window) = @_;
+# Convierte la resolución de liquidez en un peso explícito para SMC. Sweep
+# eleva drásticamente CHoCH opuesto; Run valida BOS en la misma dirección.
+sub _recent_liquidity_signal {
+    my ($lookup, $bar_i, $side_filter, $intent, $window) = @_;
+    my $best;
     for my $idx (keys %$lookup) {
         next if $idx > $bar_i || $idx < $bar_i - $window;
-        my $ev = $lookup->{$idx};
-        return 1 if ($ev->{side}//'') eq $side_filter;
+        for my $ev (@{ $lookup->{$idx} // [] }) {
+            next unless ($ev->{side} // '') eq $side_filter;
+            my $class = $ev->{classification} // '';
+            next if $intent eq 'reversal' && $class ne 'SWEEP' && $class ne 'GRAB';
+            next if $intent eq 'continuation' && $class ne 'RUN';
+            my $base = $class eq 'SWEEP' ? 0.90
+                     : $class eq 'GRAB'  ? 0.82
+                     :                    0.85; # RUN
+            my $w = $ev->{volume_weight} // {};
+            my $has_multi_tf_volume = (($w->{v1m}//0) + ($w->{v5m}//0) + ($w->{v15m}//0)) > 0;
+            my $weight = $base + ($has_multi_tf_volume ? 0.05 : 0);
+            $weight = 0.95 if $weight > 0.95;
+            my $candidate = { %$ev, probability_weight => $weight };
+            $best = $candidate if !$best || $candidate->{probability_weight} > $best->{probability_weight};
+        }
+    }
+    return $best;
+}
+
+sub _fvg_liquidity_reaction {
+    my ($lookup, $formed_at) = @_;
+    for my $idx ($formed_at - 1 .. $formed_at) {
+        for my $ev (@{ $lookup->{$idx} // [] }) {
+            return 1 if ($ev->{classification} // '') eq 'SWEEP'
+                     || ($ev->{classification} // '') eq 'GRAB';
+        }
     }
     return 0;
 }

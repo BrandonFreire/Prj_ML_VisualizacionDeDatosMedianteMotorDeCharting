@@ -68,9 +68,11 @@ sub new {
         # --- Volume Profile manual drawing tool ---
         vp_selecting => 0,
         vp_preview   => undef,
+        vp_anchor_index => undef,
 
         # --- Anchored VWAP manual tool ---
         vwap_selecting => 0,
+        vwap_anchor_index => undef,
 
         on_scale_mode_change => undef,
 
@@ -1067,12 +1069,46 @@ sub start_vp_selection {
     $self->{price_canvas}->configure(-cursor => 'crosshair') if $self->{price_canvas};
 }
 
+sub _vp_indicator {
+    my ($self) = @_;
+    # VolumeProfile no forma parte del IndicatorManager histórico; se inyecta
+    # en el motor con set_vp_indicator().  Conservar el fallback permite usar
+    # el motor también en integraciones que sí lo registren allí.
+    return $self->{_vp_indicator}
+        || ($self->{indicators} ? $self->{indicators}->get('VolumeProfile') : undef);
+}
+
+sub _vwap_indicator {
+    my ($self) = @_;
+    return $self->{_vwap_indicator}
+        || ($self->{indicators} ? $self->{indicators}->get('AnchoredVWAP') : undef);
+}
+
+sub _last_drawable_index {
+    my ($self) = @_;
+    return $self->{replay_cursor}
+        if $self->{replay_mode} && defined $self->{replay_cursor};
+    return $self->{market}->last_index();
+}
+
+sub set_vwap_band_configuration {
+    my ($self, $number, %args) = @_;
+    my $ind = $self->_vwap_indicator() or return;
+    $ind->set_band_configuration($number, %args);
+    # Los multiplicadores se copian en las líneas calculadas; recalcular deja
+    # el cambio visible de inmediato para todos los anclajes manuales.
+    $ind->compute_all($self->{market});
+    $self->{_render_state} = undef;
+    $self->request_render();
+}
+
 sub clear_vp {
     my ($self) = @_;
     $self->{vp_selecting} = 0;
     $self->{vp_preview} = undef;
     $self->{price_canvas}->configure(-cursor => 'arrow') if $self->{price_canvas};
-    my $ind = $self->{indicators}->get('VolumeProfile') if $self->{indicators};
+    $self->{vp_anchor_index} = undef;
+    my $ind = $self->_vp_indicator();
     if ($ind) {
         $ind->clear_manual_anchors();
         $ind->compute_all($self->{market});
@@ -1093,7 +1129,8 @@ sub clear_vwap {
     my ($self) = @_;
     $self->{vwap_selecting} = 0;
     $self->{price_canvas}->configure(-cursor => 'arrow') if $self->{price_canvas};
-    my $ind = $self->{indicators}->get('AnchoredVWAP') if $self->{indicators};
+    $self->{vwap_anchor_index} = undef;
+    my $ind = $self->_vwap_indicator();
     if ($ind) {
         $ind->clear_manual_anchors();
         $ind->compute_all($self->{market});
@@ -1345,7 +1382,8 @@ sub _vwap_start {
     $self->{vwap_selecting} = 0;
     $self->{price_canvas}->configure(-cursor => 'arrow') if $self->{price_canvas};
 
-    my $ind = $self->{indicators}->get('AnchoredVWAP');
+    $self->{vwap_anchor_index} = $ix;
+    my $ind = $self->_vwap_indicator();
     if ($ind) {
         $ind->add_manual_anchor($ix);
         $ind->compute_all($self->{market});
@@ -1360,7 +1398,14 @@ sub _vp_start {
     my $ix = $self->_reg_channel_index_from_global($global_x, $global_y);
     return unless defined $ix;
 
-    $self->{vp_preview} = { from_index => $ix, to_index => $ix };
+    # El clic por sí solo crea un perfil anclado desde esta vela hasta el
+    # presente. Si el usuario arrastra, el mismo gesto se convierte en un
+    # Fixed Range explícito.
+    $self->{vp_preview} = {
+        from_index => $ix,
+        to_index   => $ix,
+        moved      => 0,
+    };
 }
 
 sub _vp_drag_to {
@@ -1370,6 +1415,7 @@ sub _vp_drag_to {
     return unless defined $ix;
 
     $self->{vp_preview}{to_index} = $ix;
+    $self->{vp_preview}{moved} = 1 if $ix != $self->{vp_preview}{from_index};
     
     # Draw preview box
     $self->{price_canvas}->delete('vp_preview') if $self->{price_canvas};
@@ -1389,15 +1435,26 @@ sub _vp_finish {
     my ($self) = @_;
     return unless $self->{vp_preview};
     my $start = $self->{vp_preview}{from_index};
-    my $end   = $self->{vp_preview}{to_index};
-    ($start, $end) = ($end, $start) if $start > $end;
+    my $end;
+    if ($self->{vp_preview}{moved}) {
+        $end = $self->{vp_preview}{to_index};
+        ($start, $end) = ($end, $start) if $start > $end;
+    }
+    else {
+        # Un único clic: perfil anclado, no perfil de una sola vela. Fuera de
+        # Replay el final indefinido sigue automáticamente la última vela.
+        # En Replay se fija en la barrera temporal para no filtrar el futuro.
+        $end = $self->_last_drawable_index()
+            if $self->{replay_mode};
+    }
 
     $self->{vp_selecting} = 0;
     $self->{vp_preview} = undef;
     $self->{price_canvas}->configure(-cursor => 'arrow') if $self->{price_canvas};
     $self->{price_canvas}->delete('vp_preview') if $self->{price_canvas};
 
-    my $ind = $self->{indicators}->get('VolumeProfile');
+    $self->{vp_anchor_index} = $start;
+    my $ind = $self->_vp_indicator();
     if ($ind) {
         $ind->add_manual_anchor($start, $end);
         $ind->compute_all($self->{market});

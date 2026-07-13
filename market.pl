@@ -170,7 +170,7 @@ print "Done.\n";
 # ---- 3e. Volume Profile (POC, VAH, VAL) ----
 print "Computing Volume Profile...\n";
 my $vp_ind = Market::Indicators::VolumeProfile->new(
-    mode     => 'session',
+    mode     => 'manual',
     num_bins => 50,
 );
 $vp_ind->set_smc_indicator($smc_ind);
@@ -181,8 +181,12 @@ print "Done.\n";
 # ---- 3f. Anchored VWAP Multipivot (5 anchors) ----
 print "Computing Anchored VWAP...\n";
 my $vwap_ind = Market::Indicators::AnchoredVWAP->new(
-    market_open_hour   => 8,
-    market_open_minute => 30,
+    # Multiplicadores editables con
+    # $engine->set_vwap_band_configuration(N, enabled => ..., multiplier => ...)
+    std_mult_1     => 1.0,
+    std_mult_2     => 2.0,
+    band_1_enabled => 1,
+    band_2_enabled => 1,
 );
 $vwap_ind->set_smc_indicator($smc_ind);
 $vwap_ind->set_vp_indicator($vp_ind);
@@ -680,7 +684,7 @@ $build_overlay_detail = sub {
         $add_overlay_toggle->( 'Range Filter',      'show_range_filter', 0 );
         $add_overlay_toggle->( 'Supply/Demand',     'show_supply_demand', 0 );
     } elsif ( $group eq 'volumeprofile' ) {
-        $add_overlay_action->( "\x{1F4C8} Dibujar Rango de Perfil", sub {
+        $add_overlay_action->( "\x{1F4C8} Anclar / Dibujar Perfil", sub {
             $hide_overlay_menu->() if defined $hide_overlay_menu;
             $mw->after( 50, sub {
                 $engine->start_vp_selection() if defined $engine;

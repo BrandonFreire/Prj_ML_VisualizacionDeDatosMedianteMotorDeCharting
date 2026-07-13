@@ -77,7 +77,10 @@ sub _render_histogram {
     my $draw_end = $p_end > $current_bar ? $current_bar : $p_end;
     $draw_end    = $d_end if $draw_end > $d_end;
 
-    # Anclar el histograma al borde derecho del segmento
+    # El motor sólo entrega perfiles manuales.  El histograma queda al lado
+    # derecho del rango elegido y crece hacia dentro para no ocultar el precio
+    # posterior al anclaje. Para un perfil open_ended, draw_end es la última
+    # vela disponible (o la barrera de Replay que recibe render()).
     my $x_anchor = $scale->index_to_center_x($draw_end);
 
     for my $bin (@$bins) {

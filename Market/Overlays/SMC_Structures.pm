@@ -507,7 +507,8 @@ sub _render_fvg {
             int(($y2 // 0) / 6);
         next if $drawn_zone{$zone_key}++;
 
-        my $is_reaction = $self->_fvg_high_reaction($fvg, $recent_sweeps);
+        my $is_reaction = ($fvg->{high_reaction} // 0)
+                       || $self->_fvg_high_reaction($fvg, $recent_sweeps);
         my $color = $is_reaction
             ? $COLOR_ZONE_HIGH
             : $fvg->{direction} eq 'bull' ? $COLOR_FVG_BULL : $COLOR_FVG_BEAR;
