@@ -41,7 +41,9 @@ sub render {
     $canvas->delete('vwap_overlay');
     return unless $self->_visible('vwap_enabled', 1);
 
-    my $lines = $ind->get_vwap_lines() // [];
+    my $lines = $ind->can('get_vwap_lines_at')
+        ? ($ind->get_vwap_lines_at($current_bar) // [])
+        : ($ind->get_vwap_lines() // []);
     return unless @$lines;
 
     my %label_slots;

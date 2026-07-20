@@ -18,6 +18,7 @@ sub new {
         _missed      => [],
         _levels      => [],
         _ambiguous   => [],
+        _provisional => undef,
         _max_visible_index => -1,
     }, $class;
 }
@@ -28,6 +29,7 @@ sub reset {
     $self->{_missed}  = [];
     $self->{_levels}  = [];
     $self->{_ambiguous} = [];
+    $self->{_provisional} = undef;
     $self->{_candles} = undef;
     $self->{_max_visible_index} = -1;
     return;
@@ -131,6 +133,15 @@ sub compute {
                         'opposite_extreme_after_higher_high');
                 }
             }
+            elsif ($self->{show_missed} && defined($tracked_max) && $high < $tracked_max) {
+                # Fidelidad con el estado inicial de Pine (os=0): antes del
+                # primer pivote regular también puede existir un extremo que
+                # el zigzag omitió.
+                $self->_add_missed('high', $tracked_max_i, $tracked_max, $n,
+                    'initial_higher_extreme_before_first_high');
+                $self->_add_missed('low', $follow_min_i, $follow_min, $n,
+                    'initial_opposite_extreme_after_higher_high');
+            }
             $self->_add_regular('high', $center, $high, $n) if $self->{show_regular};
             ($last_type, $last_index, $last_price) = ('high', $center, $high);
             ($tracked_max, $tracked_min, $tracked_max_i, $tracked_min_i) = ($high, $high, $center, $center);
@@ -148,6 +159,13 @@ sub compute {
                     $self->_add_missed('high', $follow_max_i, $follow_max, $n,
                         'opposite_extreme_after_lower_low');
                 }
+            }
+            elsif ($self->{show_missed} && defined $tracked_max) {
+                # El indicador de referencia parte en estado LOW. Si el primer
+                # pivote confirmado también es LOW, el máximo previo es el
+                # primer missed pivot visible.
+                $self->_add_missed('high', $tracked_max_i, $tracked_max, $n,
+                    'initial_high_before_first_low');
             }
             $self->_add_regular('low', $center, $low, $n) if $self->{show_regular};
             ($last_type, $last_index, $last_price) = ('low', $center, $low);
@@ -170,7 +188,7 @@ sub _add_regular {
         confirmationTime => $self->{_candles}[$confirmed_at]{time},
         confirmed_at => $confirmed_at,
         confirmed_time => $self->{_candles}[$confirmed_at]{time},
-        label        => $type eq 'high' ? 'HIGH' : 'LOW',
+        label        => $type eq 'high' ? "\x{25BC}" : "\x{25B2}",
         replay_safe  => 1,
     };
 }
@@ -197,7 +215,7 @@ sub _add_missed {
         confirmationIndex => $confirmed_at,
         confirmationTime => $self->{_candles}[$confirmed_at]{time},
         confirmed_time => $self->{_candles}[$confirmed_at]{time},
-        reason       => $reason, label => 'MISSED', replay_safe => 1,
+        reason       => $reason, label => "\x{1F47B}", replay_safe => 1,
     };
     push @{ $self->{_missed} }, $event;
     push @{ $self->{_levels} }, {
@@ -231,6 +249,7 @@ sub _result {
             status => 'temporary', confirmed => 0, replay_safe => 1,
         } if defined $best_index;
     }
+    $self->{_provisional} = $provisional ? { %$provisional } : undef;
     return {
         pivot_length       => $self->{length},
         max_visible_index  => $max_idx,
@@ -292,6 +311,57 @@ sub get_reversal_levels {
         $copy{end_index} = $max_idx if $copy{active} && $max_idx >= 0;
         \%copy;
     } @{ $self->{_levels} } ];
+}
+
+sub get_provisional_pivot {
+    my ($self) = @_;
+    return $self->{_provisional} ? { %{ $self->{_provisional} } } : undef;
+}
+
+# Provisional causal para un cursor arbitrario. Se calcula sólo con pivotes
+# cuya confirmación ya ocurrió y con velas hasta current_bar.
+sub get_provisional_pivot_at {
+    my ($self, $current_bar) = @_;
+    my $candles = $self->{_candles} // [];
+    return undef unless @$candles;
+    $current_bar = $self->{_max_visible_index} unless defined $current_bar;
+    return undef unless defined($current_bar) && $current_bar =~ /^\d+$/;
+    $current_bar = int($current_bar);
+    $current_bar = $#$candles if $current_bar > $#$candles;
+    return undef if $current_bar < 0;
+
+    my @eligible = grep {
+        defined($_->{confirmed_at}) && $_->{confirmed_at} <= $current_bar
+            && defined($_->{index}) && $_->{index} <= $current_bar
+    } @{ $self->{_regular} // [] };
+    return undef unless @eligible;
+    my ($last) = sort {
+        $b->{confirmed_at} <=> $a->{confirmed_at}
+            || $b->{index} <=> $a->{index}
+    } @eligible;
+    return undef unless $last->{index} < $current_bar;
+
+    my $type = ($last->{type} // '') eq 'high' ? 'low' : 'high';
+    my ($best_index, $best_price);
+    for my $i ($last->{index} + 1 .. $current_bar) {
+        my $price = $candles->[$i]{$type};
+        next unless defined $price;
+        if (!defined($best_price)
+            || ($type eq 'high' ? $price > $best_price : $price < $best_price)) {
+            ($best_index, $best_price) = ($i, $price);
+        }
+    }
+    return undef unless defined $best_index;
+    return {
+        id => join('_', 'provisional', $type, $best_index),
+        kind => 'provisionalPivot', source => 'provisional',
+        type => $type, pivotType => $type,
+        index => $best_index, time => $candles->[$best_index]{time},
+        price => $best_price + 0,
+        from_index => $last->{index}, from_price => $last->{price} + 0,
+        status => 'temporary', confirmed => 0, provisional => 1,
+        max_visible_index => $current_bar, label => "\x{1F47B}", replay_safe => 1,
+    };
 }
 
 sub _finite {

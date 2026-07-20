@@ -49,6 +49,7 @@ use Market::Overlays::ZigZagDirection;
 use Market::Overlays::Strategy_Builder;
 use Market::Overlays::VolumeProfile;
 use Market::Overlays::AnchoredVWAP;
+use Market::Overlays::PivotMissedReversal;
 use Market::ChartEngine;
 
 # ---- Configuration ----
@@ -384,6 +385,14 @@ my %overlay_visibility = (
     show_zz_internal   => 0,
     show_zz_hldv       => 0,
 
+    # Pivot High/Low y Missed Reversal
+    pmr_enabled        => 1,
+    show_pmr_regular   => 0,
+    show_pmr_missed    => 1,
+    show_pmr_levels    => 1,
+    show_pmr_provisional => 1,
+    show_pmr_segments  => 0,
+
     # Strategy Builder
     strategy_enabled   => 1,
     show_supertrend    => 1,
@@ -512,6 +521,11 @@ my %overlay_parent_for = (
     show_sweep         => 'liquidity_enabled',
     show_run           => 'liquidity_enabled',
     show_zz_hldv       => 'show_zz_external',
+    show_pmr_regular   => 'pmr_enabled',
+    show_pmr_missed    => 'pmr_enabled',
+    show_pmr_levels    => 'pmr_enabled',
+    show_pmr_provisional => 'pmr_enabled',
+    show_pmr_segments  => 'pmr_enabled',
     show_supertrend    => 'strategy_enabled',
     show_halftrend     => 'strategy_enabled',
     show_range_filter  => 'strategy_enabled',
@@ -738,6 +752,14 @@ $build_overlay_detail = sub {
         $add_overlay_toggle->( 'Direccion Externa',  'show_zz_external', 0 );
         $add_overlay_toggle->( 'Direccion Interna',  'show_zz_internal', 0 );
         $add_overlay_toggle->( 'HLDV (HH/HL/LH/LL)','show_zz_hldv',     0 );
+    } elsif ( $group eq 'pivots' ) {
+        $add_overlay_toggle->( 'Pivot Missed Reversal', 'pmr_enabled', 1 );
+        $add_overlay_separator->();
+        $add_overlay_toggle->( 'Pivotes regulares',     'show_pmr_regular', 0 );
+        $add_overlay_toggle->( 'Fantasmas (missed)',    'show_pmr_missed', 0 );
+        $add_overlay_toggle->( 'Niveles fantasma',      'show_pmr_levels', 0 );
+        $add_overlay_toggle->( 'Fantasma provisional',  'show_pmr_provisional', 0 );
+        $add_overlay_toggle->( 'Segmentos de pivotes',  'show_pmr_segments', 0 );
     } elsif ( $group eq 'strategy' ) {
         $add_overlay_toggle->( 'Strategy Builder',  'strategy_enabled', 1 );
         $add_overlay_separator->();
@@ -900,6 +922,7 @@ my $add_overlay_category = sub {
 $add_overlay_category->( 'SMC',          'smc' );
 $add_overlay_category->( 'Liquidez',     'liquidity' );
 $add_overlay_category->( 'ZigZag',       'zigzag' );
+$add_overlay_category->( 'Pivots',       'pivots' );
 $add_overlay_category->( 'Herramientas', 'herramientas' );
 $add_overlay_category->( 'Fibonacci',    'fibonacci' );
 $add_overlay_category->( 'Strategy',     'strategy' );
@@ -1085,6 +1108,10 @@ $engine->set_vp_indicator($vp_ind);
 $engine->set_vwap_indicator($vwap_ind);
 $engine->add_overlay( Market::Overlays::ZigZagDirection->new(
     indicator  => $zz_ind,
+    visibility => \%overlay_visibility,
+) );
+$engine->add_overlay( Market::Overlays::PivotMissedReversal->new(
+    indicator  => $pivot_missed_ind,
     visibility => \%overlay_visibility,
 ) );
 $engine->add_overlay( Market::Overlays::SMC_Structures->new(

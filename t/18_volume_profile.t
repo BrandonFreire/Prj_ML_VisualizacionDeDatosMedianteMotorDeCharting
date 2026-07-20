@@ -42,6 +42,40 @@ ok($flat_result, 'un mercado completamente plano aún produce un perfil válido'
 is($flat_result->{poc}, 100, 'el POC plano conserva exactamente el único precio negociado');
 is($flat_result->{total_vol}, 50, 'el perfil plano conserva todo el volumen');
 
+my $replay_market = market_from(
+    { time => 0,   open => 100, high => 101, low => 99,  close => 100, volume => 100 },
+    { time => 60,  open => 100, high => 101, low => 99,  close => 100, volume => 100 },
+    { time => 120, open => 100, high => 101, low => 99,  close => 100, volume => 100 },
+    { time => 180, open => 200, high => 201, low => 199, close => 200, volume => 10_000 },
+);
+my $replay_profile = Market::Indicators::VolumeProfile->new(num_bins => 20);
+$replay_profile->add_manual_anchor(0);
+$replay_profile->compute_all($replay_market);
+my $full_profile = $replay_profile->get_latest_profile;
+my $prefix_profile = $replay_profile->get_profiles_at(2)->[0];
+is($prefix_profile->{end_idx}, 2,
+    'Replay recalcula el perfil sólo hasta la vela visible');
+is($prefix_profile->{total_vol}, 300,
+    'el volumen futuro no participa en el perfil histórico');
+cmp_ok($prefix_profile->{poc}, '<', 110,
+    'el POC histórico no se desplaza por una vela futura dominante');
+cmp_ok($full_profile->{poc}, '>', 190,
+    'el perfil completo sigue incorporando la última vela al salir de Replay');
+is($replay_profile->get_latest_profile->{end_idx}, 3,
+    'consultar un prefijo no muta el perfil completo');
+
+my $fixed_profile = Market::Indicators::VolumeProfile->new(num_bins => 20);
+$fixed_profile->add_manual_anchor(0, 3);
+$fixed_profile->compute_all($replay_market);
+my $fixed_prefix = $fixed_profile->get_profiles_at(1)->[0];
+is($fixed_prefix->{end_idx}, 1,
+    'un Fixed Range que termina en el futuro también se corta matemáticamente');
+ok($fixed_prefix->{truncated_by_cursor},
+    'el resultado informa que el rango fijo todavía está incompleto');
+
+eval { $replay_profile->get_profiles_at('invalido') };
+like($@, qr/max_visible_index/, 'rechaza un cursor de Replay inválido');
+
 eval { Market::Indicators::VolumeProfile->new(num_bins => 0) };
 like($@, qr/num_bins/, 'rechaza un número de bins que causaría división por cero');
 eval { Market::Indicators::VolumeProfile->new(value_area_pct => 1.1) };

@@ -34,6 +34,7 @@ sub new {
 
         _manual_anchors => [],
         _profiles      => [],
+        _profile_cache => {},
         _candles       => undef,
         _smc_ref       => undef,
     }, $class;
@@ -42,11 +43,13 @@ sub new {
 sub set_smc_indicator {
     my ($self, $smc) = @_;
     $self->{_smc_ref} = $smc;
+    $self->{_profile_cache} = {};
 }
 
 sub reset {
     my ($self) = @_;
     @{ $self->{_profiles} } = () if $self->{_profiles};
+    $self->{_profile_cache} = {};
     $self->{_candles}  = undef;
 }
 
@@ -61,17 +64,20 @@ sub add_manual_anchor {
         start => int($start_idx),
         end   => defined $end_idx ? int($end_idx) : undef,
     };
+    $self->{_profile_cache} = {};
 }
 
 sub clear_manual_anchors {
     my ($self) = @_;
     $self->{_manual_anchors} = [];
+    $self->{_profile_cache} = {};
 }
 
 sub set_mode {
     my ($self, $mode) = @_;
     return unless defined $mode && $mode =~ /^(?:manual|session|bos_choch|contingency)$/;
     $self->{mode} = $mode;
+    $self->{_profile_cache} = {};
 }
 
 sub get_mode { return $_[0]->{mode} }
@@ -319,6 +325,49 @@ sub _compute_profile {
 # Accessors
 # ================================================================
 sub get_profiles   { return $_[0]->{_profiles} }
+
+# Devuelve perfiles recalculados únicamente con las velas disponibles hasta
+# max_visible_index. Recortar sólo el dibujo no es suficiente: POC/VAH/VAL y
+# los bins también deben ignorar el futuro durante Replay.
+sub get_profiles_at {
+    my ($self, $max_visible_index) = @_;
+    my $candles = $self->{_candles} // [];
+    return [] unless @$candles;
+
+    $max_visible_index = $#$candles unless defined $max_visible_index;
+    die 'VolumeProfile::get_profiles_at: max_visible_index debe ser un entero no negativo'
+        unless !ref($max_visible_index) && $max_visible_index =~ /^\d+$/;
+    $max_visible_index = int($max_visible_index);
+    $max_visible_index = $#$candles if $max_visible_index > $#$candles;
+
+    return $self->{_profiles} if $max_visible_index == $#$candles;
+    return $self->{_profile_cache}{$max_visible_index}
+        if exists $self->{_profile_cache}{$max_visible_index};
+
+    my @prefix = @$candles[0 .. $max_visible_index];
+    my @segments = $self->_segments_for_mode(\@prefix);
+    my @profiles;
+    for my $seg (@segments) {
+        my $start = $seg->{start};
+        next unless defined($start) && $start >= 0 && $start <= $max_visible_index;
+
+        my $declared_end = $seg->{end};
+        my $end = defined($declared_end) ? $declared_end : $max_visible_index;
+        $end = $max_visible_index if $end > $max_visible_index;
+        next if $start > $end;
+
+        my $profile = $self->_compute_profile(\@prefix, $start, $end);
+        next unless $profile;
+        $profile->{open_ended} = !defined $declared_end;
+        $profile->{truncated_by_cursor} = 1
+            if defined($declared_end) && $declared_end > $max_visible_index;
+        $profile->{source} = $seg->{source} // $self->{mode};
+        push @profiles, $profile;
+    }
+
+    $self->{_profile_cache}{$max_visible_index} = \@profiles;
+    return $self->{_profile_cache}{$max_visible_index};
+}
 
 # Devuelve el perfil más reciente (para anclaje VWAP)
 sub get_latest_profile {

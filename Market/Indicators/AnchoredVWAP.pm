@@ -30,6 +30,7 @@ sub new {
 
         _manual_anchors    => [],
         _vwap_lines        => [],     # [{anchor_idx, values => [vwap_i], std_dev => [std_i]}]
+        _vwap_cache        => {},
         _candles           => undef,
         _smc_ref           => undef,
         _vp_ref            => undef,  # VolumeProfile indicator
@@ -41,21 +42,25 @@ sub new {
 sub set_smc_indicator {
     my ($self, $smc) = @_;
     $self->{_smc_ref} = $smc;
+    $self->{_vwap_cache} = {};
 }
 
 sub set_vp_indicator {
     my ($self, $vp) = @_;
     $self->{_vp_ref} = $vp;
+    $self->{_vwap_cache} = {};
 }
 
 sub set_pivot_missed_indicator {
     my ($self, $pivot) = @_;
     $self->{_pivot_ref} = $pivot;
+    $self->{_vwap_cache} = {};
 }
 
 sub reset {
     my ($self) = @_;
     @{ $self->{_vwap_lines} } = () if $self->{_vwap_lines};
+    $self->{_vwap_cache} = {};
     $self->{_candles}    = undef;
     $self->{_auto_missed_result} = undef;
 }
@@ -64,17 +69,20 @@ sub add_manual_anchor {
     my ($self, $idx) = @_;
     return unless defined($idx) && !ref($idx) && $idx =~ /^\d+$/;
     push @{ $self->{_manual_anchors} }, { index => int($idx) };
+    $self->{_vwap_cache} = {};
 }
 
 sub clear_manual_anchors {
     my ($self) = @_;
     $self->{_manual_anchors} = [];
+    $self->{_vwap_cache} = {};
 }
 
 sub set_anchor_mode {
     my ($self, $mode) = @_;
     return unless defined $mode && $mode =~ /^(?:manual|multipivot)$/;
     $self->{anchor_mode} = $mode;
+    $self->{_vwap_cache} = {};
 }
 
 sub get_anchor_mode { return $_[0]->{anchor_mode} }
@@ -96,6 +104,7 @@ sub set_band_configuration {
         $self->{$mult_key} = $mult;
     }
     $self->{$enabled_key} = $args{enabled} ? 1 : 0 if exists $args{enabled};
+    $self->{_vwap_cache} = {};
 }
 
 sub get_band_configuration {
@@ -115,6 +124,16 @@ sub compute_all {
     $self->{_candles} = $arr;
     my $n = scalar @$arr;
     return if $n < 2;
+
+    my ($lines, $auto) = $self->_calculate_lines($arr);
+    $self->{_vwap_lines} = $lines;
+    $self->{_auto_missed_result} = $auto;
+}
+
+sub _calculate_lines {
+    my ($self, $arr) = @_;
+    my $n = scalar @$arr;
+    return ([], undef) if $n < 2;
 
     # 1. Recopilar anclajes. En manual sólo se usan clics del usuario; en
     # multipivot se añaden Inicio de Sesión, Apertura, BOS, CHoCH y POC.
@@ -181,16 +200,17 @@ sub compute_all {
     # El AVWAP de missed pivot es independiente del modo manual/multipivot:
     # solo existe tras la confirmación del último evento y se recalcula desde
     # su vela extrema. No añade ni conserva instancias históricas obsoletas.
+    my $auto_result;
     if (my $pivot = $self->{_pivot_ref}) {
         my $events = $pivot->can('get_missed_pivots') ? $pivot->get_missed_pivots() : [];
         my $auto = $self->compute_missed_pivot_auto(
             candles => $arr, missed_pivot_events => $events,
         );
-        $self->{_auto_missed_result} = $auto;
+        $auto_result = $auto;
         push @vwap_lines, $auto->{line} if $auto->{visible} && $auto->{line};
     }
 
-    @{ $self->{_vwap_lines} } = @vwap_lines;
+    return (\@vwap_lines, $auto_result);
 }
 
 # Construye una única instancia desde el missed pivot confirmado más reciente.
@@ -354,11 +374,14 @@ sub _collect_anchors {
     # POC temporal calculado por VolumeProfile (vela con típico más cercano
     # al nodo de máximo volumen).
     my $vp = $self->{_vp_ref};
-    if ($vp && $vp->can('get_profiles')) {
+    if ($vp && ($vp->can('get_profiles_at') || $vp->can('get_profiles'))) {
+        my $profiles = $vp->can('get_profiles_at')
+            ? $vp->get_profiles_at($#$arr)
+            : $vp->get_profiles();
         push @anchors, map {
             defined $_->{poc_index}
                 ? ({ index => $_->{poc_index}, source => 'poc' }) : ()
-        } @{ $vp->get_profiles() // [] };
+        } @{ $profiles // [] };
     }
 
     return grep { defined $_->{index} && $_->{index} >= 0 && $_->{index} < $n } @anchors;
@@ -371,6 +394,30 @@ sub _collect_anchors {
 # ================================================================
 sub get_vwap_lines { return $_[0]->{_vwap_lines} }
 sub get_auto_missed_result { return $_[0]->{_auto_missed_result} }
+
+# Reconstruye anclas y líneas con el prefijo disponible en Replay. Esto no se
+# limita a cortar coordenadas: también selecciona el último missed pivot y el
+# POC que realmente existían en ese cursor.
+sub get_vwap_lines_at {
+    my ($self, $max_visible_index) = @_;
+    my $candles = $self->{_candles} // [];
+    return [] unless @$candles;
+
+    $max_visible_index = $#$candles unless defined $max_visible_index;
+    die 'AnchoredVWAP::get_vwap_lines_at: max_visible_index debe ser un entero no negativo'
+        unless !ref($max_visible_index) && $max_visible_index =~ /^\d+$/;
+    $max_visible_index = int($max_visible_index);
+    $max_visible_index = $#$candles if $max_visible_index > $#$candles;
+
+    return $self->{_vwap_lines} if $max_visible_index == $#$candles;
+    return $self->{_vwap_cache}{$max_visible_index}
+        if exists $self->{_vwap_cache}{$max_visible_index};
+
+    my @prefix = @$candles[0 .. $max_visible_index];
+    my ($lines) = $self->_calculate_lines(\@prefix);
+    $self->{_vwap_cache}{$max_visible_index} = $lines;
+    return $self->{_vwap_cache}{$max_visible_index};
+}
 
 sub _valid_vwap_candle {
     my ($candle) = @_;

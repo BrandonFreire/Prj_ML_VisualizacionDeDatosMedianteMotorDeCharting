@@ -97,6 +97,19 @@ my @auto_lines = grep { ($_->{anchor_source} // '') eq 'missed_pivot_auto' }
 is(scalar @auto_lines, 1, 'compute_all integra exactamente una instancia automática');
 is($auto_lines[0]{anchor_idx}, 3, 'la integración consume el último evento del indicador de pivotes');
 ok($indicator->get_auto_missed_result->{visible}, 'conserva el resultado automático auditable');
+my @historical_auto = grep { ($_->{anchor_source} // '') eq 'missed_pivot_auto' }
+    @{ $indicator->get_vwap_lines_at(2) };
+is(scalar @historical_auto, 1,
+    'Replay reconstruye exactamente una instancia automática histórica');
+is($historical_auto[0]{source_event_id}, 'missed_high_1_2',
+    'Replay usa el último missed pivot confirmado en ese cursor, no el futuro');
+is($historical_auto[0]{end_idx}, 2,
+    'la línea automática histórica termina en la barrera de Replay');
+is($indicator->get_vwap_lines->[0]{source_event_id}, 'missed_low_3_4',
+    'consultar un cursor histórico no muta el AVWAP completo');
+
+eval { $indicator->get_vwap_lines_at('invalido') };
+like($@, qr/max_visible_index/, 'rechaza un cursor AVWAP inválido');
 
 my $large_market = Market::MarketData->new;
 $large_market->add_candle(candle(0, 1e12, 1e12,     1e12,     1e12,     1));

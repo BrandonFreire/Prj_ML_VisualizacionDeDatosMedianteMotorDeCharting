@@ -24,6 +24,8 @@ is($regular->{regular_pivots}[0]{type}, 'high', 'detecta un pivot high regular')
 is($regular->{regular_pivots}[0]{index}, 2, 'el pivot high conserva la vela extrema');
 is($regular->{regular_pivots}[0]{confirmed_at}, 4,
     'el pivot high solo aparece dos velas después');
+is($regular->{regular_pivots}[0]{label}, "\x{25BC}",
+    'el pivot high conserva la marca visual del indicador de referencia');
 is($regular->{regular_pivots}[1]{type}, 'low', 'detecta el pivot low posterior');
 is($regular->{regular_pivots}[1]{index}, 4, 'el pivot low conserva su índice real');
 is($regular->{regular_pivots}[1]{confirmed_at}, 6,
@@ -53,7 +55,7 @@ my @missed_high = grep { $_->{type} eq 'high' } @{ $missed->{missed_pivots} };
 my @missed_low  = grep { $_->{type} eq 'low'  } @{ $missed->{missed_pivots} };
 ok(@missed_high, 'detecta al menos una reversión high omitida');
 ok(@missed_low, 'detecta al menos una reversión low omitida');
-is($missed_high[0]{index}, 16,
+ok(scalar(grep { $_->{index} == 16 } @missed_high),
     'la reversión high omitida usa la secuencia alternante tras normalizar una vela exterior');
 is($missed_low[0]{index}, 8,
     'la reversión low omitida conserva el extremo de la secuencia causal normalizada');
@@ -65,6 +67,19 @@ ok($missed->{provisional_pivot}, 'expone el extremo provisional aún no confirma
 is($missed->{provisional_pivot}{index}, 29,
     'el provisional busca el extremo posterior al último pivot regular');
 ok($missed->{replay_safe}, 'el cálculo completo declara seguridad para Replay');
+is($missed->{missed_pivots}[0]{label}, "\x{1F47B}",
+    'los pivotes omitidos exponen la marca fantasma en su contrato');
+
+my $initial_low = Market::Indicators::PivotMissedReversal->compute(
+    candles => [ c(0, 10, 6), c(1, 8, 4), c(2, 9, 5) ],
+    length => 1,
+);
+is_deeply(
+    [ map { [ $_->{type}, $_->{index}, $_->{confirmed_at} ] }
+      @{ $initial_low->{missed_pivots} } ],
+    [ [ 'high', 0, 2 ] ],
+    'conserva el primer máximo omitido antes del primer pivot low confirmado',
+);
 
 my $disabled = Market::Indicators::PivotMissedReversal->compute(
     candles => \@missed_candles, length => 2, show_missed => 0,
@@ -113,8 +128,14 @@ $stateful->compute(candles => \@missed_candles);
 my ($getter_active) = grep { $_->{active} } @{ $stateful->get_reversal_levels };
 is($getter_active->{end_index}, $#missed_candles,
     'el getter conserva la misma extensión visible que el resultado de compute');
-ok($missed->{missed_pivots}[0]{confirmed} && $missed->{missed_pivots}[0]{pivotTime},
+ok($missed->{missed_pivots}[0]{confirmed}
+    && defined $missed->{missed_pivots}[0]{pivotTime},
     'los missed pivots exponen contrato confirmado apto para consumidores analíticos');
+my $provisional_at_28 = $stateful->get_provisional_pivot_at(28);
+ok($provisional_at_28 && $provisional_at_28->{provisional},
+    'expone el fantasma provisional para un cursor histórico');
+ok($provisional_at_28->{index} <= 28,
+    'el provisional histórico nunca rebasa el cursor solicitado');
 
 eval {
     Market::Indicators::PivotMissedReversal->compute(

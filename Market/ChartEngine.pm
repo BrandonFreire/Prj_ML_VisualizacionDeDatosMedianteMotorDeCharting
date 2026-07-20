@@ -362,6 +362,7 @@ sub _raise_overlay_labels {
 
     $canvas->raise('lq_label')       if $canvas->find( 'withtag', 'lq_label' );
     $canvas->raise('smc_label')      if $canvas->find( 'withtag', 'smc_label' );
+    $canvas->raise('pmr_label')      if $canvas->find( 'withtag', 'pmr_label' );
     $canvas->raise('strategy_label') if $canvas->find( 'withtag', 'strategy_label' );
     $canvas->raise('vp_label')       if $canvas->find( 'withtag', 'vp_label' );
     $canvas->raise('vwap_label')     if $canvas->find( 'withtag', 'vwap_label' );

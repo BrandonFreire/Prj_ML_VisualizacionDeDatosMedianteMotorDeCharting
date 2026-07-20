@@ -43,7 +43,9 @@ sub render {
     $canvas->delete('vp_overlay');
     return unless $self->_visible('vp_enabled', 1);
 
-    my $profiles = $ind->get_profiles() // [];
+    my $profiles = $ind->can('get_profiles_at')
+        ? ($ind->get_profiles_at($current_bar) // [])
+        : ($ind->get_profiles() // []);
     return unless @$profiles;
 
     for my $profile (@$profiles) {
