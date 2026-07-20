@@ -53,8 +53,10 @@ my @missed_high = grep { $_->{type} eq 'high' } @{ $missed->{missed_pivots} };
 my @missed_low  = grep { $_->{type} eq 'low'  } @{ $missed->{missed_pivots} };
 ok(@missed_high, 'detecta al menos una reversión high omitida');
 ok(@missed_low, 'detecta al menos una reversión low omitida');
-is($missed_high[0]{index}, 7, 'la reversión high omitida guarda el extremo correcto');
-is($missed_low[0]{index}, 25, 'la reversión low omitida guarda el extremo correcto');
+is($missed_high[0]{index}, 16,
+    'la reversión high omitida usa la secuencia alternante tras normalizar una vela exterior');
+is($missed_low[0]{index}, 8,
+    'la reversión low omitida conserva el extremo de la secuencia causal normalizada');
 ok($missed_high[0]{confirmed_at} > $missed_high[0]{index},
     'un missed pivot se publica después de estar confirmado');
 is(scalar(grep { $_->{active} } @{ $missed->{reversal_levels} }), 1,
@@ -69,5 +71,44 @@ my $disabled = Market::Indicators::PivotMissedReversal->compute(
 );
 is(scalar @{ $disabled->{missed_pivots} }, 0, 'show_missed desactiva los pivotes omitidos');
 is(scalar @{ $disabled->{reversal_levels} }, 0, 'show_missed también desactiva sus niveles');
+
+my $outside_without_context = [
+    c(0, 9, 1), c(1, 10, 0), c(2, 9, 1), c(3, 9, 1),
+];
+my $outside_first = Market::Indicators::PivotMissedReversal->compute(
+    candles => $outside_without_context, length => 1,
+);
+is(scalar @{ $outside_first->{regular_pivots} }, 0,
+    'una vela exterior sin pivote previo no inventa dirección');
+is($outside_first->{ambiguous_pivots}[0]{resolution}, 'skipped_without_context',
+    'expone la resolución causal de la vela ambigua');
+
+my $after_high = Market::Indicators::PivotMissedReversal->compute(
+    candles => [
+        c(0, 8, 4), c(1, 10, 6), c(2, 9, 5),
+        c(3, 20, 0), c(4, 9, 5), c(5, 8, 4),
+    ], length => 1,
+);
+is_deeply([ map { [ $_->{type}, $_->{index} ] } @{ $after_high->{regular_pivots} } ],
+    [ ['high', 1], ['low', 3] ],
+    'una vela exterior posterior a HIGH se resuelve como LOW para conservar alternancia');
+is($after_high->{ambiguous_pivots}[0]{resolution}, 'low_after_high',
+    'la auditoría conserva la razón de la resolución ambigua');
+
+my $after_low = Market::Indicators::PivotMissedReversal->compute(
+    candles => [
+        c(0, 10, 6), c(1, 8, 4), c(2, 9, 5),
+        c(3, 20, 0), c(4, 9, 5), c(5, 10, 6),
+    ], length => 1,
+);
+is_deeply([ map { [ $_->{type}, $_->{index} ] } @{ $after_low->{regular_pivots} } ],
+    [ ['low', 1], ['high', 3] ],
+    'una vela exterior posterior a LOW se resuelve como HIGH para conservar alternancia');
+
+my ($active_level) = grep { $_->{active} } @{ $missed->{reversal_levels} };
+is($active_level->{end_index}, $#missed_candles,
+    'el nivel de reversión activo se extiende hasta el cursor visible');
+ok($missed->{missed_pivots}[0]{confirmed} && $missed->{missed_pivots}[0]{pivotTime},
+    'los missed pivots exponen contrato confirmado apto para consumidores analíticos');
 
 done_testing();

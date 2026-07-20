@@ -19,6 +19,7 @@ sub new {
         _ob          => [],   # Order Blocks [{index,direction,top,bottom,triggered_by,scope}]
         _major_highs => [],   # external swing highs used as major structure
         _major_lows  => [],   # external swing lows used as major structure
+        _trailing_extremes => undef, # par Strong/Weak vigente
         _candles     => undef, # referencia al arreglo activo para mitigacion visual de FVG
         _lq_ref      => undef, # referencia opcional al indicador Liquidity
     }, $class;
@@ -33,6 +34,7 @@ sub set_liquidity_indicator {
 sub reset {
     my ($self) = @_;
     $self->{$_} = [] for qw(_sh _sl _bos _choch _fvg _ob _trendlines _major_highs _major_lows);
+    $self->{_trailing_extremes} = undef;
 }
 
 sub compute_all {
@@ -156,6 +158,14 @@ sub compute_all {
 
     _annotate_fvg_lifecycle($arr, $self->{_fvg});
     _annotate_order_block_lifecycle($arr, $self->{_ob});
+
+    my @structure_events = (
+        map { { %$_, type => 'BOS' } } @{ $self->{_bos} },
+        map { { %$_, type => 'CHOCH' } } @{ $self->{_choch} },
+    );
+    $self->{_trailing_extremes} = _build_trailing_extremes(
+        $arr, [ @sh_int, @sl_int ], \@structure_events, $n - 1,
+    );
 }
 
 sub _detect_fvgs {
@@ -306,6 +316,74 @@ sub get_ob_zones     { return $_[0]->{_ob}         }
 sub get_trendlines   { return $_[0]->{_trendlines} }
 sub get_major_highs  { return $_[0]->{_major_highs} }
 sub get_major_lows   { return $_[0]->{_major_lows}  }
+sub get_trailing_extremes { return $_[0]->{_trailing_extremes} }
+
+# Calcula únicamente el par de extremos vigente. A diferencia de etiquetar
+# cada pivote histórico, Strong/Weak es una propiedad del contexto estructural
+# actual y por eso se reinicia con cada swing externo confirmado.
+sub _build_trailing_extremes {
+    my ($candles, $pivots, $structures, $max_idx) = @_;
+    return undef unless $candles && @$candles && $pivots && @$pivots;
+    $max_idx = $#$candles unless defined $max_idx;
+    $max_idx = $#$candles if $max_idx > $#$candles;
+    return undef if $max_idx < 0;
+
+    my @external = sort {
+        ($a->{confirmed_at} // 0) <=> ($b->{confirmed_at} // 0)
+            || ($a->{index} // 0) <=> ($b->{index} // 0)
+    } grep {
+        ($_->{scope} // '') eq 'external'
+            && ($_->{confirmed_at} // 9_999_999) < $max_idx
+    } @$pivots;
+    my ($swing_high, $swing_low);
+    for my $pivot (@external) {
+        $swing_high = $pivot if ($pivot->{kind} // $pivot->{type} // '') eq 'high';
+        $swing_low  = $pivot if ($pivot->{kind} // $pivot->{type} // '') eq 'low';
+    }
+    return undef unless $swing_high && $swing_low;
+
+    my ($top, $top_index, $top_time) = @{$swing_high}{qw(price index time)};
+    my ($bottom, $bottom_index, $bottom_time) = @{$swing_low}{qw(price index time)};
+    for my $i (($swing_high->{confirmed_at} // $swing_high->{index}) + 1 .. $max_idx) {
+        next unless defined $candles->[$i]{high};
+        if ($candles->[$i]{high} >= $top) {
+            ($top, $top_index, $top_time) = ($candles->[$i]{high}, $i, $candles->[$i]{time});
+        }
+    }
+    for my $i (($swing_low->{confirmed_at} // $swing_low->{index}) + 1 .. $max_idx) {
+        next unless defined $candles->[$i]{low};
+        if ($candles->[$i]{low} <= $bottom) {
+            ($bottom, $bottom_index, $bottom_time) = ($candles->[$i]{low}, $i, $candles->[$i]{time});
+        }
+    }
+
+    my ($bias, $bias_event, $bias_index) = ('neutral', undef, -1);
+    for my $event (@{ $structures // [] }) {
+        next unless ($event->{scope} // '') eq 'external';
+        next unless ($event->{type} // '') =~ /^(?:BOS|CHOCH)$/;
+        my $index = $event->{confirmation_index} // $event->{confirmed_at} // $event->{index};
+        next unless defined $index && $index < $max_idx && $index >= $bias_index;
+        my $direction = $event->{direction} // '';
+        $direction = 'bullish' if $direction eq 'bull';
+        $direction = 'bearish' if $direction eq 'bear';
+        next unless $direction eq 'bullish' || $direction eq 'bearish';
+        ($bias, $bias_event, $bias_index) = ($direction, $event, $index);
+    }
+
+    return {
+        top => $top + 0, bottom => $bottom + 0,
+        last_top_index => $top_index, last_top_time => $top_time,
+        last_bottom_index => $bottom_index, last_bottom_time => $bottom_time,
+        structural_bias => $bias,
+        high_classification => $bias eq 'bearish' ? 'strong_high' : 'weak_high',
+        low_classification  => $bias eq 'bullish' ? 'strong_low' : 'weak_low',
+        source_high_pivot_id => $swing_high->{id} // join(':', 'high', $swing_high->{index}),
+        source_low_pivot_id  => $swing_low->{id} // join(':', 'low', $swing_low->{index}),
+        source_structure_event_id => $bias_event
+            ? ($bias_event->{id} // join(':', $bias_event->{type}, $bias_index)) : undef,
+        status => 'active', source_logic => 'smc_trailing_extremes', replay_safe => 1,
+    };
+}
 
 # Resultado SMC reconstruido hasta un cursor de Replay. Los getters
 # históricos siguen exponiendo el cálculo completo para el render normal;
@@ -338,6 +416,7 @@ sub snapshot_at {
         trendlines  => $snapshot->get_trendlines(),
         major_highs => $snapshot->get_major_highs(),
         major_lows  => $snapshot->get_major_lows(),
+        trailing_extremes => $snapshot->get_trailing_extremes(),
     };
 }
 

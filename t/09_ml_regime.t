@@ -82,6 +82,18 @@ my $insufficient = Market::ML::RegimeClassifier->new(
 ok(!$insufficient->{available}, 'rechaza un entrenamiento insuficiente sin inventar un régimen');
 is($insufficient->{reason}, 'insufficient_training_samples', 'expone la causa del rechazo');
 
+my @flat_rows = map {
+    feature_row($_, [1, 1, 1, 1, 1])
+} 0 .. 59;
+my $flat = Market::ML::RegimeClassifier->new(
+    clusters => 3, min_samples => 20,
+)->fit(rows => \@flat_rows, train_end_index => 59);
+ok(!$flat->{available}, 'no inventa regímenes cuando todas las observaciones son idénticas');
+is($flat->{reason}, 'degenerate_training_data',
+    'expone que no hay patrones distintos suficientes para formar clusters');
+is($flat->{unique_training_points}, 1,
+    'cuantifica los patrones distintos usados por la validación');
+
 my @pipeline_candles = map {
     my $close = $_ < 35 ? 100 + (($_ % 2) ? 0.10 : -0.10)
               : $_ < 70 ? 100 + ($_ - 35) * 0.40
@@ -103,5 +115,69 @@ is($pipeline_result->{feature_set}{max_visible_index}, 90,
 is($pipeline_result->{series}[0]{index}, 71,
     'la tubería predice solo tras train_end_index');
 ok($pipeline_result->{replay_safe}, 'la tubería conserva el contrato replay-safe');
+
+my $probabilistic = Market::ML::RegimePipeline->new(
+    feature_window => 10, clusters => 3, min_samples => 30, algorithm => 'gmm_hmm',
+)->compute(
+    candles => \@pipeline_candles, atr_series => [ (1) x scalar(@pipeline_candles) ],
+    train_end_index => 70, max_visible_index => 90,
+);
+ok($probabilistic->{available}, 'la opción GMM/HMM entrena solo con el tramo histórico');
+is($probabilistic->{model}{algorithm}, 'diagonal_gmm_forward_hmm', 'identifica el modelo probabilístico usado');
+is($probabilistic->{series}[0]{index}, 71, 'GMM/HMM emite únicamente estados posteriores al entrenamiento');
+ok($probabilistic->{series}[0]{replay_safe}, 'los estados GMM/HMM se emiten con filtro causal');
+my @probabilistic_future = (@pipeline_candles, map { candle($_ + 100, 1_000 + $_, 1) } 0 .. 4);
+my $same_probabilistic_prefix = Market::ML::RegimePipeline->new(
+    feature_window => 10, clusters => 3, min_samples => 30, algorithm => 'gmm_hmm',
+)->compute(
+    candles => \@probabilistic_future, atr_series => [ (1) x scalar(@probabilistic_future) ],
+    train_end_index => 70, max_visible_index => 90,
+);
+is_deeply(
+    [ map { { index => $_->{index}, state => $_->{state}, posterior => $_->{posterior} } } @{$same_probabilistic_prefix->{series}} ],
+    [ map { { index => $_->{index}, state => $_->{state}, posterior => $_->{posterior} } } @{$probabilistic->{series}} ],
+    'velas futuras fuera del cursor no modifican los estados GMM/HMM ya evaluables',
+);
+
+my $walk_forward = Market::ML::RegimePipeline->new(
+    feature_window => 10, clusters => 3, min_samples => 30, max_iter => 20,
+    algorithm => 'gmm_hmm', walk_forward => 1,
+)->compute(
+    candles => \@pipeline_candles, atr_series => [ (1) x scalar(@pipeline_candles) ],
+    train_end_index => 70, max_visible_index => 75,
+);
+ok($walk_forward->{available}, 'walk-forward expansivo entrena y emite estados causales');
+is($walk_forward->{model}{algorithm}, 'expanding_walk_forward_diagonal_gmm_forward_hmm',
+    'distingue explícitamente el modo de reentrenamiento por barra');
+is($walk_forward->{series}[0]{index}, 71, 'el primer estado walk-forward no usa su propia vela para el ajuste');
+is($walk_forward->{series}[0]{trained_through}, 70, 'cada estado registra el último índice incluido al entrenar');
+ok($walk_forward->{series}[0]{walk_forward} && $walk_forward->{series}[0]{replay_safe},
+    'el resultado walk-forward conserva el contrato causal');
+
+for my $case (
+    [ 'OHLC invertido', [ { time => 0, high => 1, low => 2, close => 1.5 } ], qr/high menor que low/ ],
+    [ 'cierre cero', [ { time => 0, high => 1, low => 0, close => 0 } ], qr/close cero/ ],
+    [ 'ATR negativo', [ candle(0, 100, 10) ], qr/atr_series\[0\] invalido/ ],
+) {
+    my $error;
+    eval {
+        Market::ML::FeatureExtractor->extract(
+            candles => $case->[1], atr_series => $case->[0] eq 'ATR negativo' ? [-1] : [],
+        );
+    };
+    $error = $@;
+    like($error, $case->[2], "rechaza $case->[0] en vez de calcular features corruptas");
+}
+
+eval { Market::ML::RegimePipeline->new(training_ratio => 1.1) };
+like($@, qr/training_ratio/, 'rechaza una proporción de entrenamiento fuera de rango');
+eval { $pipeline->compute(candles => \@pipeline_candles, max_visible_index => -1) };
+like($@, qr/max_visible_index/, 'rechaza cursor visible negativo en vez de truncarlo de forma ambigua');
+my $empty_features = Market::ML::FeatureExtractor->extract(candles => []);
+is_deeply($empty_features->{rows}, [], 'una serie vacía conserva un resultado vacío válido');
+eval { $pipeline->compute(candles => \@pipeline_candles, clusters => 1) };
+like($@, qr/clusters/, 'no normaliza silenciosamente una configuración ML inválida');
+eval { Market::ML::RegimeClassifier->new(clusters => 1) };
+like($@, qr/clusters/, 'el clasificador directo también rechaza una configuración inválida');
 
 done_testing();

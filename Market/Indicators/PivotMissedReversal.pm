@@ -17,6 +17,7 @@ sub new {
         _regular     => [],
         _missed      => [],
         _levels      => [],
+        _ambiguous   => [],
     }, $class;
 }
 
@@ -25,6 +26,7 @@ sub reset {
     $self->{_regular} = [];
     $self->{_missed}  = [];
     $self->{_levels}  = [];
+    $self->{_ambiguous} = [];
     $self->{_candles} = undef;
     return;
 }
@@ -86,8 +88,30 @@ sub compute {
 
         my $pivot_high = _is_pivot($self->{_candles}, $center, $length, 'high');
         my $pivot_low  = _is_pivot($self->{_candles}, $center, $length, 'low');
-        # Empates se asignan al extremo derecho; evita dos pivotes iguales.
-        $pivot_high = 0 if $pivot_high && $pivot_low;
+        # Una vela exterior puede ser a la vez máximo y mínimo local. Emitir
+        # ambos pivotes crearía un tramo de longitud cero; elegir siempre LOW
+        # (la regla anterior) sesgaba la serie. Se conserva la alternancia
+        # frente al último pivote confirmado y, si aún no hay contexto, se
+        # deja la vela como ambigua sin inventar dirección.
+        if ($pivot_high && $pivot_low) {
+            my $resolution = !defined($last_type) ? 'skipped_without_context'
+                : $last_type eq 'high' ? 'low_after_high'
+                : 'high_after_low';
+            push @{ $self->{_ambiguous} }, {
+                index => $center, time => $candle->{time}, confirmed_at => $n,
+                confirmed_time => $series[$n]{time}, resolution => $resolution,
+                replay_safe => 1,
+            };
+            if (!defined $last_type) {
+                ($pivot_high, $pivot_low) = (0, 0);
+            }
+            elsif ($last_type eq 'high') {
+                $pivot_high = 0;
+            }
+            else {
+                $pivot_low = 0;
+            }
+        }
 
         if ($pivot_high) {
             if ($self->{show_missed} && defined $last_type) {
@@ -133,8 +157,12 @@ sub _add_regular {
     my ($self, $type, $index, $price, $confirmed_at) = @_;
     push @{ $self->{_regular} }, {
         id           => join('_', 'regular', $type, $index, $confirmed_at),
-        source       => 'regular', type => $type, index => $index,
+        kind         => 'regularPivot', status => 'confirmed', confirmed => 1,
+        source       => 'regular', type => $type, pivotType => $type, index => $index,
         time         => $self->{_candles}[$index]{time}, price => $price + 0,
+        pivotTime    => $self->{_candles}[$index]{time},
+        confirmationIndex => $confirmed_at,
+        confirmationTime => $self->{_candles}[$confirmed_at]{time},
         confirmed_at => $confirmed_at,
         confirmed_time => $self->{_candles}[$confirmed_at]{time},
         label        => $type eq 'high' ? 'HIGH' : 'LOW',
@@ -155,9 +183,14 @@ sub _add_missed {
     my $id = join('_', 'missed', $type, $index, $confirmed_at, scalar @{ $self->{_missed} });
     my $event = {
         _key         => $key,
-        id           => $id, source => 'missed', type => $type,
+        id           => $id, kind => 'missedPivot', status => 'confirmed', confirmed => 1,
+        eventType    => $type eq 'high' ? 'missedPivotHigh' : 'missedPivotLow',
+        source       => 'missed', type => $type, pivotType => $type,
         index        => $index, time => $self->{_candles}[$index]{time},
         price        => $price + 0, confirmed_at => $confirmed_at,
+        pivotTime    => $self->{_candles}[$index]{time},
+        confirmationIndex => $confirmed_at,
+        confirmationTime => $self->{_candles}[$confirmed_at]{time},
         confirmed_time => $self->{_candles}[$confirmed_at]{time},
         reason       => $reason, label => 'MISSED', replay_safe => 1,
     };
@@ -198,7 +231,12 @@ sub _result {
         max_visible_index  => $max_idx,
         regular_pivots     => [ map { { %$_ } } @{ $self->{_regular} } ],
         missed_pivots      => [ map { my %copy = %$_; delete $copy{_key}; \%copy } @{ $self->{_missed} } ],
-        reversal_levels    => [ map { { %$_ } } @{ $self->{_levels} } ],
+        reversal_levels    => [ map {
+            my %copy = %$_;
+            $copy{end_index} = $max_idx if $copy{active};
+            \%copy;
+        } @{ $self->{_levels} } ],
+        ambiguous_pivots   => [ map { { %$_ } } @{ $self->{_ambiguous} } ],
         provisional_pivot  => $provisional,
         replay_safe        => 1,
     };

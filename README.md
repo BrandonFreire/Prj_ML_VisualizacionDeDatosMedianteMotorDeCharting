@@ -49,6 +49,21 @@ my $regimes = $ml->compute(
 );
 ```
 
+Además del K-means determinista predeterminado, se puede usar una mezcla
+gaussiana diagonal con HMM. El filtro HMM es hacia adelante: un estado en la
+vela `i` no usa observaciones posteriores. Para una evaluación más estricta,
+`walk_forward => 1` reentrena de forma expansiva antes de cada predicción;
+es más costoso y está pensado para validación, no para una actualización de
+pantalla en cada tick.
+
+```perl
+my $ml = Market::ML::RegimePipeline->new(
+    feature_window => 20,
+    algorithm      => 'gmm_hmm',
+    walk_forward   => 1,
+);
+```
+
 `Market::Indicators::PivotMissedReversal` ofrece pivotes regulares,
 reversiones omitidas, su nivel activo y un extremo provisional. Los eventos
 se publican al confirmarse, nunca en la vela extrema con información futura.

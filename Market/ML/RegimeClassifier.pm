@@ -9,12 +9,14 @@ use warnings;
 
 sub new {
     my ($class, %args) = @_;
-    return bless {
+    my $self = {
         clusters   => $args{clusters}   // 3,
         min_samples=> $args{min_samples}// 60,
         max_iter   => $args{max_iter}   // 50,
         _model     => undef,
-    }, $class;
+    };
+    _validate_config($self, 'RegimeClassifier::new');
+    return bless $self, $class;
 }
 
 sub fit {
@@ -24,12 +26,13 @@ sub fit {
         unless ref($rows) eq 'ARRAY';
     my $train_end = $args{train_end_index};
     $train_end = _last_index($rows) unless defined $train_end;
-    my $clusters = int($args{clusters} // $self->{clusters});
-    my $min_samples = int($args{min_samples} // $self->{min_samples});
-    my $max_iter = int($args{max_iter} // $self->{max_iter});
-    $clusters = 2 if $clusters < 2;
-    $min_samples = $clusters if $min_samples < $clusters;
-    $max_iter = 1 if $max_iter < 1;
+    my $config = {
+        clusters => $args{clusters} // $self->{clusters},
+        min_samples => $args{min_samples} // $self->{min_samples},
+        max_iter => $args{max_iter} // $self->{max_iter},
+    };
+    _validate_config($config, 'RegimeClassifier::fit');
+    my ($clusters, $min_samples, $max_iter) = @{$config}{qw(clusters min_samples max_iter)};
 
     my @train = grep {
         ($_->{available} // 0) && defined($_->{index}) && $_->{index} <= $train_end
@@ -60,9 +63,24 @@ sub fit {
         my $row = $_;
         [ map { ($row->{features}[$_] - $means[$_]) / $scales[$_] } 0 .. $dim - 1 ]
     } @train;
+    # K-means no puede extraer tres regímenes de un conjunto plano (o con
+    # menos patrones distintos que clusters). Sin esta guarda los centroides
+    # quedan duplicados y el desempate por índice etiqueta artificialmente
+    # todo como VOLATILE. Es preferible no emitir un régimen que inventarlo.
+    my $unique_points = _unique_point_count(\@points);
+    if ($unique_points < $clusters) {
+        return $self->{_model} = {
+            available => 0, reason => 'degenerate_training_data',
+            training_max_index => $train_end, training_samples => scalar @train,
+            unique_training_points => $unique_points,
+            required_distinct_points => $clusters,
+            replay_safe => 1,
+        };
+    }
     my @centroids = _initial_centroids(\@points, $clusters);
     my @assignments = (0) x @points;
     my $iterations = 0;
+    my @cluster_counts;
     for my $iteration (1 .. $max_iter) {
         $iterations = $iteration;
         my $changed = 0;
@@ -71,23 +89,33 @@ sub fit {
             $changed = 1 if $cluster != $assignments[$i];
             $assignments[$i] = $cluster;
         }
-        my (@sums, @counts);
+        my @sums;
+        @cluster_counts = (0) x $clusters;
         for my $cluster (0 .. $clusters - 1) {
             $sums[$cluster] = [ (0) x $dim ];
-            $counts[$cluster] = 0;
         }
         for my $i (0 .. $#points) {
             my $cluster = $assignments[$i];
-            $counts[$cluster]++;
+            $cluster_counts[$cluster]++;
             $sums[$cluster][$_] += $points[$i][$_] for 0 .. $dim - 1;
         }
         for my $cluster (0 .. $clusters - 1) {
-            next unless $counts[$cluster];
+            next unless $cluster_counts[$cluster];
             $centroids[$cluster] = [ map {
-                $sums[$cluster][$_] / $counts[$cluster]
+                $sums[$cluster][$_] / $cluster_counts[$cluster]
             } 0 .. $dim - 1 ];
         }
         last unless $changed;
+    }
+
+    if (grep { $_ == 0 } @cluster_counts) {
+        return $self->{_model} = {
+            available => 0, reason => 'collapsed_clusters',
+            training_max_index => $train_end, training_samples => scalar @train,
+            unique_training_points => $unique_points,
+            cluster_counts => [ @cluster_counts ],
+            replay_safe => 1,
+        };
     }
 
     my @raw_centroids = map {
@@ -107,6 +135,8 @@ sub fit {
         state_by_cluster   => \%states,
         training_max_index => $train_end + 0,
         training_samples   => scalar @train,
+        unique_training_points => $unique_points,
+        cluster_counts     => [ @cluster_counts ],
         iterations         => $iterations,
         replay_safe        => 1,
     };
@@ -183,6 +213,19 @@ sub _initial_centroids {
     return @centroids;
 }
 
+sub _unique_point_count {
+    my ($points) = @_;
+    my %seen;
+    for my $point (@$points) {
+        # Los puntos ya están estandarizados. Una representación estable evita
+        # que ruido binario irrelevante convierta copias del mismo patrón en
+        # clusters aparentes.
+        my $key = join "\x1E", map { sprintf('%.15g', $_) } @$point;
+        $seen{$key} = 1;
+    }
+    return scalar keys %seen;
+}
+
 sub _nearest_cluster {
     my ($point, $centroids, $return_distance) = @_;
     my ($best, $best_distance) = (0, 9e99);
@@ -230,9 +273,25 @@ sub _finite_vector {
     my ($vector) = @_;
     return 0 unless ref($vector) eq 'ARRAY' && @$vector;
     for my $value (@$vector) {
-        return 0 unless defined $value && $value == $value && abs($value) <= 1e300;
+        return 0 unless _finite_number($value);
     }
     return 1;
+}
+
+sub _validate_config {
+    my ($cfg, $context) = @_;
+    die "$context: clusters debe ser entero >= 2"
+        unless defined $cfg->{clusters} && $cfg->{clusters} =~ /^\d+$/ && $cfg->{clusters} >= 2;
+    die "$context: min_samples debe ser entero >= clusters"
+        unless defined $cfg->{min_samples} && $cfg->{min_samples} =~ /^\d+$/ && $cfg->{min_samples} >= $cfg->{clusters};
+    die "$context: max_iter debe ser entero >= 1"
+        unless defined $cfg->{max_iter} && $cfg->{max_iter} =~ /^\d+$/ && $cfg->{max_iter} >= 1;
+}
+
+sub _finite_number {
+    my ($value) = @_;
+    return defined $value && $value =~ /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/
+        && $value == $value && abs($value) <= 1e300;
 }
 
 1;

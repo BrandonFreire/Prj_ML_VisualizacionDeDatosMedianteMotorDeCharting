@@ -33,6 +33,8 @@ sub new {
         _candles           => undef,
         _smc_ref           => undef,
         _vp_ref            => undef,  # VolumeProfile indicator
+        _pivot_ref         => undef,  # PivotMissedReversal para AVWAP automático
+        _auto_missed_result=> undef,
     }, $class;
 }
 
@@ -46,10 +48,16 @@ sub set_vp_indicator {
     $self->{_vp_ref} = $vp;
 }
 
+sub set_pivot_missed_indicator {
+    my ($self, $pivot) = @_;
+    $self->{_pivot_ref} = $pivot;
+}
+
 sub reset {
     my ($self) = @_;
     @{ $self->{_vwap_lines} } = () if $self->{_vwap_lines};
     $self->{_candles}    = undef;
+    $self->{_auto_missed_result} = undef;
 }
 
 sub add_manual_anchor {
@@ -167,7 +175,137 @@ sub compute_all {
         };
     }
 
+    # El AVWAP de missed pivot es independiente del modo manual/multipivot:
+    # solo existe tras la confirmación del último evento y se recalcula desde
+    # su vela extrema. No añade ni conserva instancias históricas obsoletas.
+    if (my $pivot = $self->{_pivot_ref}) {
+        my $events = $pivot->can('get_missed_pivots') ? $pivot->get_missed_pivots() : [];
+        my $auto = $self->compute_missed_pivot_auto(
+            candles => $arr, missed_pivot_events => $events,
+        );
+        $self->{_auto_missed_result} = $auto;
+        push @vwap_lines, $auto->{line} if $auto->{visible} && $auto->{line};
+    }
+
     @{ $self->{_vwap_lines} } = @vwap_lines;
+}
+
+# Construye una única instancia desde el missed pivot confirmado más reciente.
+# El tramo comienza en la vela del extremo, pero no se expone hasta que su
+# confirmationIndex ya pertenece al cursor visible. Así se conserva la
+# geometría histórica sin adelantar una señal al Replay.
+sub compute_missed_pivot_auto {
+    my ($class_or_self, %args) = @_;
+    my $self = ref($class_or_self) ? $class_or_self : $class_or_self->new(%args);
+    my $candles = $args{candles} // [];
+    die 'AnchoredVWAP::compute_missed_pivot_auto: candles debe ser un arrayref'
+        unless ref($candles) eq 'ARRAY';
+    my $max_idx = defined $args{max_visible_index} ? int($args{max_visible_index}) : $#$candles;
+    $max_idx = $#$candles if $max_idx > $#$candles;
+    return {
+        visible => 0, reason => 'no_candles', line => undef,
+        selected_event => undef, replay_safe => 1,
+    } if $max_idx < 0;
+
+    my $event = _latest_confirmed_missed_pivot(
+        $args{missed_pivot_events} // $args{events} // [], $candles, $max_idx,
+    );
+    return {
+        visible => 0, reason => 'no_confirmed_missed_pivot', line => undef,
+        selected_event => undef, replay_safe => 1,
+    } unless $event;
+
+    my $line = $self->_build_auto_missed_line($candles, $max_idx, $event);
+    return {
+        visible => $line ? 1 : 0,
+        reason => $line ? undef : 'no_valid_vwap_points',
+        line => $line, selected_event => { %$event }, replay_safe => 1,
+    };
+}
+
+sub _build_auto_missed_line {
+    my ($self, $candles, $max_idx, $event) = @_;
+    my $start = $event->{index};
+    return undef unless defined($start) && $start >= 0 && $start <= $max_idx;
+    # La serie resultante no reserva índices posteriores al cursor: incluso
+    # valores undef revelarían la longitud futura a un consumidor de Replay.
+    my $n = $max_idx + 1;
+    my (@values, @std_dev);
+    $#values = $#std_dev = $n - 1 if $n;
+    my ($weight, $mean, $m2, $last) = (0, 0, 0, undef);
+    for my $i ($start .. $max_idx) {
+        my $c = $candles->[$i] // next;
+        next unless defined($c->{high}) && defined($c->{low}) && defined($c->{close})
+                 && defined($c->{volume}) && $c->{volume} > 0;
+        my $price = ($c->{high} + $c->{low} + $c->{close}) / 3;
+        my $new_weight = $weight + $c->{volume};
+        my $delta = $price - $mean;
+        my $next_mean = $mean + $c->{volume} / $new_weight * $delta;
+        $m2 += $c->{volume} * $delta * ($price - $next_mean);
+        ($weight, $mean) = ($new_weight, $next_mean);
+        my $variance = $weight > 0 ? $m2 / $weight : 0;
+        $variance = 0 if $variance < 0 && $variance > -1e-12;
+        my $deviation = $variance > 0 ? sqrt($variance) : 0;
+        $values[$i] = $mean + 0;
+        $std_dev[$i] = $deviation + 0;
+        $last = $i;
+    }
+    return undef unless defined $last;
+
+    return {
+        id           => join('_', 'auto_missed_vwap', $event->{id}, $event->{index}, $event->{confirmed_at}),
+        anchor_idx   => $start,
+        end_idx      => $last,
+        anchor_source => 'missed_pivot_auto',
+        source_event_id => $event->{id},
+        missed_pivot_id  => $event->{id},
+        pivot_type       => $event->{pivotType} // $event->{type},
+        pivot_price      => $event->{price} + 0,
+        pivot_time       => $event->{pivotTime} // $event->{time},
+        confirmation_index => $event->{confirmationIndex} // $event->{confirmed_at},
+        confirmation_time  => $event->{confirmationTime} // $event->{confirmed_time},
+        confirmed      => 1,
+        values         => \@values,
+        std_dev        => \@std_dev,
+        mult_1         => $self->{std_mult_1},
+        mult_2         => $self->{std_mult_2},
+        mult_3         => $self->{std_mult_3},
+        band_1_enabled => $self->{band_1_enabled} ? 1 : 0,
+        band_2_enabled => $self->{band_2_enabled} ? 1 : 0,
+        band_3_enabled => $self->{band_3_enabled} ? 1 : 0,
+        replay_safe    => 1,
+    };
+}
+
+sub _latest_confirmed_missed_pivot {
+    my ($events, $candles, $max_idx) = @_;
+    return undef unless ref($events) eq 'ARRAY';
+    my @eligible;
+    for my $event (@$events) {
+        next unless ref($event) eq 'HASH';
+        next unless ($event->{kind} // '') eq 'missedPivot';
+        next unless $event->{confirmed};
+        my $kind = $event->{pivotType} // $event->{type} // '';
+        next unless $kind eq 'high' || $kind eq 'low';
+        my $index = $event->{index};
+        my $confirmed_at = $event->{confirmationIndex} // $event->{confirmed_at};
+        next unless defined($index) && $index =~ /^\d+$/
+                 && defined($confirmed_at) && $confirmed_at =~ /^\d+$/;
+        next if $index > $max_idx || $confirmed_at > $max_idx || $confirmed_at < $index;
+        next unless defined($candles->[$index]);
+        push @eligible, {
+            %$event, index => int($index), confirmed_at => int($confirmed_at),
+            confirmationIndex => int($confirmed_at), pivotType => $kind,
+            id => $event->{id} // join('_', 'missed_pivot', $kind, $index, $confirmed_at),
+        };
+    }
+    return undef unless @eligible;
+    @eligible = sort {
+        $b->{confirmed_at} <=> $a->{confirmed_at}
+            || $b->{index} <=> $a->{index}
+            || $b->{id} cmp $a->{id}
+    } @eligible;
+    return $eligible[0];
 }
 
 sub _collect_anchors {
@@ -227,6 +365,7 @@ sub _collect_anchors {
 # Accessors
 # ================================================================
 sub get_vwap_lines { return $_[0]->{_vwap_lines} }
+sub get_auto_missed_result { return $_[0]->{_auto_missed_result} }
 
 
 

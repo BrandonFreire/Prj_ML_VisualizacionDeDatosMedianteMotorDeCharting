@@ -23,12 +23,21 @@ sub extract {
     my $window = $args{window};
     $window = $class_or_self->{window} if !defined($window) && ref($class_or_self);
     $window = 20 unless defined $window;
-    $window = int($window);
-    die 'FeatureExtractor::extract: window debe ser >= 2' if $window < 2;
+    die 'FeatureExtractor::extract: window debe ser un entero >= 2'
+        unless defined $window && $window =~ /^\d+$/ && $window >= 2;
+    $window += 0;
 
     my $n = scalar @$candles;
-    my $max_idx = defined $args{max_visible_index}
-        ? int($args{max_visible_index}) : $n - 1;
+    return {
+        feature_names => [qw(return_1 trend_return volatility atr_pct volume_ratio)],
+        window => $window, rows => [], max_visible_index => -1,
+        replay_safe => 1,
+    } unless $n;
+    my $max_idx = $args{max_visible_index};
+    $max_idx = $n - 1 unless defined $max_idx;
+    die 'FeatureExtractor::extract: max_visible_index debe ser un entero no negativo'
+        unless $max_idx =~ /^\d+$/;
+    $max_idx += 0;
     $max_idx = $n - 1 if $max_idx > $n - 1;
     return {
         feature_names => [qw(return_1 trend_return volatility atr_pct volume_ratio)],
@@ -79,6 +88,8 @@ sub extract {
             ? abs(($candle->{high} // $close) - ($candle->{low} // $close)) / abs($close)
             : 0;
         my $atr = $atr_series->[$i];
+        die "FeatureExtractor: atr_series[$i] invalido"
+            if defined($atr) && (!_finite($atr) || $atr < 0);
         my $atr_pct = defined($atr) && $close != 0 ? abs($atr / $close) : $range_pct;
         my $avg_volume = $count ? $sum_volume / $count : 0;
         my $volume_ratio = $avg_volume > 0 ? $volume / $avg_volume : 1;
@@ -111,15 +122,25 @@ sub extract {
 
 sub _validate_candle {
     my ($candle, $index) = @_;
+    die "FeatureExtractor: vela $index invalida"
+        unless ref($candle) eq 'HASH';
     for my $field (qw(high low close)) {
-        die "FeatureExtractor: vela $index sin $field"
-            unless defined $candle->{$field};
+        die "FeatureExtractor: vela $index sin $field numerico finito"
+            unless _finite($candle->{$field});
+    }
+    die "FeatureExtractor: vela $index con high menor que low"
+        if $candle->{high} < $candle->{low};
+    die "FeatureExtractor: vela $index con close cero"
+        if $candle->{close} == 0;
+    if (defined $candle->{volume}) {
+        die "FeatureExtractor: vela $index con volumen invalido"
+            unless _finite($candle->{volume}) && $candle->{volume} >= 0;
     }
 }
 
 sub _finite {
     my ($value) = @_;
-    return 0 unless defined $value;
+    return 0 unless defined $value && $value =~ /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
     return 0 if $value != $value; # NaN
     return 0 if abs($value) > 1e300;
     return 1;

@@ -3,6 +3,7 @@ package Market::Indicators::Strategy_Builder;
 use strict;
 use warnings;
 use Market::Backtest;
+use Market::Indicators::TrendChannels;
 
 # DIY Custom Strategy Builder — Motor de cálculo (Sección 6)
 #
@@ -50,6 +51,7 @@ sub new {
         _supply_zones  => [],
         _demand_zones  => [],
         _signals       => [],
+        _trend_channels=> [],
         _candles       => undef,
         _smc_ref       => undef,   # ref a SMC_Structures para OBs
     }, $class;
@@ -62,7 +64,7 @@ sub set_smc_indicator {
 
 sub reset {
     my ($self) = @_;
-    $self->{$_} = [] for qw(_supertrend _halftrend _range_filter _atr _supply_zones _demand_zones _signals);
+    $self->{$_} = [] for qw(_supertrend _halftrend _range_filter _atr _supply_zones _demand_zones _signals _trend_channels);
     $self->{_candles} = undef;
 }
 
@@ -93,6 +95,17 @@ sub compute_all {
 
     # 5 & 6. Supply / Demand Zones (basados en OBs de SMC)
     $self->_compute_supply_demand($arr, $market);
+
+    # 7. Canales paralelos basados exclusivamente en pivotes confirmados.
+    my @pivots;
+    if (my $smc = $self->{_smc_ref}) {
+        push @pivots, @{ $smc->get_swing_highs() // [] } if $smc->can('get_swing_highs');
+        push @pivots, @{ $smc->get_swing_lows()  // [] } if $smc->can('get_swing_lows');
+    }
+    $self->{_trend_channels} = Market::Indicators::TrendChannels->compute(
+        candles => $arr, atr_series => \@atr, pivots => \@pivots,
+        max_visible_index => $n - 1,
+    );
 }
 
 # ================================================================
@@ -551,5 +564,6 @@ sub get_atr          { return $_[0]->{_atr}           }
 sub get_supply_zones { return $_[0]->{_supply_zones}  }
 sub get_demand_zones { return $_[0]->{_demand_zones}  }
 sub get_signals      { return $_[0]->{_signals}       }
+sub get_trend_channels { return $_[0]->{_trend_channels} }
 
 1;

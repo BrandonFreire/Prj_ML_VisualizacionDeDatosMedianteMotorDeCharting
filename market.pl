@@ -40,6 +40,9 @@ use Market::Indicators::ZigZagDirection;
 use Market::Indicators::Strategy_Builder;
 use Market::Indicators::VolumeProfile;
 use Market::Indicators::AnchoredVWAP;
+use Market::Indicators::PivotMissedReversal;
+use Market::Indicators::InternalZigZag;
+use Market::Indicators::ZonaInterna;
 use Market::Overlays::SMC_Structures;
 use Market::Overlays::Liquidity;
 use Market::Overlays::ZigZagDirection;
@@ -118,6 +121,26 @@ printf "  ZigZag externo: %d pivotes / %d segmentos  |  interno: %d pivotes / %d
     scalar @{ $zz_ind->get_internal_segments() };
 print "Done.\n";
 
+# ---- 3a. ZigZag interno confirmado y ZonaInterna Fibonacci ----
+# Estos cálculos son independientes de cualquier overlay: consumen ATR y
+# pivotes confirmados, por lo que pueden emplearse también en Replay/backtest.
+print "Computing confirmed Internal ZigZag and ZonaInterna...\n";
+my $internal_zz_ind = Market::Indicators::InternalZigZag->new(
+    pivot_length => 5, min_leg_bars => 4, atr_multiplier => 1.0,
+    atr_indicator => $indicators->get('ATR'),
+);
+$internal_zz_ind->compute_all($market);
+my $zona_interna_ind = Market::Indicators::ZonaInterna->new(
+    zigzag_indicator => $internal_zz_ind,
+    mintick => 0.01,
+);
+$zona_interna_ind->compute_all($market);
+printf "  Internal ZigZag: %d pivotes / %d segmentos  |  ZonaInterna: %d niveles\n",
+    scalar @{ $internal_zz_ind->get_pivots() },
+    scalar @{ $internal_zz_ind->get_segments() },
+    scalar @{ $zona_interna_ind->get_levels() };
+print "Done.\n";
+
 # ---- 3b. Computar indicador SMC (Swing Points, BOS, FVG) ----
 # ---- 3b. Maquina de estados de Liquidez (SWEEP / GRAB / RUN) ----
 print "Computing Liquidity state machine (SWEEP/GRAB/RUN)...\n";
@@ -193,6 +216,15 @@ printf "  Perfiles generados: %d\n", scalar @{ $vp_ind->get_profiles() };
 print "Done.\n";
 
 # ---- 3g. Anchored VWAP Multipivot (5 anchors) ----
+print "Computing Pivot Missed Reversal...\n";
+my $pivot_missed_ind = Market::Indicators::PivotMissedReversal->new(length => 20);
+$pivot_missed_ind->compute_all($market);
+printf "  Regular: %d  Missed: %d\n",
+    scalar @{ $pivot_missed_ind->get_regular_pivots() },
+    scalar @{ $pivot_missed_ind->get_missed_pivots() };
+print "Done.\n";
+
+# ---- 3h. Anchored VWAP Multipivot + último missed pivot confirmado ----
 print "Computing Anchored VWAP...\n";
 my $vwap_ind = Market::Indicators::AnchoredVWAP->new(
     # Multiplicadores editables con
@@ -204,6 +236,7 @@ my $vwap_ind = Market::Indicators::AnchoredVWAP->new(
 );
 $vwap_ind->set_smc_indicator($smc_ind);
 $vwap_ind->set_vp_indicator($vp_ind);
+$vwap_ind->set_pivot_missed_indicator($pivot_missed_ind);
 $vwap_ind->compute_all($market);
 printf "  Lineas VWAP: %d\n", scalar @{ $vwap_ind->get_vwap_lines() };
 print "Done.\n";
