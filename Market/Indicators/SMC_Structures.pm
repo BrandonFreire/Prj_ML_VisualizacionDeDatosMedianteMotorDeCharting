@@ -40,10 +40,17 @@ sub compute_all {
     $self->reset();
 
     my $arr = $market->_active_array();
+    $self->{_market} = $market;
     $self->{_candles} = $arr;
     my $n   = scalar @$arr;
     my $k   = $self->{depth};
-    return if $n < 2 * $k + 2;
+    if ($n < 2 * $k + 2) {
+        # Un FVG confirmado necesita tres velas, no una estructura de pivotes
+        # completa. No se debe ocultar durante el warm-up de SMC.
+        _detect_fvgs($arr, $self->{_fvg}, {});
+        _annotate_fvg_lifecycle($arr, $self->{_fvg});
+        return;
+    }
     my $external_k = _adaptive_external_depth(
         $n,
         $self->{external_depth} // ($k * 5),
@@ -143,12 +150,24 @@ sub compute_all {
     # ----------------------------------------------------------------
     $self->{_trendlines} = _detect_trendlines($arr, \@sh_int, \@sl_int);
 
-    # ----------------------------------------------------------------
-    # 6. Fair Value Gaps (FVG) — patron de 3 velas
-    #    Bullish FVG:  Low[i+1] > High[i-1]  (hueco al alza)
-    #    Bearish FVG:  High[i+1] < Low[i-1]  (hueco a la baja)
-    # ----------------------------------------------------------------
-    for my $i ( 1 .. $n - 2 ) {
+    # 6. Fair Value Gaps (FVG) — patrón de tres velas, independiente de que
+    # ya haya pivotes suficientes para construir BOS/CHoCH.
+    _detect_fvgs($arr, $self->{_fvg}, \%liquidity_at_index);
+
+    _annotate_fvg_lifecycle($arr, $self->{_fvg});
+    _annotate_order_block_lifecycle($arr, $self->{_ob});
+}
+
+sub _detect_fvgs {
+    my ($arr, $fvgs, $liquidity_lookup) = @_;
+    return unless $arr && $fvgs;
+    $liquidity_lookup //= {};
+    my $n = scalar @$arr;
+    return if $n < 3;
+
+    # Bullish FVG: Low[i+1] > High[i-1].
+    # Bearish FVG: High[i+1] < Low[i-1].
+    for my $i (1 .. $n - 2) {
         my $left  = $i - 1;
         my $right = $i + 1;
         next unless defined $arr->[$left]{high}
@@ -156,8 +175,8 @@ sub compute_all {
                  && defined $arr->[$right]{high}
                  && defined $arr->[$right]{low};
 
-        if ( $arr->[$right]{low} > $arr->[$left]{high} ) {
-            push @{ $self->{_fvg} }, {
+        if ($arr->[$right]{low} > $arr->[$left]{high}) {
+            push @$fvgs, {
                 index       => $i,
                 left_index  => $left,
                 mid_index   => $i,
@@ -166,11 +185,11 @@ sub compute_all {
                 direction   => 'bull',
                 top         => $arr->[$right]{low},
                 bottom      => $arr->[$left]{high},
-                high_reaction => _fvg_liquidity_reaction(\%liquidity_at_index, $right),
+                high_reaction => _fvg_liquidity_reaction($liquidity_lookup, $right),
             };
         }
-        elsif ( $arr->[$right]{high} < $arr->[$left]{low} ) {
-            push @{ $self->{_fvg} }, {
+        elsif ($arr->[$right]{high} < $arr->[$left]{low}) {
+            push @$fvgs, {
                 index       => $i,
                 left_index  => $left,
                 mid_index   => $i,
@@ -179,7 +198,7 @@ sub compute_all {
                 direction   => 'bear',
                 top         => $arr->[$left]{low},
                 bottom      => $arr->[$right]{high},
-                high_reaction => _fvg_liquidity_reaction(\%liquidity_at_index, $right),
+                high_reaction => _fvg_liquidity_reaction($liquidity_lookup, $right),
             };
         }
     }
@@ -288,6 +307,40 @@ sub get_trendlines   { return $_[0]->{_trendlines} }
 sub get_major_highs  { return $_[0]->{_major_highs} }
 sub get_major_lows   { return $_[0]->{_major_lows}  }
 
+# Resultado SMC reconstruido hasta un cursor de Replay. Los getters
+# históricos siguen exponiendo el cálculo completo para el render normal;
+# los consumidores analíticos pueden pedir este snapshot para no observar
+# eventos, zonas u Order Blocks que todavía no existían en esa vela.
+sub snapshot_at {
+    my ($self, $last_index) = @_;
+    my $market = $self->{_market} or return {
+        swing_highs => [], swing_lows => [], bos => [], choch => [],
+        fvgs => [], order_blocks => [], trendlines => [],
+        major_highs => [], major_lows => [],
+    };
+
+    $last_index //= $market->last_index();
+    my $prefix = $market->clone_upto($last_index);
+    my $snapshot = ref($self)->new(
+        depth          => $self->{depth},
+        external_depth => $self->{external_depth},
+    );
+    $snapshot->set_liquidity_indicator($self->{_lq_ref}) if $self->{_lq_ref};
+    $snapshot->compute_all($prefix);
+
+    return {
+        swing_highs => $snapshot->get_swing_highs(),
+        swing_lows  => $snapshot->get_swing_lows(),
+        bos         => $snapshot->get_bos_events(),
+        choch       => $snapshot->get_choch_events(),
+        fvgs        => $snapshot->get_fvg_zones(),
+        order_blocks => $snapshot->get_ob_zones(),
+        trendlines  => $snapshot->get_trendlines(),
+        major_highs => $snapshot->get_major_highs(),
+        major_lows  => $snapshot->get_major_lows(),
+    };
+}
+
 sub _detect_order_blocks {
     my ($arr, $events) = @_;
     my @obs;
@@ -325,6 +378,82 @@ sub _detect_order_blocks {
         };
     }
     return \@obs;
+}
+
+# El estado de FVG y Order Block pertenece al motor analítico. El overlay
+# sigue decidiendo cómo dibujarlo, pero ya no necesita deducir si la zona fue
+# mitigada usando datos propios. Las zonas históricas se conservan con su
+# estado para auditoría y Replay.
+sub _annotate_fvg_lifecycle {
+    my ($arr, $fvgs) = @_;
+    return unless $arr && $fvgs;
+
+    for my $fvg (@$fvgs) {
+        $fvg->{status}       = 'active';
+        $fvg->{active}       = 1;
+        $fvg->{fill_ratio}   = 0;
+        $fvg->{mitigated_at} = undef;
+
+        my $start = ($fvg->{formed_at} // -1) + 1;
+        my $range = abs(($fvg->{top} // 0) - ($fvg->{bottom} // 0));
+        next if $start > $#$arr || $range <= 0;
+
+        for my $i ($start .. $#$arr) {
+            my $c = $arr->[$i] // next;
+            my $penetration;
+            if (($fvg->{direction} // '') eq 'bull') {
+                next unless defined $c->{low} && $c->{low} < $fvg->{top};
+                $penetration = ($fvg->{top} - $c->{low}) / $range;
+                $penetration = 1 if $c->{low} <= $fvg->{bottom};
+            }
+            else {
+                next unless defined $c->{high} && $c->{high} > $fvg->{bottom};
+                $penetration = ($c->{high} - $fvg->{bottom}) / $range;
+                $penetration = 1 if $c->{high} >= $fvg->{top};
+            }
+
+            $penetration = 0 if $penetration < 0;
+            $penetration = 1 if $penetration > 1;
+            $fvg->{fill_ratio} = $penetration
+                if $penetration > ($fvg->{fill_ratio} // 0);
+            next unless $penetration >= 1;
+
+            $fvg->{status}       = 'mitigated';
+            $fvg->{active}       = 0;
+            $fvg->{mitigated_at} = $i;
+            last;
+        }
+    }
+}
+
+sub _annotate_order_block_lifecycle {
+    my ($arr, $obs) = @_;
+    return unless $arr && $obs;
+
+    for my $ob (@$obs) {
+        $ob->{status}    = 'active';
+        $ob->{active}    = 1;
+        $ob->{end_index} = undef;
+        my $start = ($ob->{triggered_by} // $ob->{index} // -1) + 1;
+        next if $start > $#$arr;
+
+        for my $i ($start .. $#$arr) {
+            my $c = $arr->[$i] // next;
+            my $status;
+            if (($ob->{direction} // '') eq 'bull') {
+                next unless defined $c->{low} && $c->{low} <= $ob->{top};
+                $status = $c->{low} <= $ob->{bottom} ? 'invalidated' : 'mitigated';
+            }
+            else {
+                next unless defined $c->{high} && $c->{high} >= $ob->{bottom};
+                $status = $c->{high} >= $ob->{top} ? 'invalidated' : 'mitigated';
+            }
+            $ob->{status}    = $status;
+            $ob->{active}    = 0;
+            $ob->{end_index} = $i;
+            last;
+        }
+    }
 }
 
 sub _detect_trendlines {
@@ -414,9 +543,11 @@ sub _recent_liquidity_signal {
         for my $ev (@{ $lookup->{$idx} // [] }) {
             next unless ($ev->{side} // '') eq $side_filter;
             my $class = $ev->{classification} // '';
-            next if $intent eq 'reversal' && $class ne 'SWEEP' && $class ne 'GRAB';
+            next if $intent eq 'reversal'
+                && $class ne 'SWEEP' && $class ne 'GRAB' && $class ne 'BIG_GRAB';
             next if $intent eq 'continuation' && $class ne 'RUN';
             my $base = $class eq 'SWEEP' ? 0.90
+                     : $class eq 'BIG_GRAB' ? 0.88
                      : $class eq 'GRAB'  ? 0.82
                      :                    0.85; # RUN
             my $w = $ev->{volume_weight} // {};
@@ -435,7 +566,8 @@ sub _fvg_liquidity_reaction {
     for my $idx ($formed_at - 1 .. $formed_at) {
         for my $ev (@{ $lookup->{$idx} // [] }) {
             return 1 if ($ev->{classification} // '') eq 'SWEEP'
-                     || ($ev->{classification} // '') eq 'GRAB';
+                     || ($ev->{classification} // '') eq 'GRAB'
+                     || ($ev->{classification} // '') eq 'BIG_GRAB';
         }
     }
     return 0;

@@ -372,6 +372,7 @@ sub _resolution_label {
             : ('SWEEP ↓', $COLOR_SSL);
     }
     return ('LQ GRAB', $COLOR_GRAB) if $class eq 'GRAB';
+    return ('LQ BIG GRAB', $COLOR_GRAB) if $class eq 'BIG_GRAB';
     return ('LQ RUN',  $COLOR_RUN)  if $class eq 'RUN';
     return;
 }
@@ -381,6 +382,7 @@ sub _show_resolution {
     my $class = $lvl->{classification} // return 0;
     return $self->_visible('show_sweep', 1) if $class eq 'SWEEP';
     return $self->_visible('show_grab',  1) if $class eq 'GRAB';
+    return $self->_visible('show_grab',  1) if $class eq 'BIG_GRAB';
     return $self->_visible('show_run',   1) if $class eq 'RUN';
     return 1;
 }

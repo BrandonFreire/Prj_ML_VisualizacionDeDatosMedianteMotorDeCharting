@@ -20,7 +20,8 @@ use warnings;
 # [5 RUN]        [5 GRAB]       [5 SWEEP]
 #
 # SWEEP: High>BSL/Low<SSL + cierre de rechazo en la misma vela, o reclaim tardio
-# GRAB:  reclaim rapido despues de 1..3 cierres fuera del nivel
+# GRAB:  reclaim rapido despues de 1..3 cierres fuera del nivel interno
+# BIG_GRAB: mismo reclaim sobre un nivel externo
 # RUN:   N=3 cierres consecutivos fuera del nivel (aceptacion institucional)
 
 sub new {
@@ -263,8 +264,9 @@ sub _run_state_machine {
             # Cierre dentro del rango: RECLAIMED
             my $bars_out = $i - $swept_i;
             my $class = $bars_out == 0 ? 'SWEEP'
-                      : $bars_out <= 3 ? 'GRAB'
-                      :                  'SWEEP';
+                      : $bars_out <= 3
+                          ? (($lvl->{scope} // 'internal') eq 'external' ? 'BIG_GRAB' : 'GRAB')
+                          : 'SWEEP';
             $lvl->{state}          = 'RECLAIMED';
             $lvl->{resolved_at}    = $i;
             $lvl->{classification} = $class;
@@ -302,7 +304,7 @@ sub _make_level {
         state          => 'DETECTED',
         swept_at       => undef,
         resolved_at    => undef,
-        classification => undef,   # SWEEP | GRAB | RUN (cuando RESOLVED)
+        classification => undef,   # SWEEP | GRAB | BIG_GRAB | RUN (cuando RESOLVED)
         volume_weight  => undef,   # {v1m, v5m, v15m} — pesado multi-temporal
         volume_weight_source => undef,
         volume_score   => 0,
@@ -350,6 +352,37 @@ sub _adaptive_external_depth {
 # ----------------------------------------------------------------
 sub get_levels     { return $_[0]->{_levels} }
 sub get_atr        { return $_[0]->{_atr}    }
+
+# Snapshot replay-safe de los niveles al cierre de una vela. El cálculo batch
+# conserva el historial completo para el gráfico, pero un consumidor analítico
+# no debe observar la resolución de un nivel antes de que ocurra.
+sub get_levels_at {
+    my ($self, $last_index) = @_;
+    my $market = $self->{_market} or return [];
+
+    $last_index //= $market->last_index();
+    my $prefix = $market->clone_upto($last_index);
+    my $snapshot = ref($self)->new(
+        depth          => $self->{depth},
+        external_depth => $self->{external_depth},
+        n_accept       => $self->{n_accept},
+        atr_period     => $self->{atr_period},
+    );
+    $snapshot->compute_all($prefix);
+    return $snapshot->get_levels();
+}
+
+sub get_active_at {
+    my ($self, $last_index) = @_;
+    return [ grep {
+        ($_->{state} // '') eq 'DETECTED' || ($_->{state} // '') eq 'SWEPT'
+    } @{ $self->get_levels_at($last_index) } ];
+}
+
+sub get_resolved_at {
+    my ($self, $last_index) = @_;
+    return [ grep { defined $_->{classification} } @{ $self->get_levels_at($last_index) } ];
+}
 
 # Niveles activos (aun no barridos) por tipo
 sub get_bsl_levels {
