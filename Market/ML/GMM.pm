@@ -186,11 +186,14 @@ sub to_hash {
 sub from_hash {
     my ($class, $hash) = @_;
     die 'GMM::from_hash: invalid model' unless ref($hash) eq 'HASH';
+    die 'GMM::from_hash: n_features must be a positive integer'
+        unless defined($hash->{n_features}) && $hash->{n_features} =~ /^\d+$/
+            && $hash->{n_features} > 0;
     my $self = $class->new(
         n_components => $hash->{n_components}, max_iter => $hash->{max_iter},
         tolerance => $hash->{tolerance}, variance_floor => $hash->{variance_floor},
     );
-    _validate_matrix($hash->{means}, 'GMM::from_hash means');
+    _validate_matrix($hash->{means}, 'GMM::from_hash means', $hash->{n_features});
     die 'GMM::from_hash: wrong number of means'
         unless @{$hash->{means}} == $self->{n_components};
     _validate_matrix($hash->{variances}, 'GMM::from_hash variances', $hash->{n_features});
@@ -205,6 +208,15 @@ sub from_hash {
         unless ref($hash->{weights}) eq 'ARRAY' && @{$hash->{weights}} == $self->{n_components};
     die 'GMM::from_hash: weights must be non-negative finite values'
         unless !grep { !_finite($_) || $_ < 0 } @{$hash->{weights}};
+    my $weight_sum = 0;
+    $weight_sum += $_ for @{$hash->{weights}};
+    die 'GMM::from_hash: weights sum to zero' unless $weight_sum > 0;
+    die 'GMM::from_hash: n_samples_fit must be a non-negative integer'
+        unless defined($hash->{n_samples_fit}) && $hash->{n_samples_fit} =~ /^\d+$/;
+    die 'GMM::from_hash: n_iter must be a non-negative integer'
+        unless defined($hash->{n_iter}) && $hash->{n_iter} =~ /^\d+$/;
+    die 'GMM::from_hash: log_likelihood must be finite'
+        unless _finite($hash->{log_likelihood});
     $self->{n_features} = $hash->{n_features} + 0;
     $self->{n_samples_fit} = $hash->{n_samples_fit} + 0;
     $self->{means} = [ map { [ @$_ ] } @{$hash->{means}} ];

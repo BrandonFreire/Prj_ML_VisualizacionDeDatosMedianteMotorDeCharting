@@ -198,7 +198,11 @@ sub _fmt_price {
     return sprintf '%.' . $decimals . 'f', $price;
 }
 
-sub _number { return defined $_[0] && $_[0] =~ /^-?(?:\d+(?:\.\d*)?|\.\d+)$/; }
+sub _number {
+    return defined($_[0]) && !ref($_[0])
+        && "$_[0]" =~ /^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/
+        && $_[0] == $_[0] && abs($_[0]) <= 1e300;
+}
 sub _positive_number { return _number($_[0]) && $_[0] > 0; }
 
 1;

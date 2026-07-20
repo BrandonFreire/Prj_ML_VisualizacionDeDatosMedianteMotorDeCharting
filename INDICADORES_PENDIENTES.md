@@ -1,14 +1,14 @@
-# Indicadores pendientes por falta de definicion verificable
+# Estado de los indicadores anteriormente pendientes
 
-Durante la revision se buscaron referencias locales para `Order Blocks`, `Trend Line`
-y `HLDV` en codigo, checklist, README, requisitos y nombres de archivos del proyecto.
+La revisión inicial dejó anotados `Order Blocks`, `Trend Line` y `HLDV` porque en
+ese momento no existía una definición operativa completa. Esa nota ya no representa
+el estado actual del proyecto:
 
-No se encontro una definicion operativa ni los dos indicadores de ejemplo de Order
-Blocks mencionados en el pedido. Tampoco existe una regla local para determinar
-cuando una Trend Line deja de ser respetada, ni una definicion verificable de la
-sigla `HLDV`.
+- `Order Blocks` se calculan en `Market::Indicators::SMC_Structures`, incluyendo
+  confirmación, mitigación e invalidación.
+- `Trend Lines` y los canales automáticos se calculan con pivotes confirmados y
+  registran su ruptura.
+- `HLDV` corresponde a las etiquetas estructurales `HH`, `HL`, `LH` y `LL`; ahora
+  quedan anotadas en los pivotes externos de `ZigZagDirection`, no sólo dibujadas.
 
-Por ese motivo no se agrego una implementacion nueva para esos tres puntos. Hacerlo
-sin esas referencias introduciria reglas, condiciones y comportamientos no definidos
-por el proyecto.
-
+Por tanto, esta lista no mantiene indicadores de cálculo pendientes.

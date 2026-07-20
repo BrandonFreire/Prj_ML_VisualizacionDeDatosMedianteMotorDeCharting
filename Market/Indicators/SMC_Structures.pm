@@ -71,8 +71,10 @@ sub compute_all {
             $is_sl = 0 if $arr->[$i]{low}  >= $arr->[$i-$j]{low}
                        || $arr->[$i]{low}  >= $arr->[$i+$j]{low};
         }
-        push @sh_int, _make_pivot($i, $arr->[$i]{high}, $i + $k) if $is_sh;
-        push @sl_int, _make_pivot($i, $arr->[$i]{low},  $i + $k) if $is_sl;
+        push @sh_int, _make_pivot($i, $arr->[$i]{high}, $i + $k,
+            undef, 'high', $arr->[$i]{time}) if $is_sh;
+        push @sl_int, _make_pivot($i, $arr->[$i]{low},  $i + $k,
+            undef, 'low', $arr->[$i]{time}) if $is_sl;
     }
 
     # ----------------------------------------------------------------
@@ -88,8 +90,10 @@ sub compute_all {
                 $is_sl = 0 if $arr->[$i]{low}  >= $arr->[$i-$j]{low}
                            || $arr->[$i]{low}  >= $arr->[$i+$j]{low};
             }
-            push @sh_ext, _make_pivot($i, $arr->[$i]{high}, $i + $external_k, $i + $external_k) if $is_sh;
-            push @sl_ext, _make_pivot($i, $arr->[$i]{low},  $i + $external_k, $i + $external_k) if $is_sl;
+            push @sh_ext, _make_pivot($i, $arr->[$i]{high}, $i + $external_k,
+                $i + $external_k, 'high', $arr->[$i]{time}) if $is_sh;
+            push @sl_ext, _make_pivot($i, $arr->[$i]{low},  $i + $external_k,
+                $i + $external_k, 'low', $arr->[$i]{time}) if $is_sl;
         }
     }
 
@@ -216,9 +220,12 @@ sub _detect_fvgs {
 
 # Crea un pivote con campos estandar
 sub _make_pivot {
-    my ($index, $price, $confirmed_at, $scope_confirmed_at) = @_;
+    my ($index, $price, $confirmed_at, $scope_confirmed_at, $kind, $time) = @_;
     return {
+        id                 => join('_', 'smc', $kind // 'pivot', $index, $confirmed_at),
+        kind               => $kind,
         index              => $index,
+        time               => $time,
         price              => $price,
         confirmed_at       => $confirmed_at,
         scope              => 'internal',

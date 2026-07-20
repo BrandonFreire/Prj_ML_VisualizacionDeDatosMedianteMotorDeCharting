@@ -72,4 +72,25 @@ is($backtest->{trades}[0]{exit_reason}, 'target',
 is($backtest->{trades}[0]{regime_state}, 'RANGING',
     'Strategy Builder reenvía el régimen al backtester delegado');
 
+my @halftrend_prices = (100, 102, 104, 106, 104, 101, 98, 95, 93, 96, 100, 104, 108);
+my @halftrend_candles = map {
+    my $price = $halftrend_prices[$_];
+    { time => $_ * 60, open => $price, high => $price + 1,
+      low => $price - 1, close => $price, volume => 1 }
+} 0 .. $#halftrend_prices;
+my $halftrend_builder = Market::Indicators::Strategy_Builder->new(
+    ht_amplitude => 2, ht_channel_dev => 2,
+);
+my $halftrend = $halftrend_builder->_compute_halftrend(
+    \@halftrend_candles, [ (1) x @halftrend_candles ],
+);
+ok((grep { $_->{trend} == 1 } @$halftrend),
+    'HalfTrend cambia a bajista cuando se confirma una reversión');
+ok((grep { $_->{trend} == 0 } @$halftrend),
+    'HalfTrend conserva y recupera el estado alcista');
+cmp_ok(scalar(grep { $_->{flipped} } @$halftrend), '>=', 2,
+    'HalfTrend registra giros en ambos sentidos en una secuencia completa');
+ok(!(grep { $_->{atr_low} > $_->{value} || $_->{atr_high} < $_->{value} } @$halftrend),
+    'las bandas HalfTrend siempre contienen su línea central');
+
 done_testing();

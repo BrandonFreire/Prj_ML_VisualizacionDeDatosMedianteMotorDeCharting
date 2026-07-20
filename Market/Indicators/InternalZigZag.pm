@@ -241,6 +241,9 @@ sub _validate_candles {
         }
         die "InternalZigZag::compute: candle $i has high below low"
             if $c->{high} < $c->{low};
+        die "InternalZigZag::compute: candle $i has OHLC outside high/low"
+            if $c->{open} < $c->{low} || $c->{open} > $c->{high}
+                || $c->{close} < $c->{low} || $c->{close} > $c->{high};
     }
 }
 
@@ -253,7 +256,11 @@ sub _validate_atr {
     }
 }
 
-sub _number { return defined $_[0] && $_[0] =~ /^-?(?:\d+(?:\.\d*)?|\.\d+)$/; }
+sub _number {
+    return defined($_[0]) && !ref($_[0])
+        && "$_[0]" =~ /^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/
+        && $_[0] == $_[0] && abs($_[0]) <= 1e300;
+}
 sub _non_negative_number { return _number($_[0]) && $_[0] >= 0; }
 
 1;

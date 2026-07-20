@@ -16,12 +16,18 @@ my $VALUE_AREA_PCT     = 0.70;  # 70% del volumen total para Value Area
 
 sub new {
     my ($class, %args) = @_;
+    my $num_bins = $args{num_bins} // $DEFAULT_BINS;
+    my $value_area_pct = $args{value_area_pct} // $VALUE_AREA_PCT;
+    die 'VolumeProfile::new: num_bins debe ser un entero positivo'
+        unless defined($num_bins) && $num_bins =~ /^\d+$/ && $num_bins > 0;
+    die 'VolumeProfile::new: value_area_pct debe estar en (0, 1]'
+        unless _finite($value_area_pct) && $value_area_pct > 0 && $value_area_pct <= 1;
     return bless {
         # El perfil sólo existe cuando el usuario dibuja un anclaje.  No se
         # generan perfiles de sesión/globales como efecto de compute_all().
         mode           => $args{mode} // 'manual',
-        num_bins       => $args{num_bins}       // $DEFAULT_BINS,
-        value_area_pct => $args{value_area_pct} // $VALUE_AREA_PCT,
+        num_bins       => $num_bins + 0,
+        value_area_pct => $value_area_pct + 0,
         session_open_hour   => $args{session_open_hour}   // 0,
         session_open_minute => $args{session_open_minute} // 0,
         contingency_bars    => $args{contingency_bars}    // 500,
@@ -46,7 +52,8 @@ sub reset {
 
 sub add_manual_anchor {
     my ($self, $start_idx, $end_idx) = @_;
-    return unless defined $start_idx;
+    return unless defined($start_idx) && !ref($start_idx) && $start_idx =~ /^\d+$/;
+    return if defined($end_idx) && (ref($end_idx) || $end_idx !~ /^\d+$/);
 
     # end_idx indefinido representa un perfil anclado "desde esta vela hasta
     # la última vela disponible".  Un end_idx explícito representa Fixed Range.
@@ -188,7 +195,14 @@ sub _compute_profile {
         $price_max = $c->{high} if defined $c->{high} && $c->{high} > $price_max;
     }
 
-    return undef if $price_max <= $price_min;
+    my $flat_price;
+    if ($price_max <= $price_min) {
+        $flat_price = $price_min + 0;
+        my $padding = abs($flat_price) * 1e-9;
+        $padding = 1e-9 if $padding < 1e-9;
+        $price_min -= $padding / 2;
+        $price_max += $padding / 2;
+    }
     my $range    = $price_max - $price_min;
     my $bin_size = $range / $num_bins;
     return undef if $bin_size <= 0;
@@ -213,7 +227,17 @@ sub _compute_profile {
         next if $vol <= 0;
 
         my $c_range = $c->{high} - $c->{low};
-        $c_range = $bin_size * 0.01 if $c_range <= 0;   # vela doji
+
+        # Una vela sin rango sigue aportando todo su volumen al nivel negociado;
+        # repartir por overlap asignaba cero y hacía inconsistente total_vol.
+        if ($c_range <= 0) {
+            my $bin = int(($c->{low} - $price_min) / $bin_size);
+            $bin = 0 if $bin < 0;
+            $bin = $num_bins - 1 if $bin >= $num_bins;
+            $bins[$bin]{volume} += $vol;
+            $total_vol += $vol;
+            next;
+        }
 
         # Bins que cubre esta vela
         my $first_bin = int(($c->{low}  - $price_min) / $bin_size);
@@ -241,7 +265,7 @@ sub _compute_profile {
     for my $b (1 .. $#bins) {
         $poc_bin = $b if $bins[$b]{volume} > $bins[$poc_bin]{volume};
     }
-    my $poc = $bins[$poc_bin]{price};
+    my $poc = defined($flat_price) ? $flat_price : $bins[$poc_bin]{price};
 
     # Value Area: expandir desde el POC hasta cubrir el 70% del volumen
     my $va_target = $total_vol * $va_pct;
@@ -315,6 +339,13 @@ sub get_poc_index {
     my ($self) = @_;
     my $p = $self->get_latest_profile();
     return defined $p ? $p->{poc_index} : undef;
+}
+
+sub _finite {
+    my ($value) = @_;
+    return defined($value) && !ref($value)
+        && "$value" =~ /^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/
+        && $value == $value && abs($value) <= 1e300;
 }
 
 1;

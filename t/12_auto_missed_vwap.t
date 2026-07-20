@@ -98,4 +98,30 @@ is(scalar @auto_lines, 1, 'compute_all integra exactamente una instancia automá
 is($auto_lines[0]{anchor_idx}, 3, 'la integración consume el último evento del indicador de pivotes');
 ok($indicator->get_auto_missed_result->{visible}, 'conserva el resultado automático auditable');
 
+my $large_market = Market::MarketData->new;
+$large_market->add_candle(candle(0, 1e12, 1e12,     1e12,     1e12,     1));
+$large_market->add_candle(candle(1, 1e12, 1e12 + 1, 1e12 + 1, 1e12 + 1, 1));
+my $stable = Market::Indicators::AnchoredVWAP->new;
+$stable->add_manual_anchor(0);
+$stable->compute_all($large_market);
+cmp_ok(abs($stable->get_vwap_lines->[0]{std_dev}[1] - 0.5), '<', 1e-10,
+    'la desviación VWAP usa varianza estable incluso con precios de gran magnitud');
+
+my $bad_price = Market::Indicators::AnchoredVWAP->compute_missed_pivot_auto(
+    candles => \@candles, max_visible_index => 2,
+    missed_pivot_events => [ { %$high, price => 'invalido' } ],
+);
+ok(!$bad_price->{visible}, 'ignora eventos missed pivot con precio no numérico');
+
+my $compact = Market::Indicators::AnchoredVWAP->new(anchor_mode => 'multipivot');
+$compact->add_manual_anchor(1);
+$compact->add_manual_anchor(3);
+$compact->compute_all($market);
+my $stored_points = 0;
+$stored_points += scalar @{ $_->{values} } for @{ $compact->get_vwap_lines };
+cmp_ok($stored_points, '<=', scalar(@candles),
+    'multipivot almacena cada tramo una sola vez en vez de reservar toda la historia por ancla');
+ok(!(grep { ($_->{values_offset} // -1) != $_->{anchor_idx} } @{ $compact->get_vwap_lines }),
+    'cada tramo compacto declara el desplazamiento de sus valores');
+
 done_testing();

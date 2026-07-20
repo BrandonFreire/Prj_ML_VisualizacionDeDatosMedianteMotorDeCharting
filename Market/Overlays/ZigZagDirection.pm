@@ -121,12 +121,12 @@ sub _render_hldv_labels {
         next if $idx > $current_bar;
         next if ($p->{confirmed_at} // $idx) > $current_bar;
 
-        my $label;
+        my $label = $p->{label};
         if ($type eq 'high') {
-            $label      = (defined $last_high && $price > $last_high) ? 'HH' : 'LH';
+            $label    //= (defined $last_high && $price > $last_high) ? 'HH' : 'LH';
             $last_high  = $price;
         } else {
-            $label      = (defined $last_low  && $price > $last_low)  ? 'HL' : 'LL';
+            $label    //= (defined $last_low  && $price > $last_low)  ? 'HL' : 'LL';
             $last_low   = $price;
         }
         next unless $idx >= $d_start && $idx <= $d_end;

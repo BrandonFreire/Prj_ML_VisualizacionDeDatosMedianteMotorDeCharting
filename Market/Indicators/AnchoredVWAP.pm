@@ -62,7 +62,7 @@ sub reset {
 
 sub add_manual_anchor {
     my ($self, $idx) = @_;
-    return unless defined $idx;
+    return unless defined($idx) && !ref($idx) && $idx =~ /^\d+$/;
     push @{ $self->{_manual_anchors} }, { index => int($idx) };
 }
 
@@ -90,6 +90,7 @@ sub set_band_configuration {
     my $mult_key = "std_mult_$number";
     my $enabled_key = "band_${number}_enabled";
     if (exists $args{multiplier} && defined $args{multiplier}) {
+        return unless _finite($args{multiplier});
         my $mult = $args{multiplier} + 0;
         return if $mult < 0;
         $self->{$mult_key} = $mult;
@@ -136,33 +137,35 @@ sub compute_all {
             : $n - 1;
         next if $start > $end || $start < 0;
 
-        my @values  = (undef) x $n;
-        my @std_dev = (undef) x $n;
-        my ($cum_vol, $cum_pv, $cum_pv2) = (0, 0, 0);
+        # En multipivot los tramos son consecutivos y normalmente cortos. No
+        # reservar dos arreglos del tamaño total por cada BOS/CHoCH evita un
+        # crecimiento cuadrático de memoria en historiales largos.
+        my $compact = $self->{anchor_mode} eq 'multipivot' ? 1 : 0;
+        my @values  = $compact ? () : ((undef) x $n);
+        my @std_dev = $compact ? () : ((undef) x $n);
+        my ($weight, $mean, $m2) = (0, 0, 0);
 
         for my $i ($start .. $end) {
             my $c = $arr->[$i];
-            next unless defined $c->{high} && defined $c->{low}
-                     && defined $c->{close} && defined $c->{volume};
+            next unless _valid_vwap_candle($c);
 
             my $typical = ($c->{high} + $c->{low} + $c->{close}) / 3.0;
-            $cum_vol += $c->{volume};
-            $cum_pv  += $typical * $c->{volume};
-            $cum_pv2 += ($typical * $typical) * $c->{volume};
-
-            if ($cum_vol > 0) {
-                my $vwap = $cum_pv / $cum_vol;
-                $values[$i] = $vwap;
-
-                my $variance = ($cum_pv2 / $cum_vol) - ($vwap * $vwap);
-                $variance = 0 if $variance < 0; # Prevenir errores de coma flotante
-                $std_dev[$i] = sqrt($variance);
-            }
+            my $new_weight = $weight + $c->{volume};
+            my $delta = $typical - $mean;
+            my $next_mean = $mean + $c->{volume} / $new_weight * $delta;
+            $m2 += $c->{volume} * $delta * ($typical - $next_mean);
+            ($weight, $mean) = ($new_weight, $next_mean);
+            my $variance = $m2 / $weight;
+            $variance = 0 if $variance < 0 && $variance > -1e-12;
+            my $slot = $compact ? $i - $start : $i;
+            $values[$slot] = $mean + 0;
+            $std_dev[$slot] = $variance > 0 ? sqrt($variance) : 0;
         }
 
         push @vwap_lines, {
             anchor_idx   => $start,
             end_idx      => $end,
+            values_offset => $compact ? $start : 0,
             anchor_source => $anchor->{source} // 'manual',
             values       => \@values,
             std_dev      => \@std_dev,
@@ -200,6 +203,8 @@ sub compute_missed_pivot_auto {
     my $candles = $args{candles} // [];
     die 'AnchoredVWAP::compute_missed_pivot_auto: candles debe ser un arrayref'
         unless ref($candles) eq 'ARRAY';
+    die 'AnchoredVWAP::compute_missed_pivot_auto: max_visible_index debe ser un entero'
+        if defined($args{max_visible_index}) && $args{max_visible_index} !~ /^-?\d+$/;
     my $max_idx = defined $args{max_visible_index} ? int($args{max_visible_index}) : $#$candles;
     $max_idx = $#$candles if $max_idx > $#$candles;
     return {
@@ -235,8 +240,7 @@ sub _build_auto_missed_line {
     my ($weight, $mean, $m2, $last) = (0, 0, 0, undef);
     for my $i ($start .. $max_idx) {
         my $c = $candles->[$i] // next;
-        next unless defined($c->{high}) && defined($c->{low}) && defined($c->{close})
-                 && defined($c->{volume}) && $c->{volume} > 0;
+        next unless _valid_vwap_candle($c);
         my $price = ($c->{high} + $c->{low} + $c->{close}) / 3;
         my $new_weight = $weight + $c->{volume};
         my $delta = $price - $mean;
@@ -287,6 +291,7 @@ sub _latest_confirmed_missed_pivot {
         next unless $event->{confirmed};
         my $kind = $event->{pivotType} // $event->{type} // '';
         next unless $kind eq 'high' || $kind eq 'low';
+        next unless _finite($event->{price});
         my $index = $event->{index};
         my $confirmed_at = $event->{confirmationIndex} // $event->{confirmed_at};
         next unless defined($index) && $index =~ /^\d+$/
@@ -366,6 +371,21 @@ sub _collect_anchors {
 # ================================================================
 sub get_vwap_lines { return $_[0]->{_vwap_lines} }
 sub get_auto_missed_result { return $_[0]->{_auto_missed_result} }
+
+sub _valid_vwap_candle {
+    my ($candle) = @_;
+    return 0 unless ref($candle) eq 'HASH';
+    return 0 unless !grep { !_finite($candle->{$_}) } qw(high low close volume);
+    return 0 if $candle->{high} < $candle->{low} || $candle->{volume} <= 0;
+    return 1;
+}
+
+sub _finite {
+    my ($value) = @_;
+    return defined($value) && !ref($value)
+        && "$value" =~ /^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/
+        && $value == $value && abs($value) <= 1e300;
+}
 
 
 

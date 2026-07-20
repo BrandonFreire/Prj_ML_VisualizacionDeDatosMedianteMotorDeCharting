@@ -108,7 +108,19 @@ is_deeply([ map { [ $_->{type}, $_->{index} ] } @{ $after_low->{regular_pivots} 
 my ($active_level) = grep { $_->{active} } @{ $missed->{reversal_levels} };
 is($active_level->{end_index}, $#missed_candles,
     'el nivel de reversión activo se extiende hasta el cursor visible');
+my $stateful = Market::Indicators::PivotMissedReversal->new(length => 2);
+$stateful->compute(candles => \@missed_candles);
+my ($getter_active) = grep { $_->{active} } @{ $stateful->get_reversal_levels };
+is($getter_active->{end_index}, $#missed_candles,
+    'el getter conserva la misma extensión visible que el resultado de compute');
 ok($missed->{missed_pivots}[0]{confirmed} && $missed->{missed_pivots}[0]{pivotTime},
     'los missed pivots exponen contrato confirmado apto para consumidores analíticos');
+
+eval {
+    Market::Indicators::PivotMissedReversal->compute(
+        candles => [ { time => 0, high => 'invalido', low => 1 } ], length => 1,
+    );
+};
+like($@, qr/high numerico finito/, 'rechaza precios no numéricos sin coercionarlos a cero');
 
 done_testing();

@@ -62,6 +62,8 @@ cmp_ok($bull->{duration_minutes}, '>=', 60, 'exige duración temporal real míni
 cmp_ok($bull->{lower_touches}, '>=', 2, 'el canal alcista tiene contactos inferiores');
 cmp_ok($bull->{upper_touches}, '>=', 2, 'el canal alcista tiene contactos superiores');
 cmp_ok($bull->{containment_ratio}, '>=', 0.85, 'la mayor parte de cierres queda contenida');
+cmp_ok($bull->{touch_distribution_ratio}, '>', 0.5,
+    'cuantifica que los contactos están distribuidos sobre el canal completo');
 cmp_ok($bull->{width_in_atr}, '>=', 0.75, 'rechaza anchos menores al umbral ATR');
 cmp_ok($bull->{width_in_atr}, '<=', 8, 'rechaza anchos mayores al umbral ATR');
 ok(abs(($bull->{upper_y2} - $bull->{lower_y2}) - ($bull->{upper_y1} - $bull->{lower_y1})) < 1e-8,
@@ -111,5 +113,18 @@ my $duplicate_time = Market::Indicators::TrendChannels->compute(
     candles => $candles, atr_series => $atr,
 );
 is(scalar @$duplicate_time, 0, 'rechaza timestamps duplicados en lugar de calcular una pendiente falsa');
+
+is(
+    Market::Indicators::TrendChannels::_touch_distribution(
+        { upper => [{ index => 10 }], lower => [{ index => 20 }] }, 0, 100,
+    ),
+    0.1,
+    'la distribución usa la duración total del canal y no se vuelve uno por identidad',
+);
+is(
+    Market::Indicators::TrendChannels::_time_seconds('2026-07-20T12:00:00+02:00'),
+    Market::Indicators::TrendChannels::_time_seconds('2026-07-20T10:00:00Z'),
+    'normaliza correctamente offsets ISO al comparar duración y orden temporal',
+);
 
 done_testing();

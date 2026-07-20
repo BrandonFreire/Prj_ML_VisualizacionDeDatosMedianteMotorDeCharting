@@ -53,4 +53,10 @@ is_deeply($restored->predict_proba([ $points[2], $points[70] ]),
 eval { Market::ML::GMM->new(n_components => 3)->fit([([1, 1]) x 5]) };
 like($@, qr/distinct points/, 'rejects a degenerate mixture instead of duplicating components');
 
+my $serialized = $gmm->to_hash;
+eval { Market::ML::GMM->from_hash({ %$serialized, means => [[1], [2], [3]] }) };
+like($@, qr/inconsistent feature dimensions/, 'rejects a serialized model whose means have the wrong dimension');
+eval { Market::ML::GMM->from_hash({ %$serialized, weights => [0, 0, 0] }) };
+like($@, qr/weights sum to zero/, 'rejects a serialized model with an impossible zero mixture');
+
 done_testing();

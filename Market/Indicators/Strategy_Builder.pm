@@ -336,69 +336,63 @@ sub _compute_halftrend {
     my $min_high_price = $arr->[0]{high};
     my $up   = 0;
     my $down = 0;
-    my $atr_high = 0;
-    my $atr_low  = 0;
 
     for my $i (0 .. $n - 1) {
         my $c = $arr->[$i];
-        my $atr_val = ($atr->[$i] // 0) / 2;
-
-        # Determinar máximo de lows y mínimo de highs en ventana amplitude
-        my $lo_start = $i - $amplitude; $lo_start = 0 if $lo_start < 0;
-        my $hi_start = $i - $amplitude; $hi_start = 0 if $hi_start < 0;
-
-        my $highest_low  = $arr->[$lo_start]{low};
-        my $lowest_high  = $arr->[$hi_start]{high};
-        for my $j ($lo_start .. $i) {
-            $highest_low = $arr->[$j]{low}  if $arr->[$j]{low}  > $highest_low;
-            $lowest_high = $arr->[$j]{high} if $arr->[$j]{high} < $lowest_high;
+        my $atr_half = ($atr->[$i] // 0) / 2;
+        my $start = $i - $amplitude + 1;
+        $start = 0 if $start < 0;
+        my ($high_price, $low_price) = @{$arr->[$start]}{qw(high low)};
+        my ($high_sum, $low_sum, $count) = (0, 0, 0);
+        for my $j ($start .. $i) {
+            $high_price = $arr->[$j]{high} if $arr->[$j]{high} > $high_price;
+            $low_price  = $arr->[$j]{low}  if $arr->[$j]{low}  < $low_price;
+            $high_sum += $arr->[$j]{high};
+            $low_sum  += $arr->[$j]{low};
+            $count++;
         }
-
-        my $high_price = $c->{high};
-        my $low_price  = $c->{low};
-
-        $max_low_price  = $low_price  if $low_price  > $max_low_price;
-        $max_low_price  = $highest_low;
-        $min_high_price = $high_price if $high_price < $min_high_price;
-        $min_high_price = $lowest_high;
+        my $high_ma = $high_sum / $count;
+        my $low_ma  = $low_sum / $count;
+        my $previous_low  = $i ? $arr->[$i - 1]{low}  : $c->{low};
+        my $previous_high = $i ? $arr->[$i - 1]{high} : $c->{high};
 
         if ($next_trend == 1) {
-            $max_low_price = $low_price if $low_price < $max_low_price;
-            $max_low_price = $highest_low;
+            $max_low_price = $low_price if $low_price > $max_low_price;
+            if ($high_ma < $max_low_price && $c->{close} < $previous_low) {
+                $trend = 1;
+                $next_trend = 0;
+                $min_high_price = $high_price;
+            }
         }
-        if ($next_trend == 0) {
-            $min_high_price = $high_price if $high_price > $min_high_price;
-            $min_high_price = $lowest_high;
-        }
-
-        # Flip conditions
-        if ($trend == 0 && $c->{close} < $up - $atr_val) {
-            $trend = 1;
-            $next_trend = 1;
-            $min_high_price = $high_price;
-        }
-        if ($trend == 1 && $c->{close} > $down + $atr_val) {
-            $trend = 0;
-            $next_trend = 0;
-            $max_low_price = $low_price;
+        else {
+            $min_high_price = $high_price if $high_price < $min_high_price;
+            if ($low_ma > $min_high_price && $c->{close} > $previous_high) {
+                $trend = 0;
+                $next_trend = 1;
+                $max_low_price = $low_price;
+            }
         }
 
+        my $previous_trend = @ht ? $ht[-1]{trend} : undef;
         if ($trend == 0) {
-            $up = $max_low_price > $up ? $max_low_price : $up;
-            $atr_high = $up + $dev * ($atr->[$i] // 0);
-            $atr_low  = $up - $dev * ($atr->[$i] // 0);
-        } else {
-            $down = $min_high_price < $down || $down == 0 ? $min_high_price : $down;
-            $atr_high = $down + $dev * ($atr->[$i] // 0);
-            $atr_low  = $down - $dev * ($atr->[$i] // 0);
+            $up = defined($previous_trend) && $previous_trend != 0
+                ? $down
+                : ($max_low_price > $up ? $max_low_price : $up);
         }
+        else {
+            $down = defined($previous_trend) && $previous_trend != 1
+                ? $up
+                : ($down == 0 || $min_high_price < $down ? $min_high_price : $down);
+        }
+        my $value = $trend == 0 ? $up : $down;
+        my $deviation = $dev * $atr_half;
 
         push @ht, {
             trend     => $trend,      # 0=up, 1=down
-            value     => $trend == 0 ? $up : $down,
-            atr_high  => $atr_high,
-            atr_low   => $atr_low,
-            flipped   => ($i > 0 && @ht && $ht[-1]{trend} != $trend) ? 1 : 0,
+            value     => $value,
+            atr_high  => $value + $deviation,
+            atr_low   => $value - $deviation,
+            flipped   => defined($previous_trend) && $previous_trend != $trend ? 1 : 0,
         };
     }
 

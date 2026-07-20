@@ -5,6 +5,7 @@ use Test::More;
 use lib '.';
 
 use Market::Indicators::SMC_Structures;
+use Market::MarketData;
 
 sub candle {
     my ($index, $high, $low) = @_;
@@ -59,5 +60,22 @@ my $bull_state = Market::Indicators::SMC_Structures::_build_trailing_extremes(
 );
 is($bull_state->{high_classification}, 'weak_high', 'sesgo alcista deja el máximo como débil');
 is($bull_state->{low_classification}, 'strong_low', 'sesgo alcista marca el mínimo como fuerte');
+
+my @wave = (10, 12, 15, 12, 8, 5, 8, 12, 16, 12, 8, 4, 8, 12, 17, 12, 8, 3, 8, 12, 18);
+my $market = Market::MarketData->new;
+for my $i (0 .. $#wave) {
+    $market->add_candle({
+        time => $i * 60, open => $wave[$i], high => $wave[$i] + 0.5,
+        low => $wave[$i] - 0.5, close => $wave[$i], volume => 100,
+    });
+}
+my $integrated = Market::Indicators::SMC_Structures->new(depth => 1, external_depth => 2);
+$integrated->compute_all($market);
+ok($integrated->get_trailing_extremes,
+    'compute_all construye el estado Strong/Weak con sus propios pivotes');
+ok(!(grep { !defined($_->{kind}) || $_->{kind} ne 'high' } @{$integrated->get_swing_highs}),
+    'los swing highs internos conservan su tipo para consumidores analíticos');
+ok(!(grep { !defined($_->{kind}) || $_->{kind} ne 'low' } @{$integrated->get_swing_lows}),
+    'los swing lows internos conservan su tipo para consumidores analíticos');
 
 done_testing();

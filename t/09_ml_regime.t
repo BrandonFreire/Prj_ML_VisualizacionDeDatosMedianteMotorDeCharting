@@ -156,6 +156,7 @@ ok($walk_forward->{series}[0]{walk_forward} && $walk_forward->{series}[0]{replay
 
 for my $case (
     [ 'OHLC invertido', [ { time => 0, high => 1, low => 2, close => 1.5 } ], qr/high menor que low/ ],
+    [ 'cierre fuera de rango', [ { time => 0, high => 2, low => 1, close => 3 } ], qr/close fuera/ ],
     [ 'cierre cero', [ { time => 0, high => 1, low => 0, close => 0 } ], qr/close cero/ ],
     [ 'ATR negativo', [ candle(0, 100, 10) ], qr/atr_series\[0\] invalido/ ],
 ) {

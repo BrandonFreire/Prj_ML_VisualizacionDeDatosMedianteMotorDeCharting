@@ -130,6 +130,8 @@ sub _validate_candle {
     }
     die "FeatureExtractor: vela $index con high menor que low"
         if $candle->{high} < $candle->{low};
+    die "FeatureExtractor: vela $index con close fuera de high/low"
+        if $candle->{close} < $candle->{low} || $candle->{close} > $candle->{high};
     die "FeatureExtractor: vela $index con close cero"
         if $candle->{close} == 0;
     if (defined $candle->{volume}) {

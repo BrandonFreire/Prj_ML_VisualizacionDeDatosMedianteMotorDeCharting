@@ -277,10 +277,12 @@ sub _run_state_machine {
         }
     }
 
-    # Si llego al limite sin resolver: clasificar como SWEEP provisional
-    $lvl->{state}          = 'RESOLVED';
-    $lvl->{resolved_at}    = $max_look;
-    $lvl->{classification} = 'SWEEP';
+    # Si el cursor termina antes del reclaim o de N cierres de aceptación, el
+    # nivel sigue pendiente. Resolverlo como SWEEP aquí adelantaba una señal
+    # que una vela posterior todavía podía convertir en GRAB o RUN.
+    $lvl->{state}          = 'SWEPT';
+    $lvl->{resolved_at}    = undef;
+    $lvl->{classification} = undef;
     $lvl->{bars_out}       = $max_look - $swept_i;
     $lvl->{max_consec_out} = $consec_out;
 }

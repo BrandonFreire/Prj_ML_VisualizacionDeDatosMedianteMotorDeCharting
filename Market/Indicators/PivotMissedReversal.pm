@@ -18,6 +18,7 @@ sub new {
         _missed      => [],
         _levels      => [],
         _ambiguous   => [],
+        _max_visible_index => -1,
     }, $class;
 }
 
@@ -28,6 +29,7 @@ sub reset {
     $self->{_levels}  = [];
     $self->{_ambiguous} = [];
     $self->{_candles} = undef;
+    $self->{_max_visible_index} = -1;
     return;
 }
 
@@ -49,9 +51,12 @@ sub compute {
     $self->{show_regular} = $args{show_regular} ? 1 : 0 if exists $args{show_regular};
     $self->{show_missed}  = $args{show_missed}  ? 1 : 0 if exists $args{show_missed};
 
+    die 'PivotMissedReversal::compute: max_visible_index debe ser un entero'
+        if defined($args{max_visible_index}) && $args{max_visible_index} !~ /^-?\d+$/;
     my $max_idx = defined($args{max_visible_index})
         ? int($args{max_visible_index}) : $#$candles;
     $max_idx = $#$candles if $max_idx > $#$candles;
+    $self->{_max_visible_index} = $max_idx;
     return $self->_result(-1) if $max_idx < 0;
     my @series = map { { %{ $candles->[$_] } } } 0 .. $max_idx;
     _validate_candles(\@series);
@@ -258,8 +263,13 @@ sub _is_pivot {
 sub _validate_candles {
     my ($candles) = @_;
     for my $i (0 .. $#$candles) {
-        die "PivotMissedReversal: vela $i sin high" unless defined $candles->[$i]{high};
-        die "PivotMissedReversal: vela $i sin low"  unless defined $candles->[$i]{low};
+        die "PivotMissedReversal: vela $i invalida" unless ref($candles->[$i]) eq 'HASH';
+        die "PivotMissedReversal: vela $i sin high numerico finito"
+            unless _finite($candles->[$i]{high});
+        die "PivotMissedReversal: vela $i sin low numerico finito"
+            unless _finite($candles->[$i]{low});
+        die "PivotMissedReversal: vela $i con high menor que low"
+            if $candles->[$i]{high} < $candles->[$i]{low};
     }
 }
 
@@ -274,7 +284,22 @@ sub _length {
 
 sub get_regular_pivots  { return $_[0]->{_regular} }
 sub get_missed_pivots   { return $_[0]->{_missed}  }
-sub get_reversal_levels { return $_[0]->{_levels}  }
+sub get_reversal_levels {
+    my ($self) = @_;
+    my $max_idx = $self->{_max_visible_index} // -1;
+    return [ map {
+        my %copy = %$_;
+        $copy{end_index} = $max_idx if $copy{active} && $max_idx >= 0;
+        \%copy;
+    } @{ $self->{_levels} } ];
+}
+
+sub _finite {
+    my ($value) = @_;
+    return defined($value) && !ref($value)
+        && "$value" =~ /^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/
+        && $value == $value && abs($value) <= 1e300;
+}
 
 sub snapshot_at {
     my ($self, $last_index) = @_;

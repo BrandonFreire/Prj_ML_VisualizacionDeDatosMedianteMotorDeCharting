@@ -105,6 +105,19 @@ my $run_level = main_bsl($run->get_levels());
 is($run_level->{classification}, 'RUN', 'tres cierres consecutivos fuera del BSL son RUN');
 is($run_level->{resolved_at}, 10, 'RUN se confirma exactamente en el tercer cierre');
 
+my $pending_market = make_market([ @{ liquidity_candles('run') }[0 .. 8] ]);
+my $pending = Market::Indicators::Liquidity->new(
+    depth => 2, n_accept => 3, atr_period => 2,
+);
+$pending->compute_all($pending_market);
+my $pending_level = main_bsl($pending->get_levels);
+is($pending_level->{state}, 'SWEPT',
+    'un cierre fuera al final del cursor mantiene el nivel pendiente');
+ok(!defined $pending_level->{classification} && !defined $pending_level->{resolved_at},
+    'no adelanta SWEEP cuando las velas siguientes aún pueden confirmar GRAB o RUN');
+ok(scalar(grep { ($_->{index} // -1) == 3 } @{$pending->get_active}),
+    'el nivel pendiente sigue activo para el siguiente cálculo');
+
 my $at_seven = main_bsl($sweep->get_levels_at(7));
 ok($at_seven, 'el snapshot replay conserva el BSL conocido en la vela 7');
 is($at_seven->{state}, 'DETECTED', 'el snapshot replay no conoce un Sweep futuro');

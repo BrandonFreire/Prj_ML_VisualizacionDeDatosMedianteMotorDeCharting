@@ -88,6 +88,21 @@ eval {
 };
 like($@, qr/high below low/, 'rejects invalid OHLC input instead of silently fabricating pivots');
 
+eval {
+    Market::Indicators::InternalZigZag->compute(
+        candles => [ candle(0, 10, 5, 11, 7) ], pivot_length => 1,
+    );
+};
+like($@, qr/OHLC outside high\/low/, 'rejects open or close values outside the candle range');
+
+my $scientific = Market::Indicators::InternalZigZag->compute(
+    candles => [
+        { time => 0, open => '1e2', high => '1.1e2', low => '9e1', close => '1e2', volume => 1 },
+    ],
+    pivot_length => 1,
+);
+is_deeply($scientific->{pivots}, [], 'accepts finite scientific notation without fabricating pivots');
+
 my $market = Market::MarketData->new;
 $market->add_candle({ %$_ }) for @$candles;
 my $atr_indicator = Market::Indicators::ATR->new(2);

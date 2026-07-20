@@ -51,6 +51,7 @@ sub compute_all {
     my @external_raw = _confirmed_pivots_from_candles( $arr, $external_depth );
     $self->{_external_raw} = [ @external_raw ];
     my $external_pivots = _compress_to_zigzag(\@external_raw);
+    $external_pivots = _annotate_hldv($external_pivots);
     $self->{_external_pivots} = $external_pivots;
     $self->{_external_segments} = _segments_from_pivots( $external_pivots, 'external' );
 
@@ -81,7 +82,9 @@ sub get_internal_candles  { return $_[0]->{_internal_candles}  }
 
 sub get_external_pivots_until {
     my ($self, $current_bar) = @_;
-    return _pivots_until($self->{_external_raw}, $current_bar, $self->{_candles});
+    return _annotate_hldv(
+        _pivots_until($self->{_external_raw}, $current_bar, $self->{_candles})
+    );
 }
 
 sub get_external_segments_until {
@@ -285,6 +288,26 @@ sub _compress_to_zigzag {
     }
 
     return \@zz;
+}
+
+sub _annotate_hldv {
+    my ($pivots) = @_;
+    return [] unless $pivots && ref($pivots) eq 'ARRAY';
+    my ($last_high, $last_low);
+    my @out;
+    for my $pivot (@$pivots) {
+        my %copy = %$pivot;
+        if (($copy{type} // '') eq 'high') {
+            $copy{label} = defined($last_high) && $copy{price} > $last_high ? 'HH' : 'LH';
+            $last_high = $copy{price};
+        }
+        elsif (($copy{type} // '') eq 'low') {
+            $copy{label} = defined($last_low) && $copy{price} > $last_low ? 'HL' : 'LL';
+            $last_low = $copy{price};
+        }
+        push @out, \%copy;
+    }
+    return \@out;
 }
 
 sub _pivots_until {

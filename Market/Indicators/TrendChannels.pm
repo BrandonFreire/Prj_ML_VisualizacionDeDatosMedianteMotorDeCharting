@@ -49,6 +49,8 @@ sub compute {
 
     my $candles = $args{candles};
     return [] unless ref($candles) eq 'ARRAY' && @$candles;
+    return [] if defined($args{max_visible_index})
+        && $args{max_visible_index} !~ /^-?\d+$/;
     my $max_idx = defined $args{max_visible_index} ? int($args{max_visible_index}) : $#$candles;
     $max_idx = $#$candles if $max_idx > $#$candles;
     return [] if $max_idx < $cfg{minimum_candles} - 1;
@@ -90,7 +92,9 @@ sub _normalise_config {
                     contact_merge_minutes minimum_main_line_touches
                     minimum_opposite_line_touches minimum_total_touches
                     maximum_pivot_lookback maximum_channels)) {
-        $cfg->{$key} = int($cfg->{$key} // $DEFAULT{$key});
+        $cfg->{$key} = $DEFAULT{$key}
+            unless defined($cfg->{$key}) && $cfg->{$key} =~ /^-?\d+$/;
+        $cfg->{$key} = int($cfg->{$key});
         $cfg->{$key} = 1 if $cfg->{$key} < 1;
     }
     for my $key (qw(minimum_duration_minutes contact_tolerance_atr
@@ -145,6 +149,7 @@ sub _normalise_provided_pivots {
         next unless defined($pivot->{index}) && $pivot->{index} =~ /^\d+$/ && _finite($pivot->{price});
         my $index = int($pivot->{index});
         next if $index > $#$series;
+        next if defined($pivot->{confirmed_at}) && $pivot->{confirmed_at} !~ /^\d+$/;
         my $confirmed_at = defined($pivot->{confirmed_at}) ? int($pivot->{confirmed_at}) : $index;
         next if $confirmed_at < $index || $confirmed_at > $max_idx;
         next if exists($pivot->{confirmed}) && !$pivot->{confirmed};
@@ -268,7 +273,9 @@ sub _evaluate_candidate {
                  || $touches->{total_count} < $cfg->{minimum_total_touches};
     my $containment = _containment(\%args, $a->{index}, $end);
     return undef if $containment < $cfg->{minimum_containment_ratio};
-    my $score = _score($touches, $containment, $duration, $width_in_atr, $args{direction}, $cfg);
+    my $touch_distribution = _touch_distribution($touches, $a->{index}, $end);
+    my $score = _score($touches, $containment, $duration, $width_in_atr,
+        $touch_distribution, $cfg);
     return undef if $score < $cfg->{minimum_score};
 
     my ($lower_start, $upper_start) = _bounds(\%args, $a->{index});
@@ -288,6 +295,7 @@ sub _evaluate_candidate {
         containment_ratio => sprintf('%.4f', $containment) + 0,
         upper_touches => $touches->{upper_count}, lower_touches => $touches->{lower_count},
         total_touches => $touches->{total_count}, score => sprintf('%.4f', $score) + 0,
+        touch_distribution_ratio => sprintf('%.4f', $touch_distribution) + 0,
         duration_minutes => sprintf('%.2f', $duration / 60) + 0,
         confirmed_at => $confirmed_at, confirmed_time => $series->[$confirmed_at]{time},
         status => $break ? 'broken' : 'confirmed', active => $break ? 0 : 1,
@@ -388,15 +396,24 @@ sub _containment {
 }
 
 sub _score {
-    my ($touches, $containment, $duration, $width, $direction, $cfg) = @_;
+    my ($touches, $containment, $duration, $width, $distribution, $cfg) = @_;
     my $touch_score = min(1, $touches->{total_count} / $cfg->{minimum_total_touches});
-    my @all = sort { $a->{index} <=> $b->{index} } (@{ $touches->{upper} }, @{ $touches->{lower} });
-    my $distribution = @all >= 2 ? ($all[-1]{index} - $all[0]{index}) / max(1, $all[-1]{index} - $all[0]{index}) : 0;
     $touch_score *= 0.75 + 0.25 * $distribution;
     my $duration_score = min(1, $duration / ($cfg->{minimum_duration_minutes} * 60 * 2));
     my $middle = ($cfg->{minimum_width_atr} + $cfg->{maximum_width_atr}) / 2;
     my $width_score = 1 - min(1, abs($width - $middle) / max(0.001, $middle));
     return $touch_score * 0.35 + $containment * 0.35 + $duration_score * 0.15 + $width_score * 0.15;
+}
+
+sub _touch_distribution {
+    my ($touches, $start, $end) = @_;
+    my @all = sort { $a->{index} <=> $b->{index} }
+        (@{ $touches->{upper} // [] }, @{ $touches->{lower} // [] });
+    return 0 if @all < 2 || $end <= $start;
+    my $ratio = ($all[-1]{index} - $all[0]{index}) / ($end - $start);
+    $ratio = 0 if $ratio < 0;
+    $ratio = 1 if $ratio > 1;
+    return $ratio;
 }
 
 sub _average_atr {
@@ -428,8 +445,18 @@ sub _time_seconds {
     return undef unless defined $value && !ref $value;
     return $value + 0 if $value =~ /^[-+]?\d+(?:\.\d+)?$/ && abs($value) < 100_000_000_000;
     return ($value + 0) / 1000 if $value =~ /^[-+]?\d+(?:\.\d+)?$/;
-    return undef unless $value =~ /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/;
-    return timegm(($6 // 0) + 0, $5 + 0, $4 + 0, $3 + 0, $2 - 1, $1 - 1900);
+    return undef unless $value =~ /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/i;
+    my ($year, $month, $day, $hour, $minute, $second, $zone)
+        = ($1, $2, $3, $4, $5, $6 // 0, $7);
+    my $epoch = eval { timegm($second + 0, $minute + 0, $hour + 0,
+        $day + 0, $month - 1, $year - 1900) };
+    return undef if !defined($epoch) || $@;
+    if (defined($zone) && uc($zone) ne 'Z') {
+        return undef unless $zone =~ /^([+-])(\d{2}):?(\d{2})$/;
+        my $offset = ($2 * 60 + $3) * 60;
+        $epoch += $1 eq '+' ? -$offset : $offset;
+    }
+    return $epoch;
 }
 
 sub _finite {

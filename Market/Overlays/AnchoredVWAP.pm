@@ -51,6 +51,7 @@ sub render {
         my $end_idx    = $line->{end_idx}    // next;
         my $values     = $line->{values}     // next;
         my $std_dev    = $line->{std_dev}    // [];
+        my $values_offset = $line->{values_offset} // 0;
         my $m1         = $line->{mult_1}     // 1.0;
         my $m2         = $line->{mult_2}     // 2.0;
         my $m3         = $line->{mult_3}     // 3.0;
@@ -70,11 +71,12 @@ sub render {
         my $vis_start = $anchor_idx < $d_start ? $d_start : $anchor_idx;
 
         for my $i ($vis_start .. $vis_end) {
-            next unless defined $values->[$i];
+            my $slot = $i - $values_offset;
+            next if $slot < 0 || !defined $values->[$slot];
             my $x = $scale->index_to_center_x($i);
-            my $v = $values->[$i];
+            my $v = $values->[$slot];
             my $y = $scale->value_to_y($v);
-            my $sd = $std_dev->[$i] // 0;
+            my $sd = $std_dev->[$slot] // 0;
 
             # Omitir validación estricta de viewport vertical si queremos líneas que lo crucen,
             # pero por optimización filtramos lo que esté muy lejos
