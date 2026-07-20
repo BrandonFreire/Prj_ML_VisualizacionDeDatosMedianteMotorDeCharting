@@ -35,6 +35,7 @@ use Market::IndicatorManager;
 use Market::Indicators::ATR;
 use Market::Indicators::SMC_Structures;
 use Market::Indicators::Liquidity;
+use Market::Indicators::MarketRegime;
 use Market::Indicators::ZigZagDirection;
 use Market::Indicators::Strategy_Builder;
 use Market::Indicators::VolumeProfile;
@@ -148,7 +149,20 @@ printf "  SH: %d  SL: %d  BOS: %d  CHoCH: %d  FVG: %d\n",
     scalar @{ $smc_ind->get_fvg_zones()    };
 print "Done.\n";
 
-# ---- 3d. Strategy Builder (SuperTrend, HalfTrend, RangeFilter, Supply/Demand) ----
+# ---- 3d. Contexto de regimen (Liquidity + SMC + ATR) ----
+print "Computing Market Regime...\n";
+my $regime_ind = Market::Indicators::MarketRegime->new(
+    liquidity_indicator => $lq_ind,
+    smc_indicator       => $smc_ind,
+);
+$regime_ind->compute_all($market);
+my $last_regime = $regime_ind->get_states()->[-1] // {};
+printf "  Regimen actual: %s (confianza %.2f)\n",
+    $last_regime->{state} // 'UNKNOWN',
+    $last_regime->{confidence_score} // 0;
+print "Done.\n";
+
+# ---- 3e. Strategy Builder (SuperTrend, HalfTrend, RangeFilter, Supply/Demand) ----
 print "Computing Strategy Builder...\n";
 my $strategy_ind = Market::Indicators::Strategy_Builder->new(
     st_multiplier => 3.0,
@@ -167,7 +181,7 @@ printf "  SuperTrend: %d  HalfTrend: %d  RangeFilter: %d  Supply: %d  Demand: %d
     scalar @{ $strategy_ind->get_demand_zones() };
 print "Done.\n";
 
-# ---- 3e. Volume Profile (POC, VAH, VAL) ----
+# ---- 3f. Volume Profile (POC, VAH, VAL) ----
 print "Computing Volume Profile...\n";
 my $vp_ind = Market::Indicators::VolumeProfile->new(
     mode     => 'manual',
@@ -178,7 +192,7 @@ $vp_ind->compute_all($market);
 printf "  Perfiles generados: %d\n", scalar @{ $vp_ind->get_profiles() };
 print "Done.\n";
 
-# ---- 3f. Anchored VWAP Multipivot (5 anchors) ----
+# ---- 3g. Anchored VWAP Multipivot (5 anchors) ----
 print "Computing Anchored VWAP...\n";
 my $vwap_ind = Market::Indicators::AnchoredVWAP->new(
     # Multiplicadores editables con
@@ -1017,6 +1031,7 @@ $fs_btn = $toolbar->Button(
 # Registrar overlays SMC y Liquidez
 $engine->set_lq_indicator($lq_ind);
 $engine->set_smc_indicator($smc_ind);
+$engine->set_market_regime_indicator($regime_ind);
 $engine->set_strategy_indicator($strategy_ind);
 $engine->set_vp_indicator($vp_ind);
 $engine->set_vwap_indicator($vwap_ind);
@@ -1025,8 +1040,9 @@ $engine->add_overlay( Market::Overlays::ZigZagDirection->new(
     visibility => \%overlay_visibility,
 ) );
 $engine->add_overlay( Market::Overlays::SMC_Structures->new(
-    indicator  => $smc_ind,
-    visibility => \%overlay_visibility,
+    indicator        => $smc_ind,
+    regime_indicator => $regime_ind,
+    visibility       => \%overlay_visibility,
 ) );
 $engine->add_overlay( Market::Overlays::Liquidity->new(
     indicator  => $lq_ind,

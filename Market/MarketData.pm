@@ -19,6 +19,12 @@ sub new {
         },
         current_tf => '1',
         _cursor    => undef,
+        # Cada mutacion de velas invalida el cache de volumen. El cache se
+        # conserva por temporalidad macro para que volver de 1h a 5m no
+        # reconstruya los mismos buckets 1m/5m/15m.
+        _data_revision       => 0,
+        _volume_index        => {},
+        _volume_index_cache  => {},
     };
     bless $self, $class;
     return $self;
@@ -32,12 +38,13 @@ sub get_data {
 sub add_candle {
     my ($self, $candle) = @_;
     push @{ $self->{data}{'1'} }, $candle;
+    $self->_touch_data();
 }
 
 # Build higher-timeframe candles from 1m data using integer arithmetic for bucket boundaries.
 # Evita float32 para epochs de 2026; los buckets se calculan con enteros Perl.
 sub build_tf_candles {
-    my ($self, $tf) = @_;
+    my ($self, $tf, %opts) = @_;
     my @base    = @{ $self->{data}{'1'} };
     my $n       = scalar @base;
     my $tf_secs = $tf * 60;
@@ -92,13 +99,15 @@ sub build_tf_candles {
     }
 
     $self->{data}{$tf} = \@result;
+    $self->_touch_data() unless $opts{defer_cache_invalidation};
 }
 
 sub build_timeframes {
     my ($self) = @_;
     for my $tf (qw(5 15 60 120 240 1440 10080)) {
-        $self->build_tf_candles($tf);
+        $self->build_tf_candles($tf, defer_cache_invalidation => 1);
     }
+    $self->_touch_data();
 }
 
 ## ----------------------------------------------------------------
@@ -111,6 +120,13 @@ sub build_timeframes {
 sub build_volume_index {
     my ($self, $tf_macro) = @_;
     $tf_macro //= $self->{current_tf} // '1';
+    my $revision = $self->{_data_revision} // 0;
+    my $cached = $self->{_volume_index_cache}{$tf_macro};
+    if ($cached && ($cached->{revision} // -1) == $revision) {
+        $self->{_volume_index} = $cached->{index};
+        return $cached->{index};
+    }
+
     my $tf_secs = $tf_macro * 60;
 
     my %index;
@@ -124,6 +140,10 @@ sub build_volume_index {
         }
     }
     $self->{_volume_index} = \%index;
+    $self->{_volume_index_cache}{$tf_macro} = {
+        revision => $revision,
+        index    => \%index,
+    };
     return \%index;
 }
 
@@ -158,6 +178,9 @@ sub clone_upto {
         data       => \%data,
         current_tf => $tf,
         _cursor    => undef,
+        _data_revision      => $self->{_data_revision} // 0,
+        _volume_index       => {},
+        _volume_index_cache => {},
     }, ref($self);
 }
 
@@ -216,6 +239,18 @@ sub merge_delta_row {
     else {
         push @$arr, $row;
     }
+    $self->_touch_data();
+}
+
+sub _touch_data {
+    my ($self) = @_;
+    $self->{_data_revision} = ($self->{_data_revision} // 0) + 1;
+    # No hace falta borrar los hashes: la revision impide reusarlos. Limpiar
+    # evita que una fuente de streaming de larga duracion acumule un cache
+    # obsoleto sin limite.
+    $self->{_volume_index}       = {};
+    $self->{_volume_index_cache} = {};
+    return;
 }
 
 sub compute_time_anchors {

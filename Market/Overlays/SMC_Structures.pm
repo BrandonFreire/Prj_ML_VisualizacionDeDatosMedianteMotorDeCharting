@@ -22,8 +22,9 @@ my $COLOR_TL_BEAR    = '#ef5350';
 sub new {
     my ($class, %args) = @_;
     return bless {
-        indicator      => $args{indicator},
-        visibility     => $args{visibility},
+        indicator        => $args{indicator},
+        regime_indicator => $args{regime_indicator},
+        visibility       => $args{visibility},
         show_bos       => $args{show_bos} // 1,
         show_fvg       => $args{show_fvg} // 1,
         fvg_max_age    => exists $args{fvg_max_age} ? $args{fvg_max_age} : 120,
@@ -389,6 +390,37 @@ sub _render_fibonacci {
 
 sub _render_market_regime {
     my ($self, $canvas, $current_bar) = @_;
+
+    # Cuando existe el motor de contexto, el badge expone su estado
+    # explicable. Cada estado fue calculado respetando su propio cursor, de
+    # modo que leer la fila actual no filtra informacion futura en Replay.
+    my $regime = $self->{regime_indicator};
+    if ($regime && $regime->can('get_states')) {
+        my $state = $regime->get_states()->[$current_bar];
+        if ($state) {
+            my %colors = (
+                TR_BULLISH        => $COLOR_BOS_BULL,
+                TR_BEARISH        => $COLOR_BOS_BEAR,
+                TRANSITION        => $COLOR_CHOCH_BULL,
+                ZM_MANIPULATION   => $COLOR_CHOCH_BEAR,
+                LIQUIDEZ_EXTERNA  => $COLOR_ZONE_HIGH,
+                LIQUIDEZ_INTERNA  => '#ab47bc',
+                ZONA_INTERNA      => '#b2b5be',
+                UNKNOWN           => '#6b7280',
+            );
+            my $name  = $state->{state} // 'UNKNOWN';
+            my $color = $colors{$name} // '#b2b5be';
+            $canvas->createText( 8, 34,
+                -text   => sprintf('Regime: %s (%.0f%%)', $name,
+                    100 * ($state->{confidence_score} // 0)),
+                -fill   => $color,
+                -font   => ['Helvetica', 8, 'bold'],
+                -anchor => 'w',
+                -tags   => ['smc_overlay', 'smc_label', 'market_regime'],
+            );
+            return;
+        }
+    }
 
     my @events;
     push @events, @{ $self->{indicator}->get_bos_events() // [] }

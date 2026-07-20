@@ -4,6 +4,7 @@ use warnings;
 use FindBin;
 use lib "$FindBin::Bin/lib", '.';
 use Test::More;
+use Scalar::Util qw(refaddr);
 
 use MarketTestUtil qw(make_market sample_candles);
 
@@ -39,6 +40,11 @@ my $prefix = $market->clone_upto(3);
 is($prefix->size(), 4, 'clone_upto crea un prefijo de datos para replay');
 is($prefix->last_candle->{time}, $candles->[3]{time}, 'el prefijo termina en el cursor pedido');
 
+my $volume_index_first = $market->build_volume_index('5');
+my $volume_index_cached = $market->build_volume_index('5');
+is(refaddr($volume_index_cached), refaddr($volume_index_first),
+    'reutiliza el indice de volumen cacheado para la misma temporalidad y datos');
+
 $market->merge_delta_row({
     time   => $candles->[-1]{time},
     open   => $candles->[-1]{open},
@@ -53,5 +59,11 @@ is($last->{high}, 115, 'merge_delta_row conserva el máximo acumulado');
 is($last->{low}, 106, 'merge_delta_row conserva el mínimo acumulado');
 is($last->{close}, 114, 'merge_delta_row actualiza el cierre');
 is($last->{volume}, 26, 'merge_delta_row acumula el delta de volumen');
+
+my $volume_index_after_delta = $market->build_volume_index('5');
+isnt(refaddr($volume_index_after_delta), refaddr($volume_index_first),
+    'una actualizacion de vela invalida el indice de volumen cacheado');
+is(refaddr($market->build_volume_index('5')), refaddr($volume_index_after_delta),
+    'el indice reconstruido vuelve a cachearse tras la invalidacion');
 
 done_testing();

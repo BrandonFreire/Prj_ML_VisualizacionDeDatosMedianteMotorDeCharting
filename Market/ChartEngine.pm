@@ -79,6 +79,7 @@ sub new {
         # --- Overlays SMC y Liquidez ---
         overlays        => [],   # lista de objetos overlay
         _lq_indicator   => undef,  # Market::Indicators::Liquidity
+        _market_regime_indicator => undef, # Market::Indicators::MarketRegime
 
         # --- Sistema Replay ---
         replay_mode    => 0,       # 1 = en modo replay
@@ -1809,6 +1810,11 @@ sub set_lq_indicator {
     $self->{_lq_indicator} = $ind;
 }
 
+sub set_market_regime_indicator {
+    my ($self, $ind) = @_;
+    $self->{_market_regime_indicator} = $ind;
+}
+
 sub set_strategy_indicator {
     my ($self, $ind) = @_;
     $self->{_strategy_indicator} = $ind;
@@ -2191,6 +2197,10 @@ sub set_timeframe {
     if ( $self->{_smc_indicator} ) {
         $self->{_smc_indicator}->reset();
         $self->{_smc_indicator}->compute_all( $self->{market} );
+    }
+    if ( $self->{_market_regime_indicator} ) {
+        $self->{_market_regime_indicator}->reset();
+        $self->{_market_regime_indicator}->compute_all( $self->{market} );
     }
     # Recomputar nuevos indicadores (Fase 2)
     if ( $self->{_strategy_indicator} ) {

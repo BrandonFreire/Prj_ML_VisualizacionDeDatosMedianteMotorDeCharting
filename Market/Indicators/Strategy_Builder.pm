@@ -32,12 +32,22 @@ sub new {
         # Supply/Demand volume threshold (percentil)
         sd_vol_pct     => $args{sd_vol_pct}     // 0.70,
 
+        # Motor de señales: el indicador principal debe cambiar de dirección;
+        # las confirmaciones pueden aprobar en la misma vela o antes de expirar.
+        signal_main_indicator     => $args{signal_main_indicator} // 'supertrend',
+        signal_confirmations      => $args{signal_confirmations}  // [],
+        signal_confirmation_mode  => uc($args{signal_confirmation_mode} // 'AND'),
+        signal_expiry_bars        => $args{signal_expiry_bars} // 3,
+        signal_alternating_only   => exists $args{signal_alternating_only}
+            ? ($args{signal_alternating_only} ? 1 : 0) : 1,
+
         # Results
         _supertrend    => [],
         _halftrend     => [],
         _range_filter  => [],
         _supply_zones  => [],
         _demand_zones  => [],
+        _signals       => [],
         _candles       => undef,
         _smc_ref       => undef,   # ref a SMC_Structures para OBs
     }, $class;
@@ -50,7 +60,7 @@ sub set_smc_indicator {
 
 sub reset {
     my ($self) = @_;
-    $self->{$_} = [] for qw(_supertrend _halftrend _range_filter _supply_zones _demand_zones);
+    $self->{$_} = [] for qw(_supertrend _halftrend _range_filter _supply_zones _demand_zones _signals);
     $self->{_candles} = undef;
 }
 
@@ -75,8 +85,132 @@ sub compute_all {
     # 3. Range Filter
     $self->{_range_filter} = $self->_compute_range_filter($arr);
 
-    # 4 & 5. Supply / Demand Zones (basados en OBs de SMC)
+    # 4. Señales configurables sobre series ya calculadas.
+    $self->compute_signals($arr);
+
+    # 5 & 6. Supply / Demand Zones (basados en OBs de SMC)
     $self->_compute_supply_demand($arr, $market);
+}
+
+# ================================================================
+# Señales LONG/SHORT configurables
+# ================================================================
+sub set_signal_configuration {
+    my ($self, %args) = @_;
+    for my $key (qw(signal_main_indicator signal_confirmations signal_expiry_bars signal_alternating_only)) {
+        $self->{$key} = $args{$key} if exists $args{$key};
+    }
+    if (exists $args{signal_confirmation_mode}) {
+        my $mode = uc($args{signal_confirmation_mode} // 'AND');
+        $self->{signal_confirmation_mode} = $mode eq 'OR' ? 'OR' : 'AND';
+    }
+    return;
+}
+
+sub get_signal_configuration {
+    my ($self) = @_;
+    return {
+        main_indicator   => $self->{signal_main_indicator},
+        confirmations    => [ @{ $self->{signal_confirmations} // [] } ],
+        confirmation_mode => $self->{signal_confirmation_mode} // 'AND',
+        expiry_bars      => $self->{signal_expiry_bars} // 3,
+        alternating_only => $self->{signal_alternating_only} ? 1 : 0,
+    };
+}
+
+sub compute_signals {
+    my ($self, $candles) = @_;
+    $candles //= $self->{_candles} // [];
+    my $n = scalar @$candles;
+    my @signals;
+    return $self->{_signals} = \@signals unless $n;
+
+    my $main = $self->{signal_main_indicator} // 'supertrend';
+    my @confirmations = grep { $_ ne $main } @{ $self->{signal_confirmations} // [] };
+    my $mode = ($self->{signal_confirmation_mode} // 'AND') eq 'OR' ? 'OR' : 'AND';
+    my $expiry = int($self->{signal_expiry_bars} // 3);
+    $expiry = 1 if $expiry < 1;
+    my $alternate_only = $self->{signal_alternating_only} ? 1 : 0;
+    my ($pending, $last_side);
+
+    for my $i (0 .. $n - 1) {
+        my $direction = $self->_signal_direction_at($main, $i);
+        my $previous  = $i > 0 ? $self->_signal_direction_at($main, $i - 1) : undef;
+        my %row = (
+            index => $i,
+            time  => $candles->[$i]{time},
+            main_indicator => $main,
+            main_direction => $direction,
+            long_signal => 0,
+            short_signal => 0,
+            replay_safe => 1,
+        );
+
+        if (defined $direction && $direction != 0
+            && defined $previous && $previous != 0 && $direction != $previous) {
+            $pending = {
+                direction => $direction,
+                trigger_index => $i,
+                expires_at_index => $i + $expiry,
+            };
+        }
+
+        if ($pending && $i <= $pending->{expires_at_index}) {
+            my (@passed, @failed);
+            for my $name (@confirmations) {
+                my $confirmation_direction = $self->_signal_direction_at($name, $i);
+                if (defined $confirmation_direction && $confirmation_direction == $pending->{direction}) {
+                    push @passed, $name;
+                } else {
+                    push @failed, $name;
+                }
+            }
+            my $confirmed = !@confirmations
+                || ($mode eq 'AND' ? !@failed : @passed);
+
+            if ($confirmed) {
+                my $side = $pending->{direction} > 0 ? 'LONG' : 'SHORT';
+                my $blocked = $alternate_only && defined($last_side) && $last_side eq $side;
+                unless ($blocked) {
+                    $row{side}                 = $side;
+                    $row{long_signal}          = $side eq 'LONG' ? 1 : 0;
+                    $row{short_signal}         = $side eq 'SHORT' ? 1 : 0;
+                    $row{trigger_index}        = $pending->{trigger_index};
+                    $row{expires_at_index}     = $pending->{expires_at_index};
+                    $row{confirmations_passed} = \@passed;
+                    $row{confirmations_failed} = \@failed;
+                    $row{confidence} = @confirmations
+                        ? scalar(@passed) / scalar(@confirmations) : 1;
+                    $last_side = $side;
+                }
+                $pending = undef;
+            }
+        }
+        elsif ($pending && $i > $pending->{expires_at_index}) {
+            $pending = undef;
+        }
+
+        push @signals, \%row;
+    }
+    $self->{_signals} = \@signals;
+    return \@signals;
+}
+
+sub _signal_direction_at {
+    my ($self, $name, $index) = @_;
+    if ($name eq 'supertrend') {
+        return $self->{_supertrend}[$index]{direction}
+            if defined $self->{_supertrend}[$index]{direction};
+    }
+    elsif ($name eq 'halftrend') {
+        return ($self->{_halftrend}[$index]{trend} // 1) == 0 ? 1 : -1
+            if defined $self->{_halftrend}[$index];
+    }
+    elsif ($name eq 'range_filter') {
+        return $self->{_range_filter}[$index]{direction}
+            if defined $self->{_range_filter}[$index]{direction};
+    }
+    return undef;
 }
 
 # ================================================================
@@ -380,5 +514,6 @@ sub get_halftrend    { return $_[0]->{_halftrend}     }
 sub get_range_filter { return $_[0]->{_range_filter}  }
 sub get_supply_zones { return $_[0]->{_supply_zones}  }
 sub get_demand_zones { return $_[0]->{_demand_zones}  }
+sub get_signals      { return $_[0]->{_signals}       }
 
 1;
