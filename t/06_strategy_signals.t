@@ -53,4 +53,23 @@ my $main_rows = $main_only->compute_signals(candles(3));
 is($main_rows->[2]{side}, 'LONG', 'sin confirmaciones la señal se emite en el cambio del indicador principal');
 is($main_rows->[2]{confidence}, 1, 'la señal principal sin confirmaciones tiene confianza completa');
 
+my $backtest = $main_only->run_backtest(
+    candles => [
+        { time => 0,   open => 100, high => 100, low => 100, close => 100, volume => 1 },
+        { time => 60,  open => 100, high => 101, low => 99.5, close => 101, volume => 1 },
+        { time => 120, open => 101, high => 103, low => 100, close => 102, volume => 1 },
+    ],
+    signals => [ { index => 0, side => 'LONG' } ],
+    atr_series => [1, 1, 1],
+    regime_series => [ { index => 0, state => 'RANGING', confidence => 0.8 } ],
+    initial_capital => 10_000,
+    stop_atr_multiple => 1,
+    reward_risk => 2,
+);
+is($backtest->{total_trades}, 1, 'Strategy Builder delega sus señales al backtester');
+is($backtest->{trades}[0]{exit_reason}, 'target',
+    'el backtest delegado conserva el SL/TP derivado del ATR');
+is($backtest->{trades}[0]{regime_state}, 'RANGING',
+    'Strategy Builder reenvía el régimen al backtester delegado');
+
 done_testing();

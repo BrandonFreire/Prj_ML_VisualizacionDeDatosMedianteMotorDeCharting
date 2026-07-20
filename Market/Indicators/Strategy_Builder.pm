@@ -2,6 +2,7 @@ package Market::Indicators::Strategy_Builder;
 
 use strict;
 use warnings;
+use Market::Backtest;
 
 # DIY Custom Strategy Builder — Motor de cálculo (Sección 6)
 #
@@ -45,6 +46,7 @@ sub new {
         _supertrend    => [],
         _halftrend     => [],
         _range_filter  => [],
+        _atr           => [],
         _supply_zones  => [],
         _demand_zones  => [],
         _signals       => [],
@@ -60,7 +62,7 @@ sub set_smc_indicator {
 
 sub reset {
     my ($self) = @_;
-    $self->{$_} = [] for qw(_supertrend _halftrend _range_filter _supply_zones _demand_zones _signals);
+    $self->{$_} = [] for qw(_supertrend _halftrend _range_filter _atr _supply_zones _demand_zones _signals);
     $self->{_candles} = undef;
 }
 
@@ -75,6 +77,7 @@ sub compute_all {
 
     # Pre-compute ATR for SuperTrend
     my @atr = _simple_atr($arr, $self->{st_period});
+    $self->{_atr} = \@atr;
 
     # 1. SuperTrend
     $self->{_supertrend} = $self->_compute_supertrend($arr, \@atr);
@@ -212,6 +215,38 @@ sub _signal_direction_at {
     }
     return undef;
 }
+
+# Ejecuta las señales ya calculadas con entrada en la apertura siguiente.
+# Mantenerlo aquí evita que cualquier consumidor tenga que reconstruir ATR o
+# accidentalmente use una señal antes de que la vela que la confirma cierre.
+sub run_backtest {
+    my ($self, %args) = @_;
+    my $engine = delete $args{engine};
+    unless ($engine) {
+        my %config;
+        for my $key (qw(initial_capital risk_per_trade max_leverage
+                        stop_atr_multiple reward_risk commission_bps
+                        slippage_bps intrabar_priority)) {
+            $config{$key} = $args{$key} if exists $args{$key};
+        }
+        $engine = Market::Backtest->new(%config);
+    }
+
+    my %run = (
+        candles    => $args{candles}    // $self->{_candles} // [],
+        signals    => $args{signals}    // $self->{_signals} // [],
+        atr_series => $args{atr_series} // $self->{_atr}     // [],
+        regime_series => $args{regime_series} // [],
+    );
+    for my $key (qw(initial_capital risk_per_trade max_leverage
+                    stop_atr_multiple reward_risk commission_bps
+                    slippage_bps intrabar_priority)) {
+        $run{$key} = $args{$key} if exists $args{$key};
+    }
+    return $engine->run(%run);
+}
+
+sub backtest { return $_[0]->run_backtest(@_[1 .. $#_]) }
 
 # ================================================================
 # SuperTrend — Cálculo por vela cerrada basado en multiplicador ATR
@@ -512,6 +547,7 @@ sub _simple_atr {
 sub get_supertrend   { return $_[0]->{_supertrend}   }
 sub get_halftrend    { return $_[0]->{_halftrend}     }
 sub get_range_filter { return $_[0]->{_range_filter}  }
+sub get_atr          { return $_[0]->{_atr}           }
 sub get_supply_zones { return $_[0]->{_supply_zones}  }
 sub get_demand_zones { return $_[0]->{_demand_zones}  }
 sub get_signals      { return $_[0]->{_signals}       }
