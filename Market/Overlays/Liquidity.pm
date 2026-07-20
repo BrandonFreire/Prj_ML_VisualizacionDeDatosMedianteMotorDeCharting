@@ -20,6 +20,7 @@ sub new {
         indicator  => $args{indicator},
         visibility => $args{visibility},
         max_levels => $args{max_levels} // 8,   # cuantos niveles mostrar como maximo por lado
+        max_equal_levels => $args{max_equal_levels} // 6,
         show_bsl   => $args{show_bsl}   // 1,
         show_ssl   => $args{show_ssl}   // 1,
     }, $class;
@@ -60,6 +61,13 @@ sub render {
         $bsl = $ind->can('get_swing_highs') ? $ind->get_swing_highs() : [];
         $ssl = $ind->can('get_swing_lows')  ? $ind->get_swing_lows()  : [];
     }
+
+    my $eqh = $self->_limit_equal_levels_for_view(
+        $bsl, $d_start, $d_end, $current_bar, 'sh',
+    );
+    my $eql = $self->_limit_equal_levels_for_view(
+        $ssl, $d_start, $d_end, $current_bar, 'sl',
+    );
     $bsl = $self->_limit_levels_for_view( $bsl, $d_start, $d_end, $current_bar );
     $ssl = $self->_limit_levels_for_view( $ssl, $d_start, $d_end, $current_bar );
 
@@ -73,6 +81,44 @@ sub render {
     $self->_render_levels( $canvas, $d_start, $d_end, $scale, $current_bar,
         $ssl, $COLOR_SSL, 'SSL', 'sl' )
         if $self->{show_ssl} || $self->_visible('show_eql', 1);
+
+    if ($self->_visible('show_eqh', 1)) {
+        $self->_render_eq_connector(
+            $canvas, $d_start, $d_end, $scale, $current_bar, $_, $COLOR_BSL, 'sh'
+        ) for @$eqh;
+    }
+    if ($self->_visible('show_eql', 1)) {
+        $self->_render_eq_connector(
+            $canvas, $d_start, $d_end, $scale, $current_bar, $_, $COLOR_SSL, 'sl'
+        ) for @$eql;
+    }
+}
+
+sub _limit_equal_levels_for_view {
+    my ($self, $levels, $d_start, $d_end, $current_bar, $side) = @_;
+    my @pairs = grep {
+        my $start = $_->{index};
+        my $pair  = $_->{eq_pair};
+        my $confirmed = $_->{eq_confirmed_at};
+        defined($start) && defined($pair) && defined($confirmed)
+            && $confirmed <= $current_bar
+            && $start <= $current_bar && $pair <= $current_bar
+            && (($side eq 'sh' && $_->{is_eqh}) || ($side eq 'sl' && $_->{is_eql}))
+            && $self->_show_level_scope($_, $current_bar)
+            && (($start > $pair ? $start : $pair) >= $d_start)
+            && (($start < $pair ? $start : $pair) <= $d_end)
+    } @{ $levels // [] };
+
+    @pairs = sort {
+        my $a_ext = $self->_effective_scope($a, $current_bar) eq 'external' ? 1 : 0;
+        my $b_ext = $self->_effective_scope($b, $current_bar) eq 'external' ? 1 : 0;
+        $b_ext <=> $a_ext
+            || (($a->{eq_deviation_atr} // 9) <=> ($b->{eq_deviation_atr} // 9))
+            || (($b->{eq_confirmed_at} // 0) <=> ($a->{eq_confirmed_at} // 0))
+    } @pairs;
+    my $limit = int($self->{max_equal_levels} // 6);
+    @pairs = @pairs[0 .. $limit - 1] if $limit > 0 && @pairs > $limit;
+    return \@pairs;
 }
 
 sub _limit_levels_for_view {
@@ -105,8 +151,13 @@ sub _limit_levels_for_view {
         my $b_ext = $self->_effective_scope($b, $current_bar) eq 'external' ? 1 : 0;
         my $a_swept = defined $a->{swept_at} && $a->{swept_at} <= $current_bar ? 1 : 0;
         my $b_swept = defined $b->{swept_at} && $b->{swept_at} <= $current_bar ? 1 : 0;
+        my $a_eq = defined($a->{eq_pair})
+            && ($a->{eq_confirmed_at} // 9_999_999) <= $current_bar ? 1 : 0;
+        my $b_eq = defined($b->{eq_pair})
+            && ($b->{eq_confirmed_at} // 9_999_999) <= $current_bar ? 1 : 0;
         $b_ext <=> $a_ext
             || (($b_swept ? 0 : 1) <=> ($a_swept ? 0 : 1))
+            || ($b_eq <=> $a_eq)
             || (($b->{index} // 0) <=> ($a->{index} // 0))
     } @visible;
 
@@ -183,16 +234,6 @@ sub _render_levels {
         my $show_base = $side eq 'sh'
             ? $self->_visible('show_bsl', 1)
             : $self->_visible('show_ssl', 1);
-        my $show_eq = $level_label eq 'EQH'
-            ? $self->_visible('show_eqh', 1)
-            : $level_label eq 'EQL'
-                ? $self->_visible('show_eql', 1)
-                : 0;
-
-        $self->_render_eq_connector(
-            $canvas, $d_start, $d_end, $scale, $current_bar, $lvl, $color, $side
-        ) if $show_eq;
-
         my $swept_now = defined $lvl->{swept_at} && $lvl->{swept_at} <= $current_bar;
         my $line_end  = $swept_now ? $lvl->{swept_at} : $current_bar;
         my $draw_start = $start_idx < $d_start ? $d_start : $start_idx;
@@ -281,9 +322,9 @@ sub _render_eq_connector {
     return if $x1 > $scale->{x_width} || $x2 < 0 || $x1 > $x2;
 
     my $pair_price = defined $lvl->{eq_pair_price} ? $lvl->{eq_pair_price} : $lvl->{price};
-    my $p1 = _interpolate_eq_price($pair_idx, $pair_price, $start_idx, $lvl->{price}, $draw_start);
-    my $p2 = _interpolate_eq_price($pair_idx, $pair_price, $start_idx, $lvl->{price}, $draw_end);
-    return unless defined $p1 && defined $p2;
+    my $eq_price = defined($lvl->{eq_price})
+        ? $lvl->{eq_price} : ($pair_price + $lvl->{price}) / 2;
+    my ($p1, $p2) = ($eq_price, $eq_price);
     my $y1 = $scale->value_to_y($p1);
     my $y2 = $scale->value_to_y($p2);
     return if defined $scale->{y_height}

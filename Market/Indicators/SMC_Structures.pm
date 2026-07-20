@@ -452,6 +452,11 @@ sub _detect_order_blocks {
             ? ($c->{open}, $c->{low})
             : ($c->{high}, $c->{open});
 
+        my $metrics = _order_block_relevance(
+            $arr, $ob_idx, $ev->{index}, $top, $bottom,
+            $ev->{scope} // 'internal', $ev,
+        );
+
         push @obs, {
             index              => $ob_idx,
             direction          => $dir,
@@ -461,9 +466,59 @@ sub _detect_order_blocks {
             scope              => $ev->{scope} // 'internal',
             confirmed_at       => $ev->{confirmed_at} // $ev->{index},
             scope_confirmed_at => $ev->{scope_confirmed_at} // $ev->{confirmed_at} // $ev->{index},
+            structure_type     => $ev->{type} // $ev->{event_type} // 'structure_break',
+            boosted            => $ev->{boosted} // 0,
+            probability_weight => $ev->{probability_weight} // 0.50,
+            %$metrics,
         };
     }
     return \@obs;
+}
+
+sub _order_block_relevance {
+    my ($arr, $ob_idx, $trigger_idx, $top, $bottom, $scope, $event) = @_;
+    my $lookback = 20;
+    my $start = $ob_idx > $lookback ? $ob_idx - $lookback : 0;
+    my ($range_sum, $volume_sum, $count) = (0, 0, 0);
+    for my $i ($start .. $ob_idx) {
+        my $c = $arr->[$i] // next;
+        next unless defined($c->{high}) && defined($c->{low}) && $c->{high} > $c->{low};
+        $range_sum += $c->{high} - $c->{low};
+        $volume_sum += $c->{volume} // 0;
+        $count++;
+    }
+    my $average_range = $count ? $range_sum / $count : 0;
+    $average_range = abs($top - $bottom) if $average_range <= 0;
+    $average_range = 1e-12 if $average_range <= 0;
+
+    my $zone_height = abs($top - $bottom);
+    my $zone_ratio = $zone_height / $average_range;
+    my $trigger = $arr->[$trigger_idx] // {};
+    my $midpoint = ($top + $bottom) / 2;
+    my $displacement = defined($trigger->{close})
+        ? abs($trigger->{close} - $midpoint) / $average_range : 0;
+    my $average_volume = $count ? $volume_sum / $count : 0;
+    my $volume_ratio = $average_volume > 0 && defined($trigger->{volume})
+        ? $trigger->{volume} / $average_volume : 1;
+
+    my $score = ($displacement > 4 ? 4 : $displacement) * 0.70
+        + ($zone_ratio > 1.5 ? 1.5 : $zone_ratio) * 0.45
+        + ($volume_ratio > 3 ? 3 : $volume_ratio) * 0.20
+        + (($scope // '') eq 'external' ? 1.25 : 0)
+        + (($event->{boosted} // 0) ? 0.50 : 0)
+        + ($event->{probability_weight} // 0.50) * 0.30;
+
+    my ($min_zone, $min_displacement) = ($scope // '') eq 'external'
+        ? (0.20, 1.00) : (0.25, 1.50);
+    return {
+        zone_height       => $zone_height + 0,
+        average_range     => $average_range + 0,
+        zone_range_ratio  => $zone_ratio + 0,
+        displacement_atr => $displacement + 0,
+        volume_ratio      => $volume_ratio + 0,
+        relevance_score   => $score + 0,
+        relevant          => ($zone_ratio >= $min_zone && $displacement >= $min_displacement) ? 1 : 0,
+    };
 }
 
 # El estado de FVG y Order Block pertenece al motor analítico. El overlay
@@ -520,21 +575,34 @@ sub _annotate_order_block_lifecycle {
         $ob->{status}    = 'active';
         $ob->{active}    = 1;
         $ob->{end_index} = undef;
+        $ob->{first_touch_at} = undef;
+        $ob->{fill_ratio} = 0;
         my $start = ($ob->{triggered_by} // $ob->{index} // -1) + 1;
         next if $start > $#$arr;
 
+        my $range = ($ob->{top} // 0) - ($ob->{bottom} // 0);
+        next if $range <= 0;
+
         for my $i ($start .. $#$arr) {
             my $c = $arr->[$i] // next;
-            my $status;
+            my ($penetration, $invalidated);
             if (($ob->{direction} // '') eq 'bull') {
-                next unless defined $c->{low} && $c->{low} <= $ob->{top};
-                $status = $c->{low} <= $ob->{bottom} ? 'invalidated' : 'mitigated';
+                $invalidated = defined($c->{close}) && $c->{close} < $ob->{bottom};
+                next unless $invalidated || (defined($c->{low}) && $c->{low} <= $ob->{top});
+                $penetration = defined($c->{low}) ? ($ob->{top} - $c->{low}) / $range : 0;
             }
             else {
-                next unless defined $c->{high} && $c->{high} >= $ob->{bottom};
-                $status = $c->{high} >= $ob->{top} ? 'invalidated' : 'mitigated';
+                $invalidated = defined($c->{close}) && $c->{close} > $ob->{top};
+                next unless $invalidated || (defined($c->{high}) && $c->{high} >= $ob->{bottom});
+                $penetration = defined($c->{high}) ? ($c->{high} - $ob->{bottom}) / $range : 0;
             }
-            $ob->{status}    = $status;
+            $penetration = 0 if $penetration < 0;
+            $penetration = 1 if $penetration > 1;
+            $ob->{first_touch_at} //= $i if $penetration > 0;
+            $ob->{fill_ratio} = $penetration if $penetration > ($ob->{fill_ratio} // 0);
+            next unless $invalidated || $penetration >= 0.50;
+
+            $ob->{status}    = $invalidated ? 'invalidated' : 'mitigated';
             $ob->{active}    = 0;
             $ob->{end_index} = $i;
             last;

@@ -31,6 +31,7 @@ sub new {
         fvg_mitigation => $args{fvg_mitigation} // 'full',
         max_structure_events => $args{max_structure_events} // 80,
         max_fvg_visible      => $args{max_fvg_visible} // 45,
+        max_ob_visible       => $args{max_ob_visible} // 40,
         max_swing_labels     => $args{max_swing_labels} // 90,
         fvg_reaction_window  => $args{fvg_reaction_window} // 12,
     }, $class;
@@ -596,23 +597,42 @@ sub _render_order_blocks {
     my $bar_w   = $scale->{x_width} / ($scale->{visible_bars} || 1);
     my $half_bar = $bar_w * 0.5;
 
-    my @candidates = grep {
+    my @eligible = grep {
         defined $_->{confirmed_at} && $_->{confirmed_at} <= $current_bar
             && defined $_->{index}  && $_->{index} <= $d_end
+            && (!exists($_->{relevant}) || $_->{relevant})
             && $self->_show_structure_scope($_, $current_bar)
     } @$obs;
 
-    @candidates = sort { ($b->{confirmed_at}//0) <=> ($a->{confirmed_at}//0) } @candidates;
-    @candidates = @candidates[0..19] if @candidates > 20;
+    # Preparar el ciclo de vida antes de limitar la cantidad. Antes se tomaban
+    # los últimos 20 y luego se descartaban los mitigados; en historiales
+    # amplios eso dejaba apenas uno o dos bloques, todos al extremo derecho.
+    my @candidates;
+    for my $ob (@eligible) {
+        my $start_idx = ($ob->{triggered_by} // $ob->{index}) + 1;
+        my $life = _ob_lifecycle_at($ob, $candles, $start_idx, $current_bar);
+        my $end_idx = defined($life->{end_index}) ? $life->{end_index} : $current_bar;
+        next if $end_idx < $d_start || $ob->{index} > $d_end;
+        push @candidates, {
+            %$ob, _render_end => $end_idx,
+            _historical => $life->{active} ? 0 : 1,
+            _life_status => $life->{status}, _fill_ratio => $life->{fill_ratio},
+        };
+    }
+
+    @candidates = sort {
+        ((!$b->{_historical}) <=> (!$a->{_historical}))
+            || (($b->{relevance_score} // 0) <=> ($a->{relevance_score} // 0))
+            || (($b->{confirmed_at} // 0) <=> ($a->{confirmed_at} // 0))
+    } @candidates;
+    my $max_ob = int($self->{max_ob_visible} // 40);
+    @candidates = @candidates[0 .. $max_ob - 1]
+        if $max_ob > 0 && @candidates > $max_ob;
     @candidates = sort { ($a->{index}//0) <=> ($b->{index}//0) } @candidates;
 
     for my $ob (@candidates) {
         next unless defined $ob->{top} && defined $ob->{bottom};
-        my $start_idx = ($ob->{triggered_by} // $ob->{index}) + 1;
-        my $mitig = _ob_mitigated_at($ob, $candles, $start_idx, $current_bar);
-        next if defined $mitig && $mitig <= $current_bar;   # OB ya mitigado: ocultar
-
-        my $end_idx    = $current_bar;
+        my $end_idx    = $ob->{_render_end};
         my $draw_start = $ob->{index} < $d_start ? $d_start : $ob->{index};
         my $draw_end   = $end_idx > $d_end ? $d_end : $end_idx;
         next if $draw_start > $draw_end || $end_idx < $d_start || $ob->{index} > $d_end;
@@ -628,13 +648,16 @@ sub _render_order_blocks {
         my $is_bull  = ($ob->{direction}//'') eq 'bull';
         my $scope    = $self->_effective_scope($ob, $current_bar);
         my $color    = $is_bull ? $COLOR_OB_BULL : $COLOR_OB_BEAR;
-        my $stipple  = $scope eq 'external' ? 'gray50' : 'gray25';
+        my $stipple  = $ob->{_historical}
+            ? 'gray12'
+            : $scope eq 'external' ? 'gray50' : 'gray25';
+        my $life_tag = $ob->{_historical} ? 'ob_historical' : 'ob_active';
 
         $canvas->createRectangle($x1, $y1, $x2, $y2,
             -fill    => $color,
             -outline => $color,
             -stipple => $stipple,
-            -tags    => ['smc_overlay', 'ob'],
+            -tags    => ['smc_overlay', 'ob', $life_tag, "ob_$scope"],
         );
         if ($self->_claim_label_slot($x1 + 3, ($y1 + $y2) / 2)) {
             my $sc = $scope eq 'external' ? 'e' : 'i';
@@ -649,22 +672,46 @@ sub _render_order_blocks {
     }
 }
 
-sub _ob_mitigated_at {
+sub _ob_lifecycle_at {
     my ($ob, $candles, $from, $to) = @_;
-    return undef unless $candles && @$candles;
+    return { status => 'active', active => 1, fill_ratio => 0, end_index => undef }
+        unless $candles && @$candles;
     $from = 0        if $from < 0;
     $to   = $#$candles if $to > $#$candles;
-    return undef if $from > $to;
+    return { status => 'active', active => 1, fill_ratio => 0, end_index => undef }
+        if $from > $to;
     my $dir = $ob->{direction} // '';
+    my $range = ($ob->{top} // 0) - ($ob->{bottom} // 0);
+    return { status => 'invalid', active => 0, fill_ratio => 0, end_index => $from }
+        if $range <= 0;
+    my ($fill, $first_touch) = (0, undef);
     for my $i ($from .. $to) {
         my $c = $candles->[$i] // next;
+        my ($penetration, $invalidated);
         if ($dir eq 'bull') {
-            return $i if defined $c->{low}  && $c->{low}  <= $ob->{top};
-        } else {
-            return $i if defined $c->{high} && $c->{high} >= $ob->{bottom};
+            $invalidated = defined($c->{close}) && $c->{close} < $ob->{bottom};
+            next unless $invalidated || (defined($c->{low}) && $c->{low} <= $ob->{top});
+            $penetration = defined($c->{low}) ? ($ob->{top} - $c->{low}) / $range : 0;
         }
+        else {
+            $invalidated = defined($c->{close}) && $c->{close} > $ob->{top};
+            next unless $invalidated || (defined($c->{high}) && $c->{high} >= $ob->{bottom});
+            $penetration = defined($c->{high}) ? ($c->{high} - $ob->{bottom}) / $range : 0;
+        }
+        $penetration = 0 if $penetration < 0;
+        $penetration = 1 if $penetration > 1;
+        $first_touch //= $i if $penetration > 0;
+        $fill = $penetration if $penetration > $fill;
+        next unless $invalidated || $penetration >= 0.50;
+        return {
+            status => $invalidated ? 'invalidated' : 'mitigated', active => 0,
+            fill_ratio => $fill, first_touch_at => $first_touch, end_index => $i,
+        };
     }
-    return undef;
+    return {
+        status => 'active', active => 1, fill_ratio => $fill,
+        first_touch_at => $first_touch, end_index => undef,
+    };
 }
 
 sub _render_trendlines {

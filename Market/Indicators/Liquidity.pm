@@ -26,11 +26,17 @@ use warnings;
 
 sub new {
     my ($class, %args) = @_;
+    my $eq_tolerance_atr = $args{eq_tolerance_atr} // 0.10;
+    die 'Liquidity::new: eq_tolerance_atr debe estar entre 0 y 1'
+        unless defined($eq_tolerance_atr) && !ref($eq_tolerance_atr)
+            && $eq_tolerance_atr =~ /^(?:\d+(?:\.\d*)?|\.\d+)$/
+            && $eq_tolerance_atr > 0 && $eq_tolerance_atr <= 1;
     return bless {
         depth      => $args{depth}      // 3,   # k: vecindad swing points
         external_depth => $args{external_depth},
         n_accept   => $args{n_accept}   // 3,   # velas consecutivas para RUN
         atr_period => $args{atr_period} // 14,  # para tolerancia EQH/EQL
+        eq_tolerance_atr => $eq_tolerance_atr + 0,
         _levels    => [],
         _atr       => [],
         _candles   => undef,
@@ -118,48 +124,11 @@ sub compute_all {
     }
 
     # ----------------------------------------------------------------
-    # 3. EQH / EQL — dos pivotes con diferencia <= ATR*0.10
+    # 3. EQH / EQL — pivote compatible mas cercano, aun no consumido,
+    # con tolerancia simetrica basada en el ATR de ambos extremos.
     # ----------------------------------------------------------------
-    for my $a (0 .. $#sh) {
-        for my $b ($a+1 .. $#sh) {
-            my $tol = ($atr[$sh[$b]{index}] // 0) * 0.10;
-            if ($tol > 0 && abs($sh[$a]{price} - $sh[$b]{price}) <= $tol) {
-                my $eq_confirmed_at = _max(
-                    $sh[$a]{confirmed_at} // $sh[$a]{index},
-                    $sh[$b]{confirmed_at} // $sh[$b]{index},
-                );
-                $sh[$a]{is_eqh} = 1;
-                $sh[$b]{is_eqh} = 1;
-                $sh[$a]{eq_confirmed_at} = $eq_confirmed_at
-                    if !defined $sh[$a]{eq_confirmed_at}
-                    || $eq_confirmed_at < $sh[$a]{eq_confirmed_at};
-                $sh[$b]{eq_confirmed_at} = $eq_confirmed_at;
-                $sh[$b]{eq_pair} = $sh[$a]{index};
-                $sh[$b]{eq_pair_price} = $sh[$a]{price};
-                $sh[$b]{eq_pair_confirmed_at} = $sh[$a]{confirmed_at} // $sh[$a]{index};
-            }
-        }
-    }
-    for my $a (0 .. $#sl) {
-        for my $b ($a+1 .. $#sl) {
-            my $tol = ($atr[$sl[$b]{index}] // 0) * 0.10;
-            if ($tol > 0 && abs($sl[$a]{price} - $sl[$b]{price}) <= $tol) {
-                my $eq_confirmed_at = _max(
-                    $sl[$a]{confirmed_at} // $sl[$a]{index},
-                    $sl[$b]{confirmed_at} // $sl[$b]{index},
-                );
-                $sl[$a]{is_eql} = 1;
-                $sl[$b]{is_eql} = 1;
-                $sl[$a]{eq_confirmed_at} = $eq_confirmed_at
-                    if !defined $sl[$a]{eq_confirmed_at}
-                    || $eq_confirmed_at < $sl[$a]{eq_confirmed_at};
-                $sl[$b]{eq_confirmed_at} = $eq_confirmed_at;
-                $sl[$b]{eq_pair} = $sl[$a]{index};
-                $sl[$b]{eq_pair_price} = $sl[$a]{price};
-                $sl[$b]{eq_pair_confirmed_at} = $sl[$a]{confirmed_at} // $sl[$a]{index};
-            }
-        }
-    }
+    _mark_equal_levels(\@sh, \@atr, $arr, 'high', $self->{eq_tolerance_atr});
+    _mark_equal_levels(\@sl, \@atr, $arr, 'low',  $self->{eq_tolerance_atr});
 
     # ----------------------------------------------------------------
     # 4. Maquina de estados — procesar cada nivel barra a barra
@@ -303,6 +272,11 @@ sub _make_level {
         is_eqh         => 0,
         is_eql         => 0,
         eq_confirmed_at => undef,
+        eq_pair        => undef,
+        eq_pair_price  => undef,
+        eq_price       => undef,
+        eq_tolerance   => undef,
+        eq_deviation_atr => undef,
         state          => 'DETECTED',
         swept_at       => undef,
         resolved_at    => undef,
@@ -311,6 +285,85 @@ sub _make_level {
         volume_weight_source => undef,
         volume_score   => 0,
     };
+}
+
+sub _mark_equal_levels {
+    my ($levels, $atr, $candles, $kind, $tolerance_factor) = @_;
+    return unless $levels && @$levels > 1;
+    $tolerance_factor //= 0.10;
+    my $flag = $kind eq 'high' ? 'is_eqh' : 'is_eql';
+    my $prefix = $kind eq 'high' ? 'EQH' : 'EQL';
+
+    for my $b (1 .. $#$levels) {
+        my $new = $levels->[$b];
+        my $new_idx = $new->{index};
+        next unless defined $new_idx;
+
+        # El primer pivote valido mas cercano evita enlazar el nivel nuevo con
+        # varios extremos antiguos o con liquidez que ya fue tomada.
+        for (my $a = $b - 1; $a >= 0; $a--) {
+            my $prior = $levels->[$a];
+            my $prior_idx = $prior->{index};
+            next unless defined $prior_idx && $prior_idx < $new_idx;
+
+            my @atr_values = grep { defined($_) && $_ > 0 }
+                ($atr->[$prior_idx], $atr->[$new_idx]);
+            next unless @atr_values;
+            my $atr_mean = 0;
+            $atr_mean += $_ for @atr_values;
+            $atr_mean /= @atr_values;
+            my $tolerance = $atr_mean * $tolerance_factor;
+            my $difference = abs($prior->{price} - $new->{price});
+            next if $tolerance <= 0 || $difference > $tolerance;
+            next if _equal_level_consumed_before(
+                $prior, $candles, $new_idx, $kind, $tolerance,
+            );
+
+            my $eq_confirmed_at = _max(
+                $prior->{confirmed_at} // $prior_idx,
+                $new->{confirmed_at} // $new_idx,
+            );
+            my $eq_price = ($prior->{price} + $new->{price}) / 2;
+            my $cluster_id = join('_', lc($prefix), $prior_idx, $new_idx);
+
+            $prior->{$flag} = 1;
+            $new->{$flag} = 1;
+            $prior->{eq_confirmed_at} = $eq_confirmed_at
+                if !defined($prior->{eq_confirmed_at})
+                    || $eq_confirmed_at < $prior->{eq_confirmed_at};
+            push @{ $prior->{eq_cluster_ids} //= [] }, $cluster_id;
+
+            $new->{eq_confirmed_at} = $eq_confirmed_at;
+            $new->{eq_pair} = $prior_idx;
+            $new->{eq_pair_price} = $prior->{price} + 0;
+            $new->{eq_pair_confirmed_at} = $prior->{confirmed_at} // $prior_idx;
+            $new->{eq_price} = $eq_price + 0;
+            $new->{eq_tolerance} = $tolerance + 0;
+            $new->{eq_deviation_atr} = $atr_mean > 0 ? $difference / $atr_mean : 0;
+            $new->{eq_cluster_id} = $cluster_id;
+            last;
+        }
+    }
+}
+
+sub _equal_level_consumed_before {
+    my ($level, $candles, $new_index, $kind, $tolerance) = @_;
+    my $from = ($level->{confirmed_at} // $level->{index}) + 1;
+    my $to = $new_index - 1;
+    return 0 if $from > $to;
+
+    for my $i ($from .. $to) {
+        my $candle = $candles->[$i] // next;
+        if ($kind eq 'high') {
+            return 1 if defined($candle->{high})
+                && $candle->{high} > $level->{price} + $tolerance;
+        }
+        else {
+            return 1 if defined($candle->{low})
+                && $candle->{low} < $level->{price} - $tolerance;
+        }
+    }
+    return 0;
 }
 
 sub _simple_atr {
@@ -369,6 +422,7 @@ sub get_levels_at {
         external_depth => $self->{external_depth},
         n_accept       => $self->{n_accept},
         atr_period     => $self->{atr_period},
+        eq_tolerance_atr => $self->{eq_tolerance_atr},
     );
     $snapshot->compute_all($prefix);
     return $snapshot->get_levels();
@@ -412,6 +466,12 @@ sub get_eqh {
 }
 sub get_eql {
     return [ grep { $_->{is_eql} } @{ $_[0]->{_levels} } ];
+}
+sub get_eqh_pairs {
+    return [ grep { $_->{is_eqh} && defined $_->{eq_pair} } @{ $_[0]->{_levels} } ];
+}
+sub get_eql_pairs {
+    return [ grep { $_->{is_eql} && defined $_->{eq_pair} } @{ $_[0]->{_levels} } ];
 }
 
 # Devuelve niveles filtrados por volumen multi-temporal.

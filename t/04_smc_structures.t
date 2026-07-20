@@ -62,6 +62,8 @@ ok($ob, 'un BOS alcista crea su Order Block asociado');
 is($ob->{index}, 2, 'Order Block usa la última vela bajista previa al swing');
 is($ob->{top}, 104, 'Order Block alcista usa la apertura de la vela opuesta');
 is($ob->{bottom}, 101, 'Order Block alcista usa el mínimo de la vela opuesta');
+ok($ob->{relevant}, 'el Order Block asociado a un desplazamiento fuerte queda marcado como relevante');
+cmp_ok($ob->{relevance_score}, '>', 0, 'el Order Block expone una puntuación auditable');
 
 my ($fvg) = grep { ($_->{direction} // '') eq 'bull' } @{ $smc->get_fvg_zones() };
 ok($fvg, 'detecta Fair Value Gap alcista de tres velas');
@@ -73,7 +75,26 @@ is($fvg->{mitigated_at}, 4, 'FVG conserva la vela exacta de mitigación');
 is($fvg->{fill_ratio}, 1, 'FVG mitigado registra fill completo');
 
 is($ob->{status}, 'mitigated', 'Order Block registra su mitigación en el motor');
-is($ob->{end_index}, 9, 'Order Block conserva la vela de mitigación');
+is($ob->{first_touch_at}, 10, 'Order Block registra la primera penetración real, no un roce del borde');
+is($ob->{end_index}, 11, 'Order Block sólo se mitiga después de penetrar al menos el 50%');
+
+my $wick_only = [{
+    direction => 'bull', top => 10, bottom => 8, triggered_by => -1,
+}];
+Market::Indicators::SMC_Structures::_annotate_order_block_lifecycle(
+    [{ high => 11, low => 7, close => 9 }], $wick_only,
+);
+is($wick_only->[0]{status}, 'mitigated',
+    'una mecha que atraviesa el bloque lo mitiga pero no lo invalida si el cierre permanece dentro');
+
+my $closed_through = [{
+    direction => 'bear', top => 12, bottom => 10, triggered_by => -1,
+}];
+Market::Indicators::SMC_Structures::_annotate_order_block_lifecycle(
+    [{ high => 13, low => 9, close => 13 }], $closed_through,
+);
+is($closed_through->[0]{status}, 'invalidated',
+    'un cierre más allá del límite distal invalida el Order Block');
 
 my $prefix = smc_for(7);
 is_deeply($prefix->get_bos_events(), [], 'antes de la vela 8 no existe el BOS futuro');
