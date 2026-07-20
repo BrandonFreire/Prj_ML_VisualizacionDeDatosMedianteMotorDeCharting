@@ -231,8 +231,12 @@ my $vwap_ind = Market::Indicators::AnchoredVWAP->new(
     # $engine->set_vwap_band_configuration(N, enabled => ..., multiplier => ...)
     std_mult_1     => 1.0,
     std_mult_2     => 2.0,
+    std_mult_3     => 3.0,
     band_1_enabled => 1,
     band_2_enabled => 1,
+    # La visibilidad inicial sigue apagada; habilitar el cálculo permite que
+    # el interruptor "Banda 3x" del menú haga efecto cuando el usuario lo marque.
+    band_3_enabled => 1,
 );
 $vwap_ind->set_smc_indicator($smc_ind);
 $vwap_ind->set_vp_indicator($vp_ind);
@@ -507,6 +511,17 @@ my %overlay_parent_for = (
     show_grab          => 'liquidity_enabled',
     show_sweep         => 'liquidity_enabled',
     show_run           => 'liquidity_enabled',
+    show_zz_hldv       => 'show_zz_external',
+    show_supertrend    => 'strategy_enabled',
+    show_halftrend     => 'strategy_enabled',
+    show_range_filter  => 'strategy_enabled',
+    show_supply_demand => 'strategy_enabled',
+    show_vp_poc        => 'vp_enabled',
+    show_vp_vah        => 'vp_enabled',
+    show_vp_val        => 'vp_enabled',
+    show_vwap_band1    => 'vwap_enabled',
+    show_vwap_band2    => 'vwap_enabled',
+    show_vwap_band3    => 'vwap_enabled',
 );
 
 my $overlay_button_text = "\x{25C8} INDICADORES Y OVERLAYS  \x{25BE}";
