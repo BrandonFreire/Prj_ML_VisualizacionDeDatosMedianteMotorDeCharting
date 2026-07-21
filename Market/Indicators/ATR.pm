@@ -31,7 +31,7 @@ sub compute_all {
     my ($self, $market_data) = @_;
     $self->reset();
 
-    my $arr = $market_data->_active_array();
+    my $arr = $market_data->get_active_candles();
     my $n   = scalar @$arr;
     my $p   = $self->{period};
     return unless $n > 0;
@@ -51,9 +51,13 @@ sub compute_all {
             $tr_sum   += $tr;
             $tr_count += 1;
 
-            # Warmup: running mean until Wilder's seed is available.
-            $atr = $tr_sum / $tr_count;
-            $prev_atr = $atr if $tr_count >= $p;
+            # Warmup: emit undef until Wilder's seed is available.
+            if ($tr_count >= $p) {
+                $atr = $tr_sum / $tr_count;
+                $prev_atr = $atr;
+            } else {
+                $atr = undef;
+            }
         }
         else {
             $atr = (($p - 1) * $prev_atr + $tr) / $p;
@@ -87,8 +91,12 @@ sub update_last {
     if (!defined $self->{_prev_atr}) {
         $self->{_tr_sum}   += $tr;
         $self->{_tr_count} += 1;
-        $atr = $self->{_tr_sum} / $self->{_tr_count};
-        $self->{_prev_atr} = $atr if $self->{_tr_count} >= $p;
+        if ($self->{_tr_count} >= $p) {
+            $atr = $self->{_tr_sum} / $self->{_tr_count};
+            $self->{_prev_atr} = $atr;
+        } else {
+            $atr = undef;
+        }
     }
     else {
         $atr = (($p - 1) * $self->{_prev_atr} + $tr) / $p;

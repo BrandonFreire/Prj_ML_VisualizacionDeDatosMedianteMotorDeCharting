@@ -171,7 +171,7 @@ sub _limit_levels_for_view {
 
 sub _render_resolution_candles {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
-    my $candles = $self->{indicator}{_candles} // [];
+    my $candles = $self->{indicator}->get_candles();
     return unless $candles && @$candles;
 
     my $bar_w = $scale->{x_width} / ( $scale->{visible_bars} || 1 );

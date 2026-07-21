@@ -40,8 +40,8 @@ sub reset { $_[0]->{_result} = undef; }
 sub compute_all {
     my ($self, $market) = @_;
     die 'InternalZigZag::compute_all: market data is required'
-        unless $market && $market->can('_active_array');
-    my $candles = $market->_active_array();
+        unless $market && $market->can('get_active_candles');
+    my $candles = $market->get_active_candles();
     my $atr = $self->{_atr_ref} && $self->{_atr_ref}->can('get_values')
         ? $self->{_atr_ref}->get_values() : [];
     $self->{_result} = @$candles

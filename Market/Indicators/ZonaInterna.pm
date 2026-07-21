@@ -33,8 +33,8 @@ sub reset { $_[0]->{_result} = undef; }
 sub compute_all {
     my ($self, $market) = @_;
     die 'ZonaInterna::compute_all: market data is required'
-        unless $market && $market->can('_active_array');
-    my $candles = $market->_active_array();
+        unless $market && $market->can('get_active_candles');
+    my $candles = $market->get_active_candles();
     my $zigzag = $self->{_zigzag_ref} && $self->{_zigzag_ref}->can('get_result')
         ? $self->{_zigzag_ref}->get_result() : {};
     if (!@$candles) {

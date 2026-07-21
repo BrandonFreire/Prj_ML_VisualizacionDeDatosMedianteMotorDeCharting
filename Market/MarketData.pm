@@ -189,6 +189,12 @@ sub _active_array {
     return $self->{data}{ $self->{current_tf} };
 }
 
+# Public accessor — indicators and overlays should use this instead of _active_array()
+sub get_active_candles {
+    my ($self) = @_;
+    return $self->_active_array();
+}
+
 sub get_slice {
     my ($self, $start, $end) = @_;
     my $arr  = $self->_active_array();
@@ -245,11 +251,10 @@ sub merge_delta_row {
 sub _touch_data {
     my ($self) = @_;
     $self->{_data_revision} = ($self->{_data_revision} // 0) + 1;
-    # No hace falta borrar los hashes: la revision impide reusarlos. Limpiar
-    # evita que una fuente de streaming de larga duracion acumule un cache
-    # obsoleto sin limite.
-    $self->{_volume_index}       = {};
-    $self->{_volume_index_cache} = {};
+    # El cache de volumen se invalida por revision en build_volume_index(),
+    # no es necesario destruirlo aqui. Solo limpiamos el indice activo
+    # para evitar que consultas posteriores lean datos obsoletos.
+    $self->{_volume_index} = {};
     return;
 }
 

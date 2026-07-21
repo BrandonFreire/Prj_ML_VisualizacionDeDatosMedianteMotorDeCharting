@@ -46,12 +46,15 @@ sub new {
 
 sub reset { my ($self) = @_; $self->{_levels} = []; $self->{_atr} = []; }
 
+# Public accessor — overlays should use this instead of accessing _candles directly
+sub get_candles { return $_[0]->{_candles} // [] }
+
 sub compute_all {
     my ($self, $market) = @_;
     $self->reset();
     $self->{_market} = $market;
 
-    my $arr = $market->_active_array();
+    my $arr = $market->get_active_candles();
     $self->{_candles} = $arr;
     my $n   = scalar @$arr;
     my $k   = $self->{depth};
@@ -214,7 +217,7 @@ sub _run_state_machine {
     my $consec_out = 0;
     my $max_look   = _min($swept_i + 30, $n - 1);
 
-    for my $i ($swept_i .. $max_look) {
+    for my $i ($swept_i + 1 .. $max_look) {
         my $close_out = ($side eq 'sh')
             ? $arr->[$i]{close} > $price
             : $arr->[$i]{close} < $price;
@@ -231,15 +234,14 @@ sub _run_state_machine {
             }
         } else {
             # Cierre dentro del rango: RECLAIMED
-            my $bars_out = $i - $swept_i;
-            my $class = $bars_out == 0 ? 'SWEEP'
-                      : $bars_out <= 3
+            my $class = $consec_out == 0 ? 'SWEEP'
+                      : $consec_out <= 3
                           ? (($lvl->{scope} // 'internal') eq 'external' ? 'BIG_GRAB' : 'GRAB')
                           : 'SWEEP';
             $lvl->{state}          = 'RECLAIMED';
             $lvl->{resolved_at}    = $i;
             $lvl->{classification} = $class;
-            $lvl->{bars_out}       = $bars_out;
+            $lvl->{bars_out}       = $i - $swept_i;
             $lvl->{max_consec_out} = $consec_out;
             $lvl->{state}          = 'RESOLVED';
             return;
@@ -369,7 +371,7 @@ sub _equal_level_consumed_before {
 sub _simple_atr {
     my ($arr, $period) = @_;
     my $n  = scalar @$arr;
-    my @tr = (0);
+    my @tr = ($arr->[0]{high} - $arr->[0]{low});
     for my $i (1 .. $n-1) {
         my $hl  = $arr->[$i]{high} - $arr->[$i]{low};
         my $hpc = abs($arr->[$i]{high} - $arr->[$i-1]{close});

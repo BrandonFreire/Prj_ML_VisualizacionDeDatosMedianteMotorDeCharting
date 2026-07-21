@@ -189,7 +189,7 @@ sub goto_last {
 
 sub round {
     my ($self, $v) = @_;
-    return int( $v + 0.5 );
+    return int( $v >= 0 ? $v + 0.5 : $v - 0.5 );
 }
 
 # Schedule a deferred render (~1 frame delay) to avoid redundant redraws
@@ -2154,7 +2154,14 @@ sub _draw_crosshair_all {
 
     # OHLC legend en la esquina superior izquierda del canvas de precio
     my $candle = $self->{market}->get_candle($ix);
+    # Prevenir filtración de velas futuras en modo Replay
+    if ($self->{replay_mode} && defined $self->{replay_cursor} && $ix > $self->{replay_cursor}) {
+        $candle = undef;
+    }
     my $prev   = $ix > 0 ? $self->{market}->get_candle($ix - 1) : undef;
+    if ($self->{replay_mode} && defined $self->{replay_cursor} && ($ix - 1) > $self->{replay_cursor}) {
+        $prev = undef;
+    }
     $self->{price_panel}->draw_ohlc_legend($candle, $prev ? $prev->{close} : undef);
 
     # Valor de volumen en la barra bajo el cursor
