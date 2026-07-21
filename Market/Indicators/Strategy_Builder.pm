@@ -2,6 +2,10 @@ package Market::Indicators::Strategy_Builder;
 
 use strict;
 use warnings;
+
+use File::Basename qw(dirname);
+use lib dirname(__FILE__) . '/../..';
+
 use Market::Backtest;
 use Market::Indicators::TrendChannels;
 
