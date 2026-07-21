@@ -162,7 +162,7 @@ print "Done.\n";
 
 # ---- 3c. SMC Structures vinculado con Liquidity ----
 print "Computing SMC Structures (BOS, CHoCH, FVG)...\n";
-my $smc_ind = Market::Indicators::SMC_Structures->new( depth => 5, external_depth => 25 );
+my $smc_ind = Market::Indicators::SMC_Structures->new( depth => 5, external_depth => 25, fvg_min_atr_mult => 0.1 );
 $smc_ind->set_liquidity_indicator($lq_ind);   # vincula para boosted CHoCH
 $smc_ind->compute_all($market);
 printf "  SH: %d  SL: %d  BOS: %d  CHoCH: %d  FVG: %d\n",
@@ -365,7 +365,7 @@ my %overlay_visibility = (
     show_external_structure => 1,
     show_ob            => 1,
     show_trendlines    => 0,
-    show_fvg           => 1,
+    show_fvg           => 0,
     show_market_regime => 0,
     show_major_levels  => 1,
     show_premium_discount => 1,
@@ -492,7 +492,7 @@ my $MENU_MUTED_FG  = '#8b929e';
 my $MENU_CHECK_FG  = '#83a9ff';
 my $CHECK_MARK     = "\x{2713}";
 my $OVERLAY_MENU_W = 560;
-my $OVERLAY_MENU_H = 490;
+my $OVERLAY_MENU_H = 680;
 my $OVERLAY_COL_W  = int( $OVERLAY_MENU_W / 2 );
 
 my %overlay_parent_for = (

@@ -272,8 +272,9 @@ sub _render_premium_discount {
         -tags => ['smc_overlay', 'premium_discount'],
     );
 
-    if ( $self->_claim_label_slot( $x2 - 8, $y_eq - 8 ) ) {
-        $canvas->createText( $x2 - 8, $y_eq - 8,
+    my $eq_x = ($x1 + $x2) / 2;
+    if ( $self->_claim_label_slot( $eq_x, $y_eq - 8 ) ) {
+        $canvas->createText( $eq_x, $y_eq - 8,
             -text => 'EQ 50%',
             -fill => '#9aa5b5',
             -font => ['Helvetica', 7, 'bold'],
@@ -322,8 +323,9 @@ sub _draw_major_level {
         -tags => ['smc_overlay', 'major_level'],
     );
 
-    return unless $self->_claim_label_slot( $x2 - 8, $y + $yoff );
-    $canvas->createText( $x2 - 8, $y + $yoff,
+    my $xa = ($x1 + $x2) / 2;
+    return unless $self->_claim_label_slot( $xa, $y + $yoff );
+    $canvas->createText( $xa, $y + $yoff,
         -text => $label, -fill => $color,
         -font => ['Helvetica', 8, 'bold'],
         -anchor => 'e',
@@ -379,8 +381,9 @@ sub _render_fibonacci {
             -fill => '#b2b5be', -width => 1, -dash => [2, 3],
             -tags => ['smc_overlay', 'fibonacci'],
         );
-        if ( $self->_claim_label_slot( $x2 - 3, $y - 5 ) ) {
-            $canvas->createText( $x2 - 3, $y - 5,
+        my $lbl_x = ($x1 + $x2) / 2;
+        if ( $self->_claim_label_slot( $lbl_x, $y - 5 ) ) {
+            $canvas->createText( $lbl_x, $y - 5,
                 -text => sprintf('Fib %.3g', $ratio),
                 -fill => '#b2b5be', -font => ['Helvetica', 7],
                 -anchor => 'e', -tags => ['smc_overlay', 'smc_label', 'fibonacci'],
@@ -926,7 +929,10 @@ sub _render_bos {
         if ( $idx >= $d_start && $idx <= $d_end && $idx <= $current_bar ) {
             my $scope = $scope_name eq 'external' ? 'e' : 'i';
             my $arrow = $bos->{direction} eq 'bull' ? "BOS-$scope ^" : "BOS-$scope v";
-            my $xa    = $scale->index_to_center_x($idx);
+            my $mid_idx = int(($from + $idx) / 2);
+            $mid_idx = $d_start if $mid_idx < $d_start;
+            $mid_idx = $d_end   if $mid_idx > $d_end;
+            my $xa    = $scale->index_to_center_x($mid_idx);
             my $offset = $bos->{direction} eq 'bull' ? -12 : 12;
             if ( $self->_claim_label_slot( $xa, $y + $offset ) ) {
                 $canvas->createText( $xa, $y + $offset,
@@ -976,7 +982,10 @@ sub _render_choch {
         );
 
         if ( $idx >= $d_start && $idx <= $d_end && $idx <= $current_bar ) {
-            my $xa   = $scale->index_to_center_x($idx);
+            my $mid_idx = int(($from + $idx) / 2);
+            $mid_idx = $d_start if $mid_idx < $d_start;
+            $mid_idx = $d_end   if $mid_idx > $d_end;
+            my $xa   = $scale->index_to_center_x($mid_idx);
             my $scope = $scope_name eq 'external' ? 'e' : 'i';
             my $lbl  = $ev->{direction} eq 'bull' ? "CHoCH-$scope ^" : "CHoCH-$scope v";
             my $yoff = $ev->{direction} eq 'bull' ? -14 : 14;

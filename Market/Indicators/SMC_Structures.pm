@@ -9,8 +9,9 @@ use warnings;
 sub new {
     my ($class, %args) = @_;
     return bless {
-        depth        => $args{depth} // 3,
-        external_depth => $args{external_depth},
+        depth            => $args{depth} // 3,
+        external_depth   => $args{external_depth},
+        fvg_min_atr_mult => $args{fvg_min_atr_mult} // 0.1,
         _sh          => [],   # swing highs
         _sl          => [],   # swing lows
         _bos         => [],   # BOS events  [{index,level,from,direction}]
@@ -49,7 +50,7 @@ sub compute_all {
     if ($n < 2 * $k + 2) {
         # Un FVG confirmado necesita tres velas, no una estructura de pivotes
         # completa. No se debe ocultar durante el warm-up de SMC.
-        _detect_fvgs($arr, $self->{_fvg}, {});
+        _detect_fvgs($arr, $self->{_fvg}, {}, $self->{fvg_min_atr_mult});
         _annotate_fvg_lifecycle($arr, $self->{_fvg});
         return;
     }
@@ -158,7 +159,7 @@ sub compute_all {
 
     # 6. Fair Value Gaps (FVG) — patrón de tres velas, independiente de que
     # ya haya pivotes suficientes para construir BOS/CHoCH.
-    _detect_fvgs($arr, $self->{_fvg}, \%liquidity_at_index);
+    _detect_fvgs($arr, $self->{_fvg}, \%liquidity_at_index, $self->{fvg_min_atr_mult});
 
     _annotate_fvg_lifecycle($arr, $self->{_fvg});
     _annotate_order_block_lifecycle($arr, $self->{_ob});
@@ -173,11 +174,16 @@ sub compute_all {
 }
 
 sub _detect_fvgs {
-    my ($arr, $fvgs, $liquidity_lookup) = @_;
+    my ($arr, $fvgs, $liquidity_lookup, $min_atr_mult) = @_;
     return unless $arr && $fvgs;
     $liquidity_lookup //= {};
+    $min_atr_mult //= 0.1;
     my $n = scalar @$arr;
     return if $n < 3;
+
+    # Pre-compute rolling average range for minimum FVG size filter.
+    # Uses a 14-bar lookback to estimate local volatility.
+    my $atr_len = 14;
 
     # Bullish FVG: Low[i+1] > High[i-1].
     # Bearish FVG: High[i+1] < Low[i-1].
@@ -188,6 +194,33 @@ sub _detect_fvgs {
                  && defined $arr->[$left]{low}
                  && defined $arr->[$right]{high}
                  && defined $arr->[$right]{low};
+
+        my $gap_size;
+        if ($arr->[$right]{low} > $arr->[$left]{high}) {
+            $gap_size = $arr->[$right]{low} - $arr->[$left]{high};
+        }
+        elsif ($arr->[$right]{high} < $arr->[$left]{low}) {
+            $gap_size = $arr->[$left]{low} - $arr->[$right]{high};
+        }
+        else {
+            next;  # no FVG
+        }
+
+        # Filter: discard FVGs smaller than min_atr_mult * local average range
+        if ($min_atr_mult > 0) {
+            my $lb_start = $i > $atr_len ? $i - $atr_len : 0;
+            my ($range_sum, $range_count) = (0, 0);
+            for my $j ($lb_start .. $i) {
+                my $c = $arr->[$j];
+                next unless defined $c->{high} && defined $c->{low} && $c->{high} > $c->{low};
+                $range_sum += $c->{high} - $c->{low};
+                $range_count++;
+            }
+            if ($range_count > 0) {
+                my $avg_range = $range_sum / $range_count;
+                next if $gap_size < $min_atr_mult * $avg_range;
+            }
+        }
 
         if ($arr->[$right]{low} > $arr->[$left]{high}) {
             push @$fvgs, {
@@ -202,7 +235,7 @@ sub _detect_fvgs {
                 high_reaction => _fvg_liquidity_reaction($liquidity_lookup, $right),
             };
         }
-        elsif ($arr->[$right]{high} < $arr->[$left]{low}) {
+        else {
             push @$fvgs, {
                 index       => $i,
                 left_index  => $left,
