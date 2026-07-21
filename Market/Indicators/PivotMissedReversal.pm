@@ -37,7 +37,7 @@ sub reset {
 
 sub compute_all {
     my ($self, $market) = @_;
-    my $candles = $market ? $market->_active_array() : [];
+    my $candles = $market ? $market->get_active_candles() : [];
     return $self->compute(candles => $candles);
 }
 

@@ -36,7 +36,7 @@ sub compute_all {
     $self->reset();
     $self->{_market} = $market;
 
-    my $candles = $market ? $market->_active_array() : [];
+    my $candles = $market ? $market->get_active_candles() : [];
     my $lq      = $self->{_lq_ref};
     my $smc     = $self->{_smc_ref};
     $self->{_states} = $self->_compute_states(
@@ -283,7 +283,7 @@ sub get_states { return $_[0]->{_states} }
 sub snapshot_at {
     my ($self, $last_index) = @_;
     my $market = $self->{_market} or return [];
-    my $candles = $market->_active_array();
+    my $candles = $market->get_active_candles();
     return [] unless @$candles;
     $last_index //= $#$candles;
     my $lq  = $self->{_lq_ref};

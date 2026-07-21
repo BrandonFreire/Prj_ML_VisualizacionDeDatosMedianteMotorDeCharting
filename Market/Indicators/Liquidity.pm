@@ -46,12 +46,14 @@ sub new {
 
 sub reset { my ($self) = @_; $self->{_levels} = []; $self->{_atr} = []; }
 
+sub get_candles { return $_[0]->{_candles} // [] }
+
 sub compute_all {
     my ($self, $market) = @_;
     $self->reset();
     $self->{_market} = $market;
 
-    my $arr = $market->_active_array();
+    my $arr = $market->get_active_candles();
     $self->{_candles} = $arr;
     my $n   = scalar @$arr;
     my $k   = $self->{depth};
@@ -209,6 +211,7 @@ sub _run_state_machine {
 
     $lvl->{state}    = 'SWEPT';
     $lvl->{swept_at} = $swept_i;
+    $lvl->{state_path} = ['DETECTED', 'SWEPT'];
 
     # Estados 3/4: ACCEPTANCE vs RECLAIMED
     my $consec_out = 0;
@@ -227,6 +230,9 @@ sub _run_state_machine {
                 $lvl->{resolved_at}    = $i;
                 $lvl->{classification} = 'RUN';
                 $lvl->{state}          = 'RESOLVED';
+                $lvl->{state_path}     = [
+                    'DETECTED', 'SWEPT', 'ACCEPTANCE', 'RESOLVED',
+                ];
                 return;
             }
         } else {
@@ -242,6 +248,9 @@ sub _run_state_machine {
             $lvl->{bars_out}       = $bars_out;
             $lvl->{max_consec_out} = $consec_out;
             $lvl->{state}          = 'RESOLVED';
+            $lvl->{state_path}     = [
+                'DETECTED', 'SWEPT', 'RECLAIMED', 'RESOLVED',
+            ];
             return;
         }
     }
@@ -278,6 +287,7 @@ sub _make_level {
         eq_tolerance   => undef,
         eq_deviation_atr => undef,
         state          => 'DETECTED',
+        state_path     => ['DETECTED'],
         swept_at       => undef,
         resolved_at    => undef,
         classification => undef,   # SWEEP | GRAB | BIG_GRAB | RUN (cuando RESOLVED)
@@ -369,7 +379,7 @@ sub _equal_level_consumed_before {
 sub _simple_atr {
     my ($arr, $period) = @_;
     my $n  = scalar @$arr;
-    my @tr = (0);
+    my @tr = ($arr->[0]{high} - $arr->[0]{low});
     for my $i (1 .. $n-1) {
         my $hl  = $arr->[$i]{high} - $arr->[$i]{low};
         my $hpc = abs($arr->[$i]{high} - $arr->[$i-1]{close});

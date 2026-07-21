@@ -28,6 +28,7 @@ sub new {
         show_bos       => $args{show_bos} // 1,
         show_fvg       => $args{show_fvg} // 1,
         max_structure_events => $args{max_structure_events} // 80,
+        max_fvg_visible      => $args{max_fvg_visible} // 8,
         max_ob_visible       => $args{max_ob_visible} // 0,
         max_swing_labels     => $args{max_swing_labels} // 90,
         fvg_reaction_window  => $args{fvg_reaction_window} // 12,
@@ -348,7 +349,9 @@ sub _render_fibonacci {
     my $to   = $ev->{index};
     return if $to < $d_start || $from > $d_end;
 
-    my $candles = $self->{indicator}{_candles} // [];
+    my $candles = $self->{indicator}->can('get_candles')
+        ? $self->{indicator}->get_candles()
+        : [];
     my $c = $candles->[$to];
     return unless $c;
 
@@ -447,15 +450,23 @@ sub _render_fvg {
     $recent_sweeps //= {};
     my $fvgs = $self->{indicator}->get_fvg_zones() // [];
     my $bar_w = $scale->{x_width} / ( $scale->{visible_bars} || 1 );
-    my $half_bar = $bar_w * 0.5;
-    my $selected = _select_latest_active_fvg($fvgs, $current_bar) or return;
-    for my $fvg ($selected) {
+    # La vela usa 70 % del ancho de su columna (PricePanel::render_candle).
+    # Alinear el FVG a esos mismos bordes evita que el rectangulo sobresalga
+    # visualmente media columna a cada lado.
+    my $half_body = $bar_w * 0.35;
+    my $selected = _active_fvgs_at(
+        $fvgs, $current_bar, $self->{max_fvg_visible},
+    );
+    return unless @$selected;
+    for my $fvg (@$selected) {
         my $idx = $fvg->{index};
         next unless defined $idx;
         my $formed_at = $fvg->{formed_at} // ($idx + 1);
-        my $left_idx  = $fvg->{left_index} // ($idx - 1);
+        # LuxAlgo inicia la caja en la vela central del patron (lastTime), no
+        # en la primera vela usada solamente para confirmar el gap.
+        my $start_idx = $fvg->{mid_index} // $idx;
         next unless defined $formed_at;
-        next unless defined $left_idx;
+        next unless defined $start_idx;
         next unless defined $fvg->{top} && defined $fvg->{bottom};
         next if $formed_at > $current_bar;     # no mostrar FVGs aun no confirmados en Replay
 
@@ -464,9 +475,9 @@ sub _render_fvg {
         next unless defined $visible_top && defined $visible_bottom;
 
         next if $end_idx < $d_start;           # el bloque ya termino antes de la vista
-        next if $left_idx > $d_end;            # empieza despues de la vista
+        next if $start_idx > $d_end;           # empieza despues de la vista
 
-        my $draw_start = $left_idx < $d_start ? $d_start : $left_idx;
+        my $draw_start = $start_idx < $d_start ? $d_start : $start_idx;
         my $draw_end   = $end_idx   > $d_end   ? $d_end   : $end_idx;
         next if $draw_start > $draw_end;
 
@@ -475,8 +486,8 @@ sub _render_fvg {
                     : $age <= 12 ? 'gray25'
                     :              'gray12';
 
-        my $x1 = $scale->index_to_center_x($draw_start) - $half_bar;
-        my $x2 = $scale->index_to_center_x($draw_end) + $half_bar;
+        my $x1 = $scale->index_to_center_x($draw_start) - $half_body;
+        my $x2 = $scale->index_to_center_x($draw_end) + $half_body;
         next if $x1 > $scale->{x_width} || $x2 < 0;
         $x1 = 0 if $x1 < 0;
         $x2 = $scale->{x_width} if $x2 > $scale->{x_width};
@@ -513,21 +524,32 @@ sub _render_fvg {
     }
 }
 
-sub _select_latest_active_fvg {
-    my ($fvgs, $current_bar) = @_;
-    return unless $fvgs && defined $current_bar;
+sub _active_fvgs_at {
+    my ($fvgs, $current_bar, $limit) = @_;
+    return [] unless $fvgs && defined $current_bar;
     my @active = grep {
         my $formed = $_->{formed_at} // $_->{confirmed_at} // 9_999_999;
         my $ended  = $_->{mitigated_at} // $_->{end_index};
         $formed <= $current_bar && (!defined($ended) || $ended > $current_bar)
     } @$fvgs;
-    return unless @active;
-    my ($latest) = sort {
+
+    # Seleccionar primero los mas recientes para aplicar el limite, y dibujar
+    # luego del mas antiguo al mas nuevo para que el ultimo conserve prioridad.
+    @active = sort {
         ($b->{formed_at} // $b->{confirmed_at} // 0)
             <=> ($a->{formed_at} // $a->{confirmed_at} // 0)
         || (($b->{id} // '') cmp ($a->{id} // ''))
     } @active;
-    return $latest;
+    $limit = int($limit // 0);
+    @active = @active[0 .. $limit - 1] if $limit > 0 && @active > $limit;
+    @active = reverse @active;
+    return \@active;
+}
+
+sub _select_latest_active_fvg {
+    my ($fvgs, $current_bar) = @_;
+    my $active = _active_fvgs_at($fvgs, $current_bar, 1);
+    return @$active ? $active->[0] : undef;
 }
 
 sub _fvg_visible_bounds_at {

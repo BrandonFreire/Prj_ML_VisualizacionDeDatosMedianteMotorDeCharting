@@ -238,6 +238,11 @@ my $vwap_ind = Market::Indicators::AnchoredVWAP->new(
     # La visibilidad inicial sigue apagada; habilitar el cálculo permite que
     # el interruptor "Banda 3x" del menú haga efecto cuando el usuario lo marque.
     band_3_enabled => 1,
+    # El CSV usa -05:00. Market Open queda separado de Session Start y toma
+    # la apertura oficial de las 09:30 en la zona horaria de los datos.
+    market_open_hour => 9,
+    market_open_minute => 30,
+    market_timezone_offset_seconds => -5 * 3600,
 );
 $vwap_ind->set_smc_indicator($smc_ind);
 $vwap_ind->set_vp_indicator($vp_ind);

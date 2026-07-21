@@ -233,7 +233,9 @@ sub _render_range_filter {
 # ================================================================
 sub _render_supply_demand {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
-    my $candles = $self->{indicator}{_candles} // [];
+    my $candles = $self->{indicator}->can('get_candles')
+        ? $self->{indicator}->get_candles()
+        : [];
     my $bar_w   = $scale->{x_width} / ($scale->{visible_bars} || 1);
     my $half_bar = $bar_w * 0.5;
 

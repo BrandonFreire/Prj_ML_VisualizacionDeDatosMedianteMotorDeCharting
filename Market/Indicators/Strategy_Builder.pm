@@ -72,7 +72,7 @@ sub compute_all {
     my ($self, $market) = @_;
     $self->reset();
 
-    my $arr = $market->_active_array();
+    my $arr = $market->get_active_candles();
     $self->{_candles} = $arr;
     my $n = scalar @$arr;
     return if $n < 2;
@@ -558,6 +558,7 @@ sub get_atr          { return $_[0]->{_atr}           }
 sub get_supply_zones { return $_[0]->{_supply_zones}  }
 sub get_demand_zones { return $_[0]->{_demand_zones}  }
 sub get_signals      { return $_[0]->{_signals}       }
+sub get_candles      { return $_[0]->{_candles} // [] }
 sub get_trend_channels { return $_[0]->{_trend_channels} }
 
 1;

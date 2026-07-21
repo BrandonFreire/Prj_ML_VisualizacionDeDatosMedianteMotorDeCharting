@@ -27,6 +27,9 @@ sub new {
         anchor_mode        => $args{anchor_mode} // 'manual',
         session_open_hour   => $args{session_open_hour}   // 0,
         session_open_minute => $args{session_open_minute} // 0,
+        market_open_hour    => $args{market_open_hour}    // 9,
+        market_open_minute  => $args{market_open_minute}  // 30,
+        market_timezone_offset_seconds => $args{market_timezone_offset_seconds} // 0,
 
         _manual_anchors    => [],
         _vwap_lines        => [],     # [{anchor_idx, values => [vwap_i], std_dev => [std_i]}]
@@ -120,29 +123,45 @@ sub compute_all {
     my ($self, $market) = @_;
     $self->reset();
 
-    my $arr = $market->_active_array();
+    my $arr = $market->get_active_candles();
     $self->{_candles} = $arr;
     my $n = scalar @$arr;
     return if $n < 2;
 
-    my ($lines, $auto) = $self->_calculate_lines($arr);
+    my ($lines, $auto) = $self->_calculate_lines($arr, complete_dataset => 1);
     $self->{_vwap_lines} = $lines;
     $self->{_auto_missed_result} = $auto;
 }
 
 sub _calculate_lines {
-    my ($self, $arr) = @_;
+    my ($self, $arr, %opts) = @_;
     my $n = scalar @$arr;
     return ([], undef) if $n < 2;
 
     # 1. Recopilar anclajes. En manual sólo se usan clics del usuario; en
     # multipivot se añaden Inicio de Sesión, Apertura, BOS, CHoCH y POC.
-    my @anchors = $self->_collect_anchors($arr);
+    my @anchors = $self->_collect_anchors($arr, %opts);
 
-    # 2. Ordenar por índice y eliminar duplicados
+    # 2. Ordenar por indice y fusionar anclajes coincidentes. Session Start y
+    # Market Open pueden caer en la misma vela cuando se usa el fallback.
     @anchors = sort { $a->{index} <=> $b->{index} } @anchors;
-    my %seen;
-    @anchors = grep { !$seen{$_->{index}}++ } @anchors;
+    my @merged;
+    for my $anchor (@anchors) {
+        my $previous = @merged && $merged[-1]{index} == $anchor->{index}
+            ? $merged[-1] : undef;
+        if (!$previous) {
+            my %copy = %$anchor;
+            $copy{sources} = [ $anchor->{source} // 'manual' ];
+            push @merged, \%copy;
+            next;
+        }
+        my $source = $anchor->{source} // 'manual';
+        push @{ $previous->{sources} }, $source
+            unless grep { $_ eq $source } @{ $previous->{sources} };
+        $previous->{market_open_metadata} = $anchor->{metadata}
+            if $source eq 'market_open' && $anchor->{metadata};
+    }
+    @anchors = @merged;
 
     # 3. Un VWAP manual continúa independiente hacia el final. En modo
     # multipivot cada pivote reinicia estrictamente la acumulación, por lo que
@@ -186,6 +205,11 @@ sub _calculate_lines {
             end_idx      => $end,
             values_offset => $compact ? $start : 0,
             anchor_source => $anchor->{source} // 'manual',
+            anchor_sources => [ @{ $anchor->{sources} // [ $anchor->{source} // 'manual' ] } ],
+            anchor_metadata => $anchor->{metadata}
+                ? { %{ $anchor->{metadata} } } : undef,
+            market_open_metadata => $anchor->{market_open_metadata}
+                ? { %{ $anchor->{market_open_metadata} } } : undef,
             values       => \@values,
             std_dev      => \@std_dev,
             mult_1       => $self->{std_mult_1},
@@ -334,7 +358,7 @@ sub _latest_confirmed_missed_pivot {
 }
 
 sub _collect_anchors {
-    my ($self, $arr) = @_;
+    my ($self, $arr, %opts) = @_;
     my @anchors = map { { index => $_->{index}, source => 'manual' } }
                   @{ $self->{_manual_anchors} // [] };
     return @anchors unless ($self->{anchor_mode} // 'manual') eq 'multipivot';
@@ -342,21 +366,61 @@ sub _collect_anchors {
     my $n = scalar @$arr;
     return @anchors unless $n;
 
-    # Inicio de cada sesión y apertura configurada del mercado.
-    my $open_seconds = 3600 * $self->{session_open_hour}
-                     + 60   * $self->{session_open_minute};
-    my $last_session;
+    # Session Start y Market Open son conceptos distintos. Los epochs se
+    # trasladan a la zona horaria configurada antes de separar cada dia.
+    my $session_seconds = 3600 * $self->{session_open_hour}
+                        + 60   * $self->{session_open_minute};
+    my $market_open_seconds = 3600 * $self->{market_open_hour}
+                            + 60   * $self->{market_open_minute};
+    my $tz_offset = int($self->{market_timezone_offset_seconds} // 0);
+    my (%session_seen, %day_first, %day_open, @day_order);
     for my $i (0 .. $n - 1) {
         my $time = $arr->[$i]{time};
         next unless defined $time;
-        my $session = int(($time - $open_seconds) / 86400);
-        if (!defined $last_session || $session != $last_session) {
+        my $local_time = $time + $tz_offset;
+        my $session = int(($local_time - $session_seconds) / 86400);
+        if (!$session_seen{$session}++) {
             push @anchors, { index => $i, source => 'session_start' };
-            $last_session = $session;
         }
-        my $day_seconds = $time % 86400;
-        push @anchors, { index => $i, source => 'market_open' }
-            if $day_seconds == $open_seconds;
+        my $day = int($local_time / 86400);
+        if (!exists $day_first{$day}) {
+            $day_first{$day} = $i;
+            push @day_order, $day;
+        }
+        my $day_seconds = $local_time - $day * 86400;
+        $day_open{$day} = $i
+            if !exists($day_open{$day}) && $day_seconds >= $market_open_seconds;
+    }
+
+    for my $position (0 .. $#day_order) {
+        my $day = $day_order[$position];
+        if (exists $day_open{$day}) {
+            push @anchors, {
+                index => $day_open{$day}, source => 'market_open',
+                metadata => {
+                    market_open_source => 'official_open_time',
+                    market_open_time => sprintf('%02d:%02d',
+                        $self->{market_open_hour}, $self->{market_open_minute}),
+                    timezone_offset_seconds => $tz_offset,
+                },
+            };
+            next;
+        }
+
+        # Un dia anterior ya esta cerrado cuando aparece el siguiente. En el
+        # ultimo dia solo se usa fallback con el dataset completo; asi Replay
+        # antes de la apertura no crea un ancla que luego deba reemplazarse.
+        my $day_is_closed = $position < $#day_order;
+        next unless $day_is_closed || $opts{complete_dataset};
+        push @anchors, {
+            index => $day_first{$day}, source => 'market_open',
+            metadata => {
+                market_open_source => 'first_available_session_candle',
+                market_open_time => sprintf('%02d:%02d',
+                    $self->{market_open_hour}, $self->{market_open_minute}),
+                timezone_offset_seconds => $tz_offset,
+            },
+        };
     }
 
     # Velas exactas de confirmación de estructura.
@@ -414,7 +478,7 @@ sub get_vwap_lines_at {
         if exists $self->{_vwap_cache}{$max_visible_index};
 
     my @prefix = @$candles[0 .. $max_visible_index];
-    my ($lines) = $self->_calculate_lines(\@prefix);
+    my ($lines) = $self->_calculate_lines(\@prefix, complete_dataset => 0);
     $self->{_vwap_cache}{$max_visible_index} = $lines;
     return $self->{_vwap_cache}{$max_visible_index};
 }

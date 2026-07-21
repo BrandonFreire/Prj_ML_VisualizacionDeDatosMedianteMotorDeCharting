@@ -44,7 +44,7 @@ sub compute_all {
     my ($self, $market) = @_;
     $self->reset();
 
-    my $arr = $market->_active_array();
+    my $arr = $market->get_active_candles();
     $self->{_market} = $market;
     $self->{_candles} = $arr;
     my $n   = scalar @$arr;
@@ -371,6 +371,7 @@ sub get_trendlines   { return $_[0]->{_trendlines} }
 sub get_major_highs  { return $_[0]->{_major_highs} }
 sub get_major_lows   { return $_[0]->{_major_lows}  }
 sub get_trailing_extremes { return $_[0]->{_trailing_extremes} }
+sub get_candles           { return $_[0]->{_candles} // [] }
 
 # Calcula únicamente el par de extremos vigente. A diferencia de etiquetar
 # cada pivote histórico, Strong/Weak es una propiedad del contexto estructural

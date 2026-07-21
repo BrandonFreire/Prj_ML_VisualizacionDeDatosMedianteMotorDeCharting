@@ -12,6 +12,8 @@ my $candles = sample_candles();
 my $market  = make_market($candles);
 
 is($market->size(), 10, 'almacena las velas de 1 minuto');
+is(refaddr($market->get_active_candles()), refaddr($market->get_data()->{'1'}),
+    'get_active_candles expone la serie activa mediante una API publica');
 
 $market->build_timeframes();
 my $all = $market->get_data();

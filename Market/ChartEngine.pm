@@ -189,7 +189,7 @@ sub goto_last {
 
 sub round {
     my ($self, $v) = @_;
-    return int( $v + 0.5 );
+    return int( $v >= 0 ? $v + 0.5 : $v - 0.5 );
 }
 
 # Schedule a deferred render (~1 frame delay) to avoid redundant redraws
@@ -1704,7 +1704,7 @@ sub zoom_at {
     # Calcular new_off entero (aproximacion necesaria por indices enteros)
     my $new_end_exact    = $frac_ix - $cursor_x * $new_bars / $pw + $new_bars - 0.5;
     my $new_offset_exact = $last - $new_end_exact;
-    my $new_off          = int( $new_offset_exact + 0.5 );
+    my $new_off          = $self->round($new_offset_exact);
 
     my $clamped = 0;
     my $min_off = -$self->_right_space_bars($new_bars);
@@ -2154,7 +2154,16 @@ sub _draw_crosshair_all {
 
     # OHLC legend en la esquina superior izquierda del canvas de precio
     my $candle = $self->{market}->get_candle($ix);
+    # Defensa adicional contra lookahead: el indice ya se limita arriba, pero
+    # la leyenda tampoco debe exponer una vela futura si cambia la escala entre
+    # dos repintados de Replay.
+    if ($self->{replay_mode} && defined $self->{replay_cursor} && $ix > $self->{replay_cursor}) {
+        $candle = undef;
+    }
     my $prev   = $ix > 0 ? $self->{market}->get_candle($ix - 1) : undef;
+    if ($self->{replay_mode} && defined $self->{replay_cursor} && ($ix - 1) > $self->{replay_cursor}) {
+        $prev = undef;
+    }
     $self->{price_panel}->draw_ohlc_legend($candle, $prev ? $prev->{close} : undef);
 
     # Valor de volumen en la barra bajo el cursor

@@ -40,7 +40,7 @@ sub compute_all {
     my ($self, $market) = @_;
     $self->reset();
 
-    my $arr = $market->_active_array();
+    my $arr = $market->get_active_candles();
     $self->{_candles} = $arr;
     return unless $arr && @$arr;
 

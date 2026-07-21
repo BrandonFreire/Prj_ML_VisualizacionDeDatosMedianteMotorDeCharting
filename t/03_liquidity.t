@@ -93,17 +93,32 @@ ok($sweep_level, 'detecta el BSL confirmado por el swing high');
 is($sweep_level->{classification}, 'SWEEP', 'mecha sobre BSL con cierre de rechazo es SWEEP');
 is($sweep_level->{swept_at}, 8, 'SWEEP conserva la vela del barrido');
 is($sweep_level->{resolved_at}, 8, 'SWEEP se resuelve en la misma vela');
+is_deeply(
+    $sweep_level->{state_path},
+    [qw(DETECTED SWEPT RECLAIMED RESOLVED)],
+    'SWEEP conserva la ruta de estados que explica su clasificacion',
+);
 
 my $grab = liquidity_for('grab');
 my $grab_level = main_bsl($grab->get_levels());
 is($grab_level->{classification}, 'GRAB', 'reclaim una vela después del quiebre es GRAB');
 is($grab_level->{swept_at}, 8, 'GRAB conserva la vela que rompe el nivel');
 is($grab_level->{resolved_at}, 9, 'GRAB se confirma al reclamar el nivel');
+is_deeply(
+    $grab_level->{state_path},
+    [qw(DETECTED SWEPT RECLAIMED RESOLVED)],
+    'GRAB conserva la ruta de estados de reclaim',
+);
 
 my $run = liquidity_for('run');
 my $run_level = main_bsl($run->get_levels());
 is($run_level->{classification}, 'RUN', 'tres cierres consecutivos fuera del BSL son RUN');
 is($run_level->{resolved_at}, 10, 'RUN se confirma exactamente en el tercer cierre');
+is_deeply(
+    $run_level->{state_path},
+    [qw(DETECTED SWEPT ACCEPTANCE RESOLVED)],
+    'RUN conserva la ruta de estados de aceptacion',
+);
 
 my $pending_market = make_market([ @{ liquidity_candles('run') }[0 .. 8] ]);
 my $pending = Market::Indicators::Liquidity->new(
@@ -113,6 +128,8 @@ $pending->compute_all($pending_market);
 my $pending_level = main_bsl($pending->get_levels);
 is($pending_level->{state}, 'SWEPT',
     'un cierre fuera al final del cursor mantiene el nivel pendiente');
+is_deeply($pending_level->{state_path}, [qw(DETECTED SWEPT)],
+    'el nivel pendiente expone solo los estados ya confirmados');
 ok(!defined $pending_level->{classification} && !defined $pending_level->{resolved_at},
     'no adelanta SWEEP cuando las velas siguientes aún pueden confirmar GRAB o RUN');
 ok(scalar(grep { ($_->{index} // -1) == 3 } @{$pending->get_active}),

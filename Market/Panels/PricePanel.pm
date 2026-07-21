@@ -30,7 +30,7 @@ sub new {
 
 sub round {
     my ($self, $value) = @_;
-    return int( $value + 0.5 );
+    return int( $value >= 0 ? $value + 0.5 : $value - 0.5 );
 }
 
 # Store active scale (called before render)

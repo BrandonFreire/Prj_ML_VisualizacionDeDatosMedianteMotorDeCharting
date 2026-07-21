@@ -189,6 +189,13 @@ sub _active_array {
     return $self->{data}{ $self->{current_tf} };
 }
 
+# API publica para consumidores. Mantener _active_array como detalle interno
+# evita que los indicadores queden acoplados a la representacion de MarketData.
+sub get_active_candles {
+    my ($self) = @_;
+    return $self->_active_array();
+}
+
 sub get_slice {
     my ($self, $start, $end) = @_;
     my $arr  = $self->_active_array();

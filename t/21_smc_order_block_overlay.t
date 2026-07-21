@@ -87,6 +87,13 @@ is(scalar @{$canvas->tagged('ob_historical')}, 0,
     'un bloque mitigado no permanece en la gráfica');
 is(scalar @{$canvas->tagged('ob_active')}, 4, 'extiende únicamente bloques activos hasta el cursor');
 
+$visibility->{show_ob} = 0;
+$canvas->{calls} = [];
+$overlay->render($canvas, 0, 8, TestOBScale->new, 8);
+is(scalar @{$canvas->tagged('ob_active')}, 0,
+    'el control maestro Order Blocks oculta internos y externos');
+$visibility->{show_ob} = 1;
+
 $visibility->{show_internal_ob} = 0;
 $canvas->{calls} = [];
 $overlay->render($canvas, 0, 8, TestOBScale->new, 8);
