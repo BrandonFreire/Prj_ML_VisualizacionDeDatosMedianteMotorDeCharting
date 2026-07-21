@@ -37,20 +37,23 @@ use Market::Overlays::SMC_Structures;
 {
     package TestOBIndicator;
     sub new {
-        my @candles = map { { high => 15, low => 11 } } 0..8;
-        $candles[3]{low} = 9;
         bless {
-            _candles => \@candles,
             obs => [
-                { index=>1, triggered_by=>2, confirmed_at=>2, direction=>'bull',
+                { id=>'i_bull', index=>1, triggered_by=>2, confirmed_at=>2, direction=>'bull',
                   top=>10, bottom=>8, scope=>'internal', scope_confirmed_at=>2,
-                  relevant=>1, relevance_score=>3 },
-                { index=>4, triggered_by=>5, confirmed_at=>5, direction=>'bear',
+                  active=>1, status=>'active', relevance_score=>3 },
+                { id=>'i_bear', index=>2, triggered_by=>3, confirmed_at=>3, direction=>'bear',
+                  top=>18, bottom=>16, scope=>'internal', scope_confirmed_at=>3,
+                  active=>1, status=>'active', relevance_score=>2 },
+                { id=>'e_bull', index=>3, triggered_by=>4, confirmed_at=>4, direction=>'bull',
+                  top=>7, bottom=>5, scope=>'external', scope_confirmed_at=>4,
+                  active=>1, status=>'active', relevance_score=>2 },
+                { id=>'e_bear', index=>4, triggered_by=>5, confirmed_at=>5, direction=>'bear',
                   top=>22, bottom=>20, scope=>'external', scope_confirmed_at=>5,
-                  relevant=>1, relevance_score=>4 },
+                  active=>1, status=>'active', relevance_score=>4 },
                 { index=>6, triggered_by=>6, confirmed_at=>6, direction=>'bull',
                   top=>14, bottom=>13.9, scope=>'internal', scope_confirmed_at=>6,
-                  relevant=>0, relevance_score=>0.2 },
+                  active=>0, status=>'mitigated', end_index=>7, relevance_score=>0.2 },
             ],
         }, shift;
     }
@@ -67,6 +70,7 @@ use Market::Overlays::SMC_Structures;
 
 my $visibility = {
     smc_enabled => 1, show_ob => 1,
+    show_internal_ob => 1, show_external_ob => 1,
     show_internal_structure => 1, show_external_structure => 1,
     show_premium_discount => 0, show_trendlines => 0,
     show_major_levels => 0, show_fvg => 0, show_bos => 0,
@@ -77,23 +81,35 @@ my $overlay = Market::Overlays::SMC_Structures->new(
 );
 my $canvas = TestOBCanvas->new;
 $overlay->render($canvas, 0, 8, TestOBScale->new, 8);
-is(scalar @{$canvas->tagged('ob_internal')}, 1, 'dibuja el Order Block interno');
-is(scalar @{$canvas->tagged('ob_external')}, 1, 'dibuja el Order Block externo');
-is(scalar @{$canvas->tagged('ob_historical')}, 1,
-    'conserva el bloque histórico hasta su mitigación');
-is(scalar @{$canvas->tagged('ob_active')}, 1, 'extiende el bloque activo hasta el cursor');
+is(scalar @{$canvas->tagged('ob_internal')}, 2, 'dibuja Order Blocks internos alcista y bajista');
+is(scalar @{$canvas->tagged('ob_external')}, 2, 'dibuja Order Blocks externos alcista y bajista');
+is(scalar @{$canvas->tagged('ob_historical')}, 0,
+    'un bloque mitigado no permanece en la gráfica');
+is(scalar @{$canvas->tagged('ob_active')}, 4, 'extiende únicamente bloques activos hasta el cursor');
 
-$visibility->{show_internal_structure} = 0;
+$visibility->{show_internal_ob} = 0;
 $canvas->{calls} = [];
 $overlay->render($canvas, 0, 8, TestOBScale->new, 8);
 is(scalar @{$canvas->tagged('ob_internal')}, 0, 'Internal apagado oculta sólo OB internos');
-is(scalar @{$canvas->tagged('ob_external')}, 1, 'External conserva los OB externos');
+is(scalar @{$canvas->tagged('ob_external')}, 2, 'External conserva los OB externos');
 
-$visibility->{show_internal_structure} = 1;
-$visibility->{show_external_structure} = 0;
+$visibility->{show_internal_ob} = 1;
+$visibility->{show_external_ob} = 0;
 $canvas->{calls} = [];
 $overlay->render($canvas, 0, 8, TestOBScale->new, 8);
-is(scalar @{$canvas->tagged('ob_internal')}, 1, 'Internal vuelve a mostrar OB internos');
+is(scalar @{$canvas->tagged('ob_internal')}, 2, 'Internal vuelve a mostrar OB internos');
 is(scalar @{$canvas->tagged('ob_external')}, 0, 'External apagado oculta sólo OB externos');
+
+$visibility->{show_internal_ob} = 0;
+$canvas->{calls} = [];
+$overlay->render($canvas, 0, 8, TestOBScale->new, 8);
+is(scalar @{$canvas->tagged('ob_active')}, 0, 'ambos controles apagados ocultan todos los OB');
+
+$visibility->{show_internal_ob} = 1;
+$visibility->{show_external_ob} = 1;
+$canvas->{calls} = [];
+$overlay->render($canvas, 4, 8, TestOBScale->new, 8);
+is(scalar @{$canvas->tagged('ob_i_bull')}, 1,
+    'el mismo OB activo se conserva al cambiar el viewport y sólo se recorta');
 
 done_testing();

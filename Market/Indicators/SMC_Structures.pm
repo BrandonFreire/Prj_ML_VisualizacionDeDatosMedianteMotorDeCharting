@@ -11,6 +11,7 @@ sub new {
     return bless {
         depth        => $args{depth} // 3,
         external_depth => $args{external_depth},
+        fvg_auto_threshold => exists $args{fvg_auto_threshold} ? $args{fvg_auto_threshold} : 1,
         _sh          => [],   # swing highs
         _sl          => [],   # swing lows
         _bos         => [],   # BOS events  [{index,level,from,direction}]
@@ -19,6 +20,8 @@ sub new {
         _ob          => [],   # Order Blocks [{index,direction,top,bottom,triggered_by,scope}]
         _major_highs => [],   # external swing highs used as major structure
         _major_lows  => [],   # external swing lows used as major structure
+        _external_highs => [],
+        _external_lows  => [],
         _trailing_extremes => undef, # par Strong/Weak vigente
         _candles     => undef, # referencia al arreglo activo para mitigacion visual de FVG
         _lq_ref      => undef, # referencia opcional al indicador Liquidity
@@ -33,7 +36,7 @@ sub set_liquidity_indicator {
 
 sub reset {
     my ($self) = @_;
-    $self->{$_} = [] for qw(_sh _sl _bos _choch _fvg _ob _trendlines _major_highs _major_lows);
+    $self->{$_} = [] for qw(_sh _sl _bos _choch _fvg _ob _trendlines _major_highs _major_lows _external_highs _external_lows);
     $self->{_trailing_extremes} = undef;
 }
 
@@ -49,7 +52,7 @@ sub compute_all {
     if ($n < 2 * $k + 2) {
         # Un FVG confirmado necesita tres velas, no una estructura de pivotes
         # completa. No se debe ocultar durante el warm-up de SMC.
-        _detect_fvgs($arr, $self->{_fvg}, {});
+        _detect_fvgs($arr, $self->{_fvg}, {}, $self->{fvg_auto_threshold});
         _annotate_fvg_lifecycle($arr, $self->{_fvg});
         return;
     }
@@ -97,26 +100,17 @@ sub compute_all {
         }
     }
 
-    # Anotar pivotes internos que coincidan con pivotes externos
-    my %ext_sh_idx = map { $_->{index} => $_ } @sh_ext;
-    my %ext_sl_idx = map { $_->{index} => $_ } @sl_ext;
-    for my $p (@sh_int) {
-        if ( my $ep = $ext_sh_idx{ $p->{index} } ) {
-            $p->{scope}              = 'external';
-            $p->{scope_confirmed_at} = $ep->{confirmed_at};
-        }
-    }
-    for my $p (@sl_int) {
-        if ( my $ep = $ext_sl_idx{ $p->{index} } ) {
-            $p->{scope}              = 'external';
-            $p->{scope_confirmed_at} = $ep->{confirmed_at};
-        }
-    }
+    # Un pivote interno y uno externo pueden coincidir fisicamente, pero siguen
+    # siendo estados distintos.  Promover el objeto interno a external mezclaba
+    # las secuencias HH/LH y HL/LL y adelantaba su confirmacion de scope.
+    $_->{scope} = 'external' for @sh_ext, @sl_ext;
 
     $self->{_sh}          = \@sh_int;
     $self->{_sl}          = \@sl_int;
-    $self->{_major_highs} = [ grep { ($_->{scope}//'internal') eq 'external' } @sh_int ];
-    $self->{_major_lows}  = [ grep { ($_->{scope}//'internal') eq 'external' } @sl_int ];
+    $self->{_external_highs} = \@sh_ext;
+    $self->{_external_lows}  = \@sl_ext;
+    $self->{_major_highs} = [ @sh_ext ];
+    $self->{_major_lows}  = [ @sl_ext ];
 
     # ----------------------------------------------------------------
     # 3. BOS y CHoCH — DOS PASADAS INDEPENDIENTES
@@ -147,18 +141,24 @@ sub compute_all {
     # 4. Order Blocks — ultima vela opuesta antes de cada BOS/CHoCH
     # ----------------------------------------------------------------
     {
-        my @all_events = (@{ $self->{_bos} }, @{ $self->{_choch} });
+        my @all_events = (
+            map { { %$_, type => 'BOS' } } @{ $self->{_bos} },
+            map { { %$_, type => 'CHOCH' } } @{ $self->{_choch} },
+        );
         $self->{_ob} = _detect_order_blocks($arr, \@all_events);
     }
 
     # ----------------------------------------------------------------
     # 5. Trend Lines — conectan highs LH o lows HL consecutivos
     # ----------------------------------------------------------------
-    $self->{_trendlines} = _detect_trendlines($arr, \@sh_int, \@sl_int);
+    $self->{_trendlines} = [
+        @{ _detect_trendlines($arr, \@sh_int, \@sl_int, 'internal') },
+        @{ _detect_trendlines($arr, \@sh_ext, \@sl_ext, 'external') },
+    ];
 
     # 6. Fair Value Gaps (FVG) — patrón de tres velas, independiente de que
     # ya haya pivotes suficientes para construir BOS/CHoCH.
-    _detect_fvgs($arr, $self->{_fvg}, \%liquidity_at_index);
+    _detect_fvgs($arr, $self->{_fvg}, \%liquidity_at_index, $self->{fvg_auto_threshold});
 
     _annotate_fvg_lifecycle($arr, $self->{_fvg});
     _annotate_order_block_lifecycle($arr, $self->{_ob});
@@ -168,19 +168,21 @@ sub compute_all {
         map { { %$_, type => 'CHOCH' } } @{ $self->{_choch} },
     );
     $self->{_trailing_extremes} = _build_trailing_extremes(
-        $arr, [ @sh_int, @sl_int ], \@structure_events, $n - 1,
+        $arr, [ @sh_ext, @sl_ext ], \@structure_events, $n - 1,
     );
 }
 
 sub _detect_fvgs {
-    my ($arr, $fvgs, $liquidity_lookup) = @_;
+    my ($arr, $fvgs, $liquidity_lookup, $auto_threshold) = @_;
     return unless $arr && $fvgs;
     $liquidity_lookup //= {};
     my $n = scalar @$arr;
     return if $n < 3;
 
-    # Bullish FVG: Low[i+1] > High[i-1].
-    # Bearish FVG: High[i+1] < Low[i-1].
+    my ($delta_sum, $delta_count) = (0, 0);
+
+    # Regla LuxAlgo: gap de tres velas, desplazamiento del cuerpo central mas
+    # alla del borde y filtro automatico de magnitud (media causal x 2).
     for my $i (1 .. $n - 2) {
         my $left  = $i - 1;
         my $right = $i + 1;
@@ -189,12 +191,23 @@ sub _detect_fvgs {
                  && defined $arr->[$right]{high}
                  && defined $arr->[$right]{low};
 
-        if ($arr->[$right]{low} > $arr->[$left]{high}) {
+        my $middle_open  = $arr->[$i]{open};
+        my $middle_close = $arr->[$i]{close};
+        next unless defined $middle_open && defined $middle_close && $middle_open != 0;
+        my $delta = ($middle_close - $middle_open) / abs($middle_open);
+        my $threshold = $auto_threshold && $delta_count
+            ? 2 * ($delta_sum / $delta_count) : 0;
+
+        if ($arr->[$right]{low} > $arr->[$left]{high}
+                && $middle_close > $arr->[$left]{high}
+                && $delta > $threshold) {
             push @$fvgs, {
+                id          => join('_', 'fvg', 'bull', $left, $i, $right),
                 index       => $i,
                 left_index  => $left,
                 mid_index   => $i,
                 formed_at   => $right,
+                confirmed_at => $right,
                 right_index => $right,
                 direction   => 'bull',
                 top         => $arr->[$right]{low},
@@ -202,12 +215,16 @@ sub _detect_fvgs {
                 high_reaction => _fvg_liquidity_reaction($liquidity_lookup, $right),
             };
         }
-        elsif ($arr->[$right]{high} < $arr->[$left]{low}) {
+        elsif ($arr->[$right]{high} < $arr->[$left]{low}
+                && $middle_close < $arr->[$left]{low}
+                && -$delta > $threshold) {
             push @$fvgs, {
+                id          => join('_', 'fvg', 'bear', $left, $i, $right),
                 index       => $i,
                 left_index  => $left,
                 mid_index   => $i,
                 formed_at   => $right,
+                confirmed_at => $right,
                 right_index => $right,
                 direction   => 'bear',
                 top         => $arr->[$left]{low},
@@ -215,6 +232,8 @@ sub _detect_fvgs {
                 high_reaction => _fvg_liquidity_reaction($liquidity_lookup, $right),
             };
         }
+        $delta_sum += abs($delta);
+        $delta_count++;
     }
 }
 
@@ -259,22 +278,28 @@ sub _detect_bos_choch {
 
         # Ruptura alcista
         if ($last_sh && !$last_sh->{swept}
-                && defined $arr->[$i]{close} && $arr->[$i]{close} > $last_sh->{price}) {
+                && _close_cross_over($arr, $i, $last_sh->{price})) {
             $last_sh->{swept} = 1;
             my $is_choch = ($trend == -1);
+            my $previous_trend = $trend;
             my $signal = $is_choch
                 ? _recent_liquidity_signal($liquidity_lookup, $i, 'sl', 'reversal', 10)
                 : _recent_liquidity_signal($liquidity_lookup, $i, 'sh', 'continuation', 10);
             my $boosted  = $signal ? 1 : 0;
             my $ev = {
+                id                 => join('_', 'smc', lc($is_choch ? 'choch' : 'bos'), $scope, 'bull', $last_sh->{index}, $i),
                 index              => $i,
+                break_index        => $i,
                 level              => $last_sh->{price},
                 from               => $last_sh->{index},
+                pivot_index        => $last_sh->{index},
                 direction          => 'bull',
                 scope              => $scope,
                 confirmed_at       => $i,
                 pivot_confirmed_at => $last_sh->{confirmed_at},
                 scope_confirmed_at => $last_sh->{scope_confirmed_at} // $last_sh->{confirmed_at},
+                previous_trend     => $previous_trend,
+                crossed            => 1,
                 boosted            => $boosted // 0,
                 probability_weight => $signal ? $signal->{probability_weight} : 0.50,
                 liquidity_signal   => $signal ? $signal->{classification} : undef,
@@ -286,22 +311,28 @@ sub _detect_bos_choch {
 
         # Ruptura bajista
         if ($last_sl && !$last_sl->{swept}
-                && defined $arr->[$i]{close} && $arr->[$i]{close} < $last_sl->{price}) {
+                && _close_cross_under($arr, $i, $last_sl->{price})) {
             $last_sl->{swept} = 1;
             my $is_choch = ($trend == 1);
+            my $previous_trend = $trend;
             my $signal = $is_choch
                 ? _recent_liquidity_signal($liquidity_lookup, $i, 'sh', 'reversal', 10)
                 : _recent_liquidity_signal($liquidity_lookup, $i, 'sl', 'continuation', 10);
             my $boosted  = $signal ? 1 : 0;
             my $ev = {
+                id                 => join('_', 'smc', lc($is_choch ? 'choch' : 'bos'), $scope, 'bear', $last_sl->{index}, $i),
                 index              => $i,
+                break_index        => $i,
                 level              => $last_sl->{price},
                 from               => $last_sl->{index},
+                pivot_index        => $last_sl->{index},
                 direction          => 'bear',
                 scope              => $scope,
                 confirmed_at       => $i,
                 pivot_confirmed_at => $last_sl->{confirmed_at},
                 scope_confirmed_at => $last_sl->{scope_confirmed_at} // $last_sl->{confirmed_at},
+                previous_trend     => $previous_trend,
+                crossed            => 1,
                 boosted            => $boosted // 0,
                 probability_weight => $signal ? $signal->{probability_weight} : 0.50,
                 liquidity_signal   => $signal ? $signal->{classification} : undef,
@@ -314,8 +345,24 @@ sub _detect_bos_choch {
     return (\@bos, \@choch);
 }
 
+sub _close_cross_over {
+    my ($arr, $i, $level) = @_;
+    return 0 unless $arr && $i > 0 && defined $level;
+    return 0 unless defined $arr->[$i - 1]{close} && defined $arr->[$i]{close};
+    return $arr->[$i - 1]{close} <= $level && $arr->[$i]{close} > $level ? 1 : 0;
+}
+
+sub _close_cross_under {
+    my ($arr, $i, $level) = @_;
+    return 0 unless $arr && $i > 0 && defined $level;
+    return 0 unless defined $arr->[$i - 1]{close} && defined $arr->[$i]{close};
+    return $arr->[$i - 1]{close} >= $level && $arr->[$i]{close} < $level ? 1 : 0;
+}
+
 sub get_swing_highs  { return $_[0]->{_sh}         }
 sub get_swing_lows   { return $_[0]->{_sl}         }
+sub get_external_swing_highs { return $_[0]->{_external_highs} }
+sub get_external_swing_lows  { return $_[0]->{_external_lows}  }
 sub get_bos_events   { return $_[0]->{_bos}        }
 sub get_choch_events { return $_[0]->{_choch}      }
 sub get_fvg_zones    { return $_[0]->{_fvg}        }
@@ -400,6 +447,7 @@ sub snapshot_at {
     my ($self, $last_index) = @_;
     my $market = $self->{_market} or return {
         swing_highs => [], swing_lows => [], bos => [], choch => [],
+        external_swing_highs => [], external_swing_lows => [],
         fvgs => [], order_blocks => [], trendlines => [],
         major_highs => [], major_lows => [],
     };
@@ -409,6 +457,7 @@ sub snapshot_at {
     my $snapshot = ref($self)->new(
         depth          => $self->{depth},
         external_depth => $self->{external_depth},
+        fvg_auto_threshold => $self->{fvg_auto_threshold},
     );
     $snapshot->set_liquidity_indicator($self->{_lq_ref}) if $self->{_lq_ref};
     $snapshot->compute_all($prefix);
@@ -416,6 +465,8 @@ sub snapshot_at {
     return {
         swing_highs => $snapshot->get_swing_highs(),
         swing_lows  => $snapshot->get_swing_lows(),
+        external_swing_highs => $snapshot->get_external_swing_highs(),
+        external_swing_lows  => $snapshot->get_external_swing_lows(),
         bos         => $snapshot->get_bos_events(),
         choch       => $snapshot->get_choch_events(),
         fvgs        => $snapshot->get_fvg_zones(),
@@ -436,21 +487,30 @@ sub _detect_order_blocks {
         my $from = $ev->{from};
         next unless defined $from && $from > 0;
 
-        my $search_start = $from > 30 ? $from - 30 : 0;
+        my $break = $ev->{break_index} // $ev->{index};
+        next unless defined $break && $break >= $from;
+
+        # LuxAlgo storeOrdeBlock toma el extremo parsedLow/parsedHigh entre el
+        # pivote estructural y la ruptura. No busca una vela opuesta dentro de
+        # una ventana arbitraria anterior al pivote.
         my $ob_idx;
-        for my $i (reverse $search_start .. $from) {
+        for my $i ($from .. $break) {
             my $c = $arr->[$i] // next;
-            next unless defined $c->{open} && defined $c->{close};
-            if ($dir eq 'bull' && $c->{close} < $c->{open}) { $ob_idx = $i; last }
-            if ($dir eq 'bear' && $c->{close} > $c->{open}) { $ob_idx = $i; last }
+            my $field = $dir eq 'bull' ? 'low' : 'high';
+            next unless defined $c->{$field};
+            if (!defined $ob_idx
+                || ($dir eq 'bull' && $c->{$field} < $arr->[$ob_idx]{$field})
+                || ($dir eq 'bear' && $c->{$field} > $arr->[$ob_idx]{$field})) {
+                $ob_idx = $i;
+            }
         }
         next unless defined $ob_idx;
-        next if $seen{$ob_idx.$dir}++;
+        my $scope = $ev->{scope} // 'internal';
+        my $event_id = $ev->{id} // join('_', $ev->{type} // 'structure', $break);
+        next if $seen{join('|', $scope, $dir, $ob_idx, $event_id)}++;
 
         my $c = $arr->[$ob_idx];
-        my ($top, $bottom) = $dir eq 'bull'
-            ? ($c->{open}, $c->{low})
-            : ($c->{high}, $c->{open});
+        my ($top, $bottom) = ($c->{high}, $c->{low});
 
         my $metrics = _order_block_relevance(
             $arr, $ob_idx, $ev->{index}, $top, $bottom,
@@ -458,12 +518,15 @@ sub _detect_order_blocks {
         );
 
         push @obs, {
+            id                 => join('_', 'ob', $scope, $dir, $ob_idx, $break),
             index              => $ob_idx,
+            source_index       => $ob_idx,
             direction          => $dir,
             top                => $top,
             bottom             => $bottom,
             triggered_by       => $ev->{index},
-            scope              => $ev->{scope} // 'internal',
+            event_id           => $event_id,
+            scope              => $scope,
             confirmed_at       => $ev->{confirmed_at} // $ev->{index},
             scope_confirmed_at => $ev->{scope_confirmed_at} // $ev->{confirmed_at} // $ev->{index},
             structure_type     => $ev->{type} // $ev->{event_type} // 'structure_break',
@@ -534,6 +597,8 @@ sub _annotate_fvg_lifecycle {
         $fvg->{active}       = 1;
         $fvg->{fill_ratio}   = 0;
         $fvg->{mitigated_at} = undef;
+        $fvg->{end_index}     = undef;
+        $fvg->{fill_events}   = [];
 
         my $start = ($fvg->{formed_at} // -1) + 1;
         my $range = abs(($fvg->{top} // 0) - ($fvg->{bottom} // 0));
@@ -555,13 +620,23 @@ sub _annotate_fvg_lifecycle {
 
             $penetration = 0 if $penetration < 0;
             $penetration = 1 if $penetration > 1;
-            $fvg->{fill_ratio} = $penetration
-                if $penetration > ($fvg->{fill_ratio} // 0);
+            my $previous_fill = $fvg->{fill_ratio} // 0;
+            if ($penetration > $previous_fill) {
+                $fvg->{fill_ratio} = $penetration;
+                push @{ $fvg->{fill_events} }, {
+                    index => $i, fill_ratio => $penetration,
+                    top => ($fvg->{direction} // '') eq 'bull'
+                        ? $fvg->{top} - $range * $penetration : $fvg->{top},
+                    bottom => ($fvg->{direction} // '') eq 'bear'
+                        ? $fvg->{bottom} + $range * $penetration : $fvg->{bottom},
+                };
+            }
             next unless $penetration >= 1;
 
             $fvg->{status}       = 'mitigated';
             $fvg->{active}       = 0;
             $fvg->{mitigated_at} = $i;
+            $fvg->{end_index}     = $i;
             last;
         }
     }
@@ -577,6 +652,7 @@ sub _annotate_order_block_lifecycle {
         $ob->{end_index} = undef;
         $ob->{first_touch_at} = undef;
         $ob->{fill_ratio} = 0;
+        $ob->{fill_events} = [];
         my $start = ($ob->{triggered_by} // $ob->{index} // -1) + 1;
         next if $start > $#$arr;
 
@@ -585,24 +661,25 @@ sub _annotate_order_block_lifecycle {
 
         for my $i ($start .. $#$arr) {
             my $c = $arr->[$i] // next;
-            my ($penetration, $invalidated);
+            my $penetration;
             if (($ob->{direction} // '') eq 'bull') {
-                $invalidated = defined($c->{close}) && $c->{close} < $ob->{bottom};
-                next unless $invalidated || (defined($c->{low}) && $c->{low} <= $ob->{top});
+                next unless defined($c->{low}) && $c->{low} < $ob->{top};
                 $penetration = defined($c->{low}) ? ($ob->{top} - $c->{low}) / $range : 0;
             }
             else {
-                $invalidated = defined($c->{close}) && $c->{close} > $ob->{top};
-                next unless $invalidated || (defined($c->{high}) && $c->{high} >= $ob->{bottom});
+                next unless defined($c->{high}) && $c->{high} > $ob->{bottom};
                 $penetration = defined($c->{high}) ? ($c->{high} - $ob->{bottom}) / $range : 0;
             }
             $penetration = 0 if $penetration < 0;
             $penetration = 1 if $penetration > 1;
             $ob->{first_touch_at} //= $i if $penetration > 0;
-            $ob->{fill_ratio} = $penetration if $penetration > ($ob->{fill_ratio} // 0);
-            next unless $invalidated || $penetration >= 0.50;
+            if ($penetration > ($ob->{fill_ratio} // 0)) {
+                $ob->{fill_ratio} = $penetration;
+                push @{ $ob->{fill_events} }, { index => $i, fill_ratio => $penetration };
+            }
+            next unless $penetration >= 1;
 
-            $ob->{status}    = $invalidated ? 'invalidated' : 'mitigated';
+            $ob->{status}    = 'mitigated';
             $ob->{active}    = 0;
             $ob->{end_index} = $i;
             last;
@@ -611,7 +688,8 @@ sub _annotate_order_block_lifecycle {
 }
 
 sub _detect_trendlines {
-    my ($arr, $sh, $sl) = @_;
+    my ($arr, $sh, $sl, $scope) = @_;
+    $scope //= 'internal';
     my $n = scalar @$arr;
     my @tls;
 
@@ -628,9 +706,8 @@ sub _detect_trendlines {
                 $break_at = $j; last;
             }
         }
-        my $scope = ($p1->{scope}//'internal') eq 'external'
-                 && ($p2->{scope}//'internal') eq 'external' ? 'external' : 'internal';
         push @tls, {
+            id           => join('_', 'trendline', $scope, 'bear', $p1->{index}, $p2->{index}),
             from_index   => $p1->{index},
             from_price   => $p1->{price},
             to_index     => $p2->{index},
@@ -657,9 +734,8 @@ sub _detect_trendlines {
                 $break_at = $j; last;
             }
         }
-        my $scope = ($p1->{scope}//'internal') eq 'external'
-                 && ($p2->{scope}//'internal') eq 'external' ? 'external' : 'internal';
         push @tls, {
+            id           => join('_', 'trendline', $scope, 'bull', $p1->{index}, $p2->{index}),
             from_index   => $p1->{index},
             from_price   => $p1->{price},
             to_index     => $p2->{index},

@@ -24,4 +24,18 @@ my $prefix = Market::Indicators::ZigZagDirection::_annotate_hldv([ @$labeled[0 .
 is_deeply([ map { $_->{label} } @$prefix ], [qw(LH LL HH HL)],
     'las etiquetas de un prefijo no dependen de pivotes futuros');
 
+my $developing = Market::Indicators::ZigZagDirection::_append_developing_pivot(
+    [{ id=>'confirmed_high', type=>'high', index=>1, price=>10, confirmed_at=>2 }],
+    [
+        { high=>9,  low=>7 }, { high=>10, low=>8 },
+        { high=>12, low=>7 }, { high=>11, low=>6 },
+    ],
+    3,
+);
+is($developing->[0]{id}, 'confirmed_high',
+    'un máximo confirmado no se reemplaza con datos posteriores');
+is($developing->[1]{type}, 'low',
+    'el extremo provisional alterna respecto al último confirmado');
+ok($developing->[1]{provisional}, 'el extremo móvil queda marcado como provisional');
+
 done_testing();

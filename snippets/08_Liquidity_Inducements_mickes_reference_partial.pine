@@ -1,0 +1,347 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © mickes
+
+//@version=6
+indicator("Liquidity & inducements", overlay = true, max_labels_count = 500, max_lines_count = 500)
+
+import mickes/PriceAction/4
+
+_marketStructureLeftPivotLength = input.int(5, "Pivot", inline = "pivot", group = "Market structure")
+_marketStructureRightPivotLength = input.int(5, "", inline = "pivot", group = "Market structure")
+_marketStructureShowPivots = input.bool(false, "", tooltip = "Set the left and right pivot lengths for the market structure that decides the trend.", inline = "pivot", group = "Market structure")
+
+_grabs = input.bool(true, "Grabs", group = "Liquidity ($$$)")
+_bigGrabs = input.bool(true, "Big grabs", tooltip = "You can show an additional grab if you want to. I suggest having this grab from a higher timeframe or/and with larger pivot lengths than the other grab.", group = "Liquidity ($$$)")
+_sweeps = input.bool(true, "Sweeps", group = "Liquidity ($$$)")
+_turtleSoups = input.bool(true, "Turtle soups", group = "Liquidity ($$$)")
+_equalPivots = input.bool(true, "Equal highs/lows", tooltip = "Equal pivots (equal highs and equal lows) can print both liquidity ($$$) and inducement (IDM) depending on the trend. If an equal high/low is broken by price in between them no equal high/low will show.\n\nSee examples here:\n- https://www.tradingview.com/x/h4sxLYyy/\n- https://www.tradingview.com/x/lWdZQfOW/", group = "Liquidity ($$$)")
+_buysideAndSellsideLiquidity = input.bool(true, "BSL & SSL", tooltip = "Will show liquidity pools at the market structure pivots that has not yet been taken.", group = "Liquidity ($$$)")
+
+_retracementInducements = input.bool(true, "Retracement", tooltip = "The first pullback/retracement after a break of structure can often be an inducement zone. Enable this if you want to show these inducements.", group = "Inducement (IDM)")
+
+_grabsPivotLeftLength = input.int(3, "Pivot", inline = "grabspivotlength", group = "Grabs", active = _grabs)
+_grabsPivotRightLength = input.int(3, "", inline = "grabspivotlength", group = "Grabs", active = _grabs)
+_grabsLookback = input.int(5, "Lookback", group = "Grabs", active = _grabs)
+_grabsTimeframe = input.timeframe("", "Timeframe", group = "Grabs", active = _grabs)
+_grabsColor = input.color(color.orange, "Color", group = "Grabs", active = _grabs)
+
+_bigGrabsPivotLeftLength = input.int(10, "Pivot", inline = "sweepspivotlength", group = "Big grabs", active = _bigGrabs)
+_bigGrabsPivotRightLength = input.int(10, "", inline = "sweepspivotlength", group = "Big grabs", active = _bigGrabs)
+_bigGrabsLookback = input.int(5, "Lookback", group = "Big grabs", active = _bigGrabs)
+_bigGrabsTimeframe = input.timeframe("", "Timeframe", group = "Big grabs", active = _bigGrabs)
+_bigGrabsColor = input.color(color.aqua, "Color", group = "Big grabs", active = _bigGrabs)
+
+_sweepsPivotLeftLength = input.int(3, "Pivot", inline = "sweepspivotlength", group = "Sweeps", active = _sweeps)
+_sweepsPivotRightLength = input.int(3, "", inline = "sweepspivotlength", group = "Sweeps", active = _sweeps)
+_sweepsLookback = input.int(5, "Lookback", group = "Sweeps", active = _sweeps)
+_sweepsTimeframe = input.timeframe("", "Timeframe", group = "Sweeps", active = _sweeps)
+_sweepsBullishColor = input.color(color.teal, "Color", inline = "sweepscolors", group = "Sweeps", active = _sweeps)
+_sweepsBearishColor = input.color(color.red, "", tooltip = "First set the bullish color and secondly the bearish color.", inline = "sweepscolors", group = "Sweeps", active = _sweeps)
+
+_turtleSoupsPivotLeftLength = input.int(1, "Pivot", inline = "liquidityturtlesoup", group = "Turtle soups", active = _turtleSoups)
+_turtleSoupsPivotRightLength = input.int(1, "", tooltip = "Set the pivot lengths (right and left) that can be  target for a turtle soup.", inline = "liquidityturtlesoup", group = "Turtle soups", active = _turtleSoups)
+_turtleSoupsLookback = input.int(5, "Lookback", tooltip = "Set how many pivots back that can be a target for a turtle soup.", group = "Turtle soups", active = _turtleSoups)
+_turtleSoupsTimeframe = input.timeframe("", "Timeframe", tooltip = "The higher timeframe for pivots that can be a target for a turtle soup.", group = "Turtle soups", active = _turtleSoups)
+_turtleSoupsColor = input.color(color.new(color.orange, 70), "Color", group = "Turtle soups", active = _turtleSoups)
+_turtleSoupsConfirmation = input.bool(true, "Confirmation", tooltip = "• ENABLED\nThe turtle soup needs to be followed by a change of character (CHoCH) in the opposite direction.\n\n• DISABLED\nAll potential turtle soups will be shown, even the once with the 'wrong' direction (this is due to how higher timeframe values (pivots in this case) are fethed in Pine Script and that the trend can change during that fetching).", group = "Turtle soups", active = _turtleSoups)
+
+_equalPivotsPivotLeftLength = input.int(1, "Pivot", inline = "equalpivotspivotlength", group = "Equal highs/lows", active = _equalPivots)
+_equalPivotsPivotRightLength = input.int(1, "", inline = "equalpivotspivotlength", group = "Equal highs/lows", active = _equalPivots)
+_equalPivotsAverageTrueRangeFactor = input.float(0.5, "ATR factor", group = "Equal highs/lows", active = _equalPivots)
+_equalPivotsLookback = input.int(3, "Lookback", group = "Equal highs/lows", active = _equalPivots)
+_equalPivotsTimeframe = input.timeframe("", "Timeframe", group = "Equal highs/lows", active = _equalPivots)
+_equalPivotsLiquidityColor = input.color(color.orange, "Liquidity color", group = "Equal highs/lows", active = _equalPivots)
+_equalPivotsBullishInducementColor = input.color(color.teal, "Inducement color", inline = "eqhlidmcolors", group = "Equal highs/lows", active = _equalPivots)
+_equalPivotsBearishInducementColor = input.color(color.red, "", inline = "eqhlidmcolors", tooltip = "First set the bullish color and secondly the bearish color.", group = "Equal highs/lows", active = _equalPivots)
+
+_buysideAndSellsideLiquidityBullishColor = input.color(color.teal, "Color", inline = "buysideAndSellsideLiquidityColor", group = "Buyside & sellside liquidity", active = _buysideAndSellsideLiquidity)
+_buysideAndSellsideLiquidityBearishColor = input.color(color.red, "", inline = "buysideAndSellsideLiquidityColor", tooltip = "First set the bullish color and secondly the bearish color.", group = "Buyside & sellside liquidity", active = _buysideAndSellsideLiquidity)
+_buysideAndSellsideLiquidityShow = input.int(1, "Show", group = "Buyside & sellside liquidity", active = _buysideAndSellsideLiquidity)
+
+_retracementInducementsPivotLeftLength = input.int(1, "Pivot", inline = "retracementInducementspivotlength", group = "Retracement inducements", active = _retracementInducements)
+_retracementInducementsPivotRightLength = input.int(1, "", inline = "retracementInducementspivotlength", group = "Retracement inducements", active = _retracementInducements)
+_retracementInducementsLookback = input.int(5, "Lookback", group = "Retracement inducements", active = _retracementInducements)
+_retracementInducementsTimeframe = input.timeframe("", "Timeframe", group = "Retracement inducements", active = _retracementInducements)
+_retracementInducementsBullishColor = input.color(color.teal, "Color", inline = "retracementInducementscolors", group = "Retracement inducements", active = _retracementInducements)
+_retracementInducementsBearishColor = input.color(color.red, "", tooltip = "First set the bullish color and secondly the bearish color.", inline = "retracementInducementscolors", group = "Retracement inducements", active = _retracementInducements)
+_retracementInducementsKeepInvalidated = input.bool(false, "Keep invlidated", tooltip = "An inducement is invalidated upon a break of structure or a change of character. Check this if you want to keep historical retracement inducements.", group = "Retracement inducements", active = _retracementInducements)
+
+_marketStructureFontSize = input.int(7, "Market structure font size", group = "Display")
+_liquidityFontSize = input.int(7, "Liquidity font size", group = "Display")
+_lineStyle = input.string(line.style_dotted, "Line style", [line.style_solid, line.style_dotted, line.style_dashed], group = "Display")
+
+_atr = ta.atr(14)
+
+type EqualPivotInducement
+    float StopLosses
+    PriceAction.Pivot FirstPivot
+    PriceAction.Pivot SecondPivot
+    label Label
+    line Line
+    bool LiquidityTaken
+type EqualPivotSettings
+    float AverageTrueRangeFactor
+    int Lookback
+    int PivotRightLength
+    int PivotLeftLength
+    color LiquidityColor
+    color BullishInducementColor
+    color BearishInducementColor
+    int FontSize
+    string LineStyle
+type EqualPivots
+    array<PriceAction.Pivot> Highs
+    array<PriceAction.Pivot> Lows
+    array<EqualPivotInducement> BearishInducements
+    array<EqualPivotInducement> BullishInducements
+
+method Color(int trend, color bullish, color bearish) =>
+    switch trend
+        -1 => bearish
+        1 => bullish
+method String(int trend, string bullish, string bearish) =>
+    switch trend
+        -1 => bearish
+        1 => bullish
+method SetBarIndex(PriceAction.Pivot pivot, int barTime) =>
+    barIndex = 0
+    i = 0
+    while true
+        if time[i] < barTime // before creation of zone 
+            barIndex := bar_index - (i - 1) // set the creation bar to the first bar inside the zone
+            break
+        i += 1
+    pivot.BarIndex := barIndex
+method SetBarIndices(PriceAction.Pivot pivotHigh, PriceAction.Pivot pivotLow) =>
+    if not na(pivotHigh) and na(pivotHigh.BarIndex)
+        pivotHigh.SetBarIndex(pivotHigh.Time)
+    if not na(pivotLow) and na(pivotLow.BarIndex)
+        pivotLow.SetBarIndex(pivotLow.Time)
+EqualPivotsInducementTrigger(EqualPivots equalPivots, EqualPivotSettings settings, int trend) =>
+    for inducement in equalPivots.BearishInducements
+        if trend == -1 and not inducement.LiquidityTaken and high >= inducement.StopLosses // only sweep the liquidity if the trend is bearish
+            inducement.LiquidityTaken := true
+            line.new(inducement.FirstPivot.BarIndex, inducement.StopLosses, inducement.SecondPivot.BarIndex, inducement.StopLosses, color = settings.LiquidityColor, style = settings.LineStyle)
+            label.new(inducement.SecondPivot.BarIndex - ((inducement.SecondPivot.BarIndex - inducement.FirstPivot.BarIndex) / 2), inducement.StopLosses, "$$$", size = settings.FontSize, color = color(na), textcolor = settings.LiquidityColor)
+    for inducement in equalPivots.BullishInducements
+        if trend == 1 and not inducement.LiquidityTaken and low <= inducement.StopLosses // only sweep the liquidity if the trend is bullish
+            inducement.LiquidityTaken := true
+            line.new(inducement.FirstPivot.BarIndex, inducement.StopLosses, inducement.SecondPivot.BarIndex, inducement.StopLosses, color = settings.LiquidityColor, style = settings.LineStyle)
+            label.new(inducement.SecondPivot.BarIndex - ((inducement.SecondPivot.BarIndex - inducement.FirstPivot.BarIndex) / 2), inducement.StopLosses, "$$$", size = settings.FontSize, color = color(na), textcolor = settings.LiquidityColor, style = label.style_label_up)
+EqualPivotsInducementAndLiquidity(array<PriceAction.Pivot> pivots, array<EqualPivotInducement> inducements, EqualPivotSettings settings, int trend) =>
+    size = pivots.size()
+    if size >= 2
+        latestPivot = pivots.first()
+        if latestPivot.BarIndex == bar_index - 1
+            for i = 1 to size - 1
+                equalPivot = pivots.get(i)
+                equalPivotMaximumPrice = switch latestPivot.Type
+                    1 => equalPivot.Price
+                    -1 => equalPivot.Price + (_atr * settings.AverageTrueRangeFactor)
+                equalPivotMinimumPrice = switch latestPivot.Type
+                    1 => equalPivot.Price - (_atr * settings.AverageTrueRangeFactor)
+                    -1 => equalPivot.Price
+                if latestPivot.Price > equalPivotMaximumPrice or latestPivot.Price < equalPivotMinimumPrice// not (latestPivot.Price >= equalPivotMinimumPrice and latestPivot.Price <= equalPivotMaximumPrice) //latestPivot.Price >= equalPivotMinimumPrice and latestPivot.Price <= equalPivotMaximumPrice
+                    continue
+                broken = false
+                step = switch latestPivot.Type
+                    1 => (equalPivot.Price - latestPivot.Price) / (latestPivot.BarIndex - equalPivot.BarIndex)
+                    -1 => (latestPivot.Price - equalPivot.Price) / (equalPivot.BarIndex - latestPivot.BarIndex)
+                for j = 2 to latestPivot.BarIndex - equalPivot.BarIndex
+                    barPrice = latestPivot.Price + (step * (j - 1)) // the line's (that's not drawn yet) price at the bar at 'j' bars back
+                    swept = switch latestPivot.Type
+                        1 => high[j] > barPrice
+                        -1 => low[j] < barPrice
+                    if swept
+                        broken := true // the equal pivots have been broken by price wick
+                        break
+                if not broken
+                    trendInducement = (latestPivot.Type == 1 and trend == -1) or (latestPivot.Type == -1 and trend == 1)
+                    labelText = switch trendInducement
+                        false => "$$$"
+                        true => "IDM"
+                    c_olor = switch trendInducement
+                        false => settings.LiquidityColor
+                        true => trend.Color(settings.BullishInducementColor, settings.BearishInducementColor)
+                    labelStyle = latestPivot.Type == -1 and trend == -1 ? label.style_label_up : label.style_label_down
+                    l_abel = label.new(latestPivot.BarIndex - ((latestPivot.BarIndex - equalPivot.BarIndex) / 2), latestPivot.Price + ((equalPivot.Price - latestPivot.Price) / 2), labelText, size = settings.FontSize, color = color(na), textcolor = c_olor, style = labelStyle)
+                    l_ine = line.new(latestPivot.BarIndex, latestPivot.Price, equalPivot.BarIndex, equalPivot.Price, color = c_olor, style = settings.LineStyle)
+                    if trendInducement
+                        switch latestPivot.Type
+                            1 =>
+                                stopLossesPrice = equalPivot.Price + (_atr * 0.1)
+                                inducements.unshift(EqualPivotInducement.new(stopLossesPrice, equalPivot, latestPivot, l_abel, l_ine))
+                            -1 =>
+                                l_abel.set_style(label.style_label_up)
+                                stopLossesPrice = equalPivot.Price - (_atr * 0.1)
+                                inducements.unshift(EqualPivotInducement.new(stopLossesPrice, equalPivot, latestPivot, l_abel, l_ine))
+GetEqualPivotsPivots(EqualPivotSettings settings) =>
+    PriceAction.Pivot pivotHigh = na
+    PriceAction.Pivot pivotLow = na
+    pivotHighPrice = ta.pivothigh(settings.PivotLeftLength, settings.PivotRightLength)
+    pivotLowPrice = ta.pivotlow(settings.PivotLeftLength, settings.PivotRightLength)
+    if not na(pivotHighPrice)
+        pivotHigh := PriceAction.Pivot.new(pivotHighPrice, Type = 1, Time = time[settings.PivotRightLength])
+    if not na(pivotLowPrice)
+        pivotLow := PriceAction.Pivot.new(pivotLowPrice, Type = -1, Time = time[settings.PivotRightLength])
+    [pivotHigh, pivotLow]
+SetEqualPivotsPivots(EqualPivots equalPivots, EqualPivotSettings settings, PriceAction.Pivot pivotHigh, PriceAction.Pivot pivotLow) =>
+    if not na(pivotHigh)
+        if equalPivots.Highs.size() >= settings.Lookback
+            equalPivots.Highs.pop()
+        equalPivots.Highs.unshift(pivotHigh)
+    if not na(pivotLow)
+        if equalPivots.Lows.size() >= settings.Lookback
+            equalPivots.Lows.pop()
+        equalPivots.Lows.unshift(pivotLow)
+
+type Liquidity
+    PriceAction.Pivot Pivot
+    bool Taken
+    bool Invalidated
+    line Limit
+    line Break
+    linefill Linefill
+    label Label
+type LiquidityGrabs
+    array<Liquidity> Highs
+    array<Liquidity> Lows
+type LiquidityGrabsSettings
+    int Lookback
+    int FontSize
+    int PivotLeftLength
+    int PivotRightLength
+    color Color
+    string LineStyle
+type LiquiditySweeps
+    array<Liquidity> Highs
+    array<Liquidity> Lows
+type LiquiditySweepsSettings
+    int Lookback
+    int FontSize
+    int PivotLeftLength
+    int PivotRightLength
+    color BullishColor
+    color BearishColor
+    string LineStyle
+
+type RetracementInducement
+    PriceAction.Pivot Pivot
+    line Line
+    label Label
+type RetracementInducements
+    array<RetracementInducement> Highs
+    array<RetracementInducement> Lows
+    array<PriceAction.Pivot> HighPivots
+    array<PriceAction.Pivot> LowPivots
+type RetracementInducementsSettings
+    int Lookback
+    int FontSize
+    int PivotLeftLength
+    int PivotRightLength
+    color BullishColor
+    color BearishColor
+    string LineStyle
+    bool KeepInvalidated
+
+method SetBarIndices(Liquidity sweepHigh, Liquidity sweepLow) =>
+    if not na(sweepHigh) and na(sweepHigh.Pivot.BarIndex)
+        sweepHigh.Pivot.SetBarIndex(sweepHigh.Pivot.Time)
+    if not na(sweepLow) and na(sweepLow.Pivot.BarIndex)
+        sweepLow.Pivot.SetBarIndex(sweepLow.Pivot.Time)
+method LiquidationGrabbed(PriceAction.Pivot pivot) =>
+    switch pivot.Type
+        -1 =>
+            if low[1] <= pivot.Price and close >= pivot.Price
+                if 1 > 0
+                    confirmed = true
+                    for i = 1 - 1 to 0
+                        if close[i] < pivot.Price
+                            confirmed := false
+                            break
+                    confirmed
+                else
+                    true
+        1 =>
+            if high[1] >= pivot.Price and close <= pivot.Price
+                if 1 > 0
+                    confirmed = true
+                    for i = 1 - 1 to 0
+                        if close[i] > pivot.Price
+                            confirmed := false
+                            break
+                    confirmed
+                else
+                    true
+method VisualizeLiquidityGrabs(array<Liquidity> grabs, LiquidityGrabsSettings settings) =>
+    for grab in grabs
+        if not grab.Taken and not grab.Invalidated
+            if grab.Pivot.LiquidationGrabbed()
+                grabBarIndex = bar_index - 1
+                grabPrice = switch grab.Pivot.Type
+                    -1 => low[1]
+                    1 => high[1]
+                grab.Limit := line.new(grab.Pivot.BarIndex, grab.Pivot.Price, grabBarIndex, grab.Pivot.Price, color = settings.Color, style = settings.LineStyle)
+                grab.Break := switch grab.Pivot.Type
+                    -1 => line.new(grab.Pivot.BarIndex, grabPrice, grabBarIndex, grabPrice, color = na)
+                    1 => line.new(grab.Pivot.BarIndex, grabPrice, grabBarIndex, grabPrice, color = na)
+                grab.Linefill := linefill.new(grab.Limit, grab.Break, color.new(settings.Color, 80))
+                grab.Label := switch grab.Pivot.Type
+                    -1 => label.new(grabBarIndex - ((grabBarIndex - grab.Pivot.BarIndex) / 2), grab.Pivot.Price, "$$$", size = settings.FontSize, color = color(na), textcolor = color.new(settings.Color, 30), style = label.style_label_up)
+                    1 => label.new(grabBarIndex - ((grabBarIndex - grab.Pivot.BarIndex) / 2), grab.Pivot.Price, "$$$", size = settings.FontSize, color = color(na), textcolor = color.new(settings.Color, 30))
+                grab.Taken := true
+            else
+                switch grab.Pivot.Type
+                    -1 =>
+                        if close < grab.Pivot.Price // closed below pivot, invalid liquidation grab
+                            grab.Invalidated := true
+                    1 =>
+                        if close > grab.Pivot.Price // closed above pivot, invalid liquidation grab
+                            grab.Invalidated := true
+LiquidityGrabs(LiquidityGrabs grabs, LiquidityGrabsSettings settings) =>
+    if barstate.isconfirmed // only if the bar is closed
+        grabs.Highs.VisualizeLiquidityGrabs(settings)
+        grabs.Lows.VisualizeLiquidityGrabs(settings)
+GetLiquidityGrabs(LiquidityGrabsSettings settings) =>
+    Liquidity grabHigh = na
+    Liquidity grabLow = na
+    pivotHighPrice = ta.pivothigh(settings.PivotLeftLength, settings.PivotRightLength)
+    pivotLowPrice = ta.pivotlow(settings.PivotLeftLength, settings.PivotRightLength)
+    if not na(pivotHighPrice)
+        grabHigh := Liquidity.new(PriceAction.Pivot.new(pivotHighPrice, Type = 1, Time = time[settings.PivotRightLength]))
+    if not na(pivotLowPrice)
+        grabLow := Liquidity.new(PriceAction.Pivot.new(pivotLowPrice, Type = -1, Time = time[settings.PivotRightLength]))
+    [grabHigh, grabLow]
+SetLiquidityGrabs(LiquidityGrabs grabs, LiquidityGrabsSettings settings, Liquidity grabHigh, Liquidity grabLow) =>
+    if not na(grabHigh)
+        if grabs.Highs.size() >= settings.Lookback
+            grabs.Highs.pop()
+        grabs.Highs.unshift(grabHigh)
+    if not na(grabLow)
+        if grabs.Lows.size() >= settings.Lookback
+            grabs.Lows.pop()
+        grabs.Lows.unshift(grabLow)
+
+method LiquidationSwept(PriceAction.Pivot pivot) =>
+    switch pivot.Type
+        -1 =>
+            if low[1] <= pivot.Price and close <= pivot.Price
+                true
+        1 =>
+            if high[1] >= pivot.Price and close >= pivot.Price
+                true
+method VisualizeLiquiditySweeps(array<Liquidity> sweeps, PriceAction.Pivot previousStructureBreakPivot, LiquiditySweepsSettings settings) =>
+    for sweep in sweeps
+        if not sweep.Taken and not sweep.Invalidated
+            if sweep.Pivot.LiquidationSwept()
+                if not na(previousStructureBreakPivot) and sweep.Pivot.BarIndex == previousStructureBreakPivot.BarIndex
+                    sweep.Invalidated := true // invalidated by a structure pivot that caused a BOS
+                if sweep.Invalidated
+                    continue
+                sweepBarIndex = bar_index - 1
+                [sweepPrice, c_olor] = switch sweep.Pivot.Type
+                    -1 => [low[1], settings.BearishColor]
+                    1 => [high[1], settings.BullishColor]
+                sweep.Limit := line.new(sweep.Pivot.BarIndex, sweep.Pivot.Price, sweepBarIndex, sweep.Pivot.Price, color = c_olor, style = settings.LineStyle)
+                sweep.Label := switch sweep.Pivot.Type
+                    -1 => label.new(sweepBarIndex - ((sweepBarIndex - sweep.Pivo

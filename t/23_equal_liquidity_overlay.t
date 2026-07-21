@@ -76,12 +76,12 @@ my $canvas = TestEQCanvas->new;
 $overlay->render($canvas, 0, 19, TestEQScale->new, 19);
 my $lines = $canvas->tagged('lq_EQH', 'createLine');
 is(scalar @$lines, 1, 'EQH conserva un cupo propio aunque existan más de ocho BSL recientes');
-is($lines->[0]{args}[1], $lines->[0]{args}[3],
-    'el conector EQH es horizontal al precio medio del par');
+isnt($lines->[0]{args}[1], $lines->[0]{args}[3],
+    'el conector EQH conserva los dos precios reales dentro de la tolerancia');
 my $low_lines = $canvas->tagged('lq_EQL', 'createLine');
 is(scalar @$low_lines, 1, 'EQL se dibuja aunque la línea SSL base esté apagada');
-is($low_lines->[0]{args}[1], $low_lines->[0]{args}[3],
-    'el conector EQL también es horizontal');
+isnt($low_lines->[0]{args}[1], $low_lines->[0]{args}[3],
+    'el conector EQL conserva su ligera inclinación entre pivotes reales');
 
 $visibility->{show_eqh}=0;
 $canvas->{calls}=[];

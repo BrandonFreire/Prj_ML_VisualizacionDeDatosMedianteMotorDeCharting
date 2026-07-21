@@ -388,7 +388,7 @@ sub _full_render {
 
     # --- Overlays SMC y Liquidez (encima de las velas, debajo del precio final) ---
     my $cur_bar = $self->{replay_mode} && defined $self->{replay_cursor}
-                  ? $self->{replay_cursor} : $d_end;
+                  ? $self->{replay_cursor} : $self->{market}->last_index();
     for my $ov ( @{ $self->{overlays} } ) {
         $ov->render( $pc, $d_start, $d_end, $pscale, $cur_bar );
     }
@@ -483,7 +483,7 @@ sub _incremental_pan {
 
     # Redraw overlays
     my $cur_bar2 = $self->{replay_mode} && defined $self->{replay_cursor}
-                   ? $self->{replay_cursor} : $d_end;
+                   ? $self->{replay_cursor} : $self->{market}->last_index();
     for my $ov ( @{ $self->{overlays} } ) {
         $ov->render( $pc, $d_start, $d_end, $pscale, $cur_bar2 );
     }

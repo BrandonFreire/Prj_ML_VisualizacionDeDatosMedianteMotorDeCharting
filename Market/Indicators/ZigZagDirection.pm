@@ -143,12 +143,14 @@ sub _confirmed_pivots_from_candles {
 
         my $confirmed_at = $i + $depth;
         push @pivots, {
+            id           => join('_', 'zz', 'external', 'high', $i, $confirmed_at),
             index        => $i,
             price        => $high,
             type         => 'high',
             confirmed_at => $confirmed_at,
         } if $is_high;
         push @pivots, {
+            id           => join('_', 'zz', 'external', 'low', $i, $confirmed_at),
             index        => $i,
             price        => $low,
             type         => 'low',
@@ -232,12 +234,14 @@ sub _confirmed_pivots_from_resolution_candles {
         my $confirm_bar = $bars->[ $i + $depth ];
         my $confirmed_at = $confirm_bar->{source_end};
         push @pivots, {
+            id           => join('_', 'zz', 'internal', 'high', $bars->[$i]{high_index}, $confirmed_at),
             index        => $bars->[$i]{high_index},
             price        => $high,
             type         => 'high',
             confirmed_at => $confirmed_at,
         } if $is_high;
         push @pivots, {
+            id           => join('_', 'zz', 'internal', 'low', $bars->[$i]{low_index}, $confirmed_at),
             index        => $bars->[$i]{low_index},
             price        => $low,
             type         => 'low',
@@ -344,32 +348,19 @@ sub _append_developing_pivot {
     my $to   = $current_bar;
     return \@zz if $from > $to;
 
-    my $high = _range_extreme($candles, $from, $to, 'high');
-    my $low  = _range_extreme($candles, $from, $to, 'low');
-    return \@zz unless $high && $low;
-
-    if ( $last->{type} eq 'high' ) {
-        if ( defined $high->{price} && defined $last->{price} && $high->{price} >= $last->{price} ) {
-            $zz[-1] = { %$high, type => 'high', confirmed_at => $current_bar, provisional => 1 };
-            my $next_low = _range_extreme($candles, $high->{index} + 1, $to, 'low');
-            push @zz, { %$next_low, type => 'low', confirmed_at => $current_bar, provisional => 1 }
-                if $next_low && $next_low->{index} > $high->{index};
-            return \@zz;
-        }
-        push @zz, { %$low, type => 'low', confirmed_at => $current_bar, provisional => 1 }
-            if $low->{index} > $last->{index};
-        return \@zz;
+    # Un pivote confirmado es inmutable. El extremo en desarrollo siempre es
+    # el extremo opuesto siguiente; puede desplazarse mientras sea provisional.
+    my $wanted = $last->{type} eq 'high' ? 'low' : 'high';
+    my $developing = _range_extreme($candles, $from, $to, $wanted);
+    if ($developing && $developing->{index} > $last->{index}) {
+        push @zz, {
+            %$developing,
+            id           => join('_', 'zz', 'provisional', $wanted, $last->{id} // $last->{index}),
+            type         => $wanted,
+            confirmed_at => $current_bar,
+            provisional  => 1,
+        };
     }
-
-    if ( defined $low->{price} && defined $last->{price} && $low->{price} <= $last->{price} ) {
-        $zz[-1] = { %$low, type => 'low', confirmed_at => $current_bar, provisional => 1 };
-        my $next_high = _range_extreme($candles, $low->{index} + 1, $to, 'high');
-        push @zz, { %$next_high, type => 'high', confirmed_at => $current_bar, provisional => 1 }
-            if $next_high && $next_high->{index} > $low->{index};
-        return \@zz;
-    }
-    push @zz, { %$high, type => 'high', confirmed_at => $current_bar, provisional => 1 }
-        if $high->{index} > $last->{index};
     return \@zz;
 }
 
@@ -411,6 +402,7 @@ sub _segments_from_pivots {
         next if !defined $from->{price} || !defined $to->{price};
 
         push @segments, {
+            id           => join('_', 'zzseg', $scope, $from->{id} // $from->{index}, $to->{id} // $to->{index}),
             from_index   => $from->{index},
             from_price   => $from->{price},
             from_type    => $from->{type},

@@ -1,0 +1,142 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// Mxwll Capital
+//@version=5
+indicator("Mxwll Suite", overlay = true, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500, max_bars_back = 500)
+
+bullC       = input.color(defval = #14D990, title = "Bull Color", group = "Smart Money Concepts", inline = "7")
+bearC       = input.color(defval = #F24968, title = "Bear Color", group = "Smart Money Concepts", inline = "7")
+showInt     = input.bool(defval = true, title = "Show Internals", group = "Smart Money Concepts")
+intSens     = input.int(3, "Internals Sensitivity", options =  [3 , 5 , 8 ], group = "Smart Money Concepts", inline = "20")
+intStru     = input.string(defval = "All", title = "Internal Structure", options = ["All", "BoS", "CHoCH"], inline = "30", group = "Smart Money Concepts")
+showExt     = input.bool(defval = true, title = "Show Externals" ,group = "Smart Money Concepts")
+extSens     = input.int(25, "Externals Sensitivity", options = [10, 25, 50],group = "Smart Money Concepts", inline = "21")
+extStru     = input.string(defval = "All", title = "External Structure", options = ["All", "BoS", "CHoCH"], inline = "31", group = "Smart Money Concepts")
+showOB      = input.bool(defval = true, title = "Show Order Blocks" ,group = "Swing Blocks")
+showLast    = input.int(defval = 10, title = "Swing Order Blocks", minval = 0, group = "Swing Blocks")
+showHHLH    = input.bool(defval = true, title = "Show HH/LH", group = "Swing Blocks")
+showHLLL    = input.bool(defval = true, title = "Show LH/LL", group = "Swing Blocks")
+showAOE     = input.bool(defval = true, title = "Show Area of Interest", group = "Swing Blocks")
+show1D      = input.bool(defval = true, title = "Show Previous Day High", group = "High/Low")
+show1DLab   = input.bool(defval = true, title = "Show 1 Day Labels", group = "High/Low")
+show4H      = input.bool(defval = true, title = "Show 4 Hour High", group = "High/Low")
+show4hLab   = input.bool(defval = true, title = "Show 4 Hour Labels", group = "High/Low")
+showFVG     = input.bool(defval = true, title = "Show Fair Value Gaps", group = "FVG")
+contract    = input.bool(defval = false, title = "Contract Violated FVG", group = "FVG")
+closeOnly   = input.bool(defval = false, title = "Show Closest Up/Down FVG Only", group = "FVG")
+fvgcol      = input.color(defval = #F2B807, title = "FVG Color", group = "FVG")
+fvgtra      = input.int(defval = 80, minval = 0, maxval = 100, title = "FVG Transparency", group = "FVG")
+
+showFibs    = input.bool(defval = true, title = "Show Auto Fibs", group = "Auto Fibs")
+// extSensFibs = input.int(25, "Fibs Sensitivity", options = [10, 25, 50], group = "Auto Fibs", inline = "22")
+show236     = input.bool(defval = true,  title = "", inline = "1", group = "Auto Fibs")
+show382     = input.bool(defval = true,  title = "", inline = "2", group = "Auto Fibs")
+show5       = input.bool(defval = true,    title = "", inline = "3", group = "Auto Fibs")
+show618     = input.bool(defval = true,  title = "", inline = "4", group = "Auto Fibs")
+show786     = input.bool(defval = true,  title = "", group = "Auto Fibs", inline = "5")
+fib1        = input.float(defval = .236, title = "", minval = 0, step = 0.01, inline = "1", group = "Auto Fibs")
+fib2        = input.float(defval = .382, title = "", minval = 0, step = 0.01, inline = "2", group = "Auto Fibs")
+fib3        = input.float(defval = .5,   title = "", minval = 0, step = 0.01, inline = "3", group = "Auto Fibs")
+fib4        = input.float(defval = .618, title = "", minval = 0, step = 0.01, inline = "4", group = "Auto Fibs")
+fib5        = input.float(defval = .786, title = "", minval = 0, step = 0.01, group = "Auto Fibs", inline = "5")
+fib1col     = input.color(title = "", defval = color.gray, inline = "1"  , group = "Auto Fibs")
+fib2col     = input.color(title = "", defval = color.lime, inline = "2"  , group = "Auto Fibs")
+fib3col     = input.color(title = "", defval = color.yellow, inline = "3", group = "Auto Fibs")
+fib4col     = input.color(title = "", defval = color.orange, inline = "4", group = "Auto Fibs")
+fib5col     = input.color(title = "", defval = color.red   , group = "Auto Fibs", inline = "5")
+
+var bigData = map.new<string, float>()
+
+if bigData.size() == 0
+
+    bigData.put("moving", 0)
+    bigData.put("upaxis", 0.0) 
+    bigData.put("upaxis2", 0)
+    bigData.put("dnaxis", 0.0) 
+    bigData.put("dnaxis2", 0)
+    bigData.put("upside", 1)
+    bigData.put("downside", 1)
+
+[pdHigh, pdLow, dayHigh, dayLow, pdBar, dayBar] = request.security(syminfo.tickerid, "1D", [high[1], low[1], high, low, time[1], time])
+
+var highArr = array.new_float(), var lowArr  = array.new_float()
+var timeArr = array.new_int  (), var volArr  = array.new_float()
+var closeArr = array.new_float(), var openArr = array.new_float()
+
+highArr.unshift(high), lowArr.unshift(low)
+timeArr.unshift(time), volArr.unshift(volume)
+closeArr.unshift(close), openArr.unshift(open)
+
+type rollingTF 
+
+    float highTF                  = 0
+    float lowTF                   = 1e8
+    int   highTFt                 = 0
+    int   lowTFt                  = 0
+    float volTF                   = 0
+    map   <string, line >         rTFdraw
+    map   <string, label>         rTFlabel
+
+method tfDraw(int tfDiff, bool showRollingLab, string tf, bool showLevels) => 
+
+
+    TFhrdata = rollingTF.new(), var volRolling = array.new<float>()
+
+    if highArr.size() > tfDiff
+
+        for i = 0 to tfDiff
+
+            if showLevels and barstate.islast
+
+                getHigh = highArr.get(i), getLow = lowArr.get(i), 
+                             getTime = timeArr.get(i)
+
+                TFhrdata.highTF := math.max(TFhrdata.highTF, getHigh)
+                TFhrdata.lowTF  := math.min(TFhrdata.lowTF , getLow )
+
+                if TFhrdata.highTF == getHigh 
+
+                    TFhrdata.highTFt := timeArr.get(i)
+
+                if TFhrdata.lowTF == getLow
+
+                    TFhrdata.lowTFt  := timeArr.get(i)
+
+            TFhrdata.volTF += volArr.get(i)
+
+        volRolling.push(TFhrdata.volTF)
+
+        var lineDraw = rollingTF.new(rTFdraw = map.new<string, line>(), rTFlabel = map.new<string, label>())
+
+        if showLevels
+
+            switch lineDraw.rTFdraw.size() == 0
+
+                true =>  lineDraw.rTFdraw.put("High", line.new(TFhrdata.highTFt, TFhrdata.highTF, time, TFhrdata.highTF, 
+                                                 xloc = xloc.bar_time, color = color.aqua)),
+                         lineDraw.rTFdraw.put("Low" , line.new(TFhrdata.lowTFt , TFhrdata.lowTF , time, TFhrdata.lowTF , 
+                                                 xloc = xloc.bar_time, color = color.aqua))  
+
+                =>       lineDraw.rTFdraw.get("High").set_xy1(TFhrdata.highTFt, TFhrdata.highTF),
+                         lineDraw.rTFdraw.get("High").set_xy2(time, TFhrdata.highTF),
+
+                         lineDraw.rTFdraw.get("Low").set_xy1(TFhrdata.lowTFt, TFhrdata.lowTF),
+                         lineDraw.rTFdraw.get("Low").set_xy2(time, TFhrdata.lowTF)
+
+            if showRollingLab 
+
+                switch lineDraw.rTFlabel.size() == 0
+
+                    true =>  lineDraw.rTFlabel.put("High", label.new(time, TFhrdata.highTF, xloc = xloc.bar_time, 
+                                                         textcolor = color.aqua, 
+                                                         text      = tf + "H", 
+                                                         size      = size.tiny, 
+                                                         style     = label.style_label_left, 
+                                                         color     = #00000000
+                                                         )),
+                             lineDraw.rTFlabel.put("Low" , label.new(time, TFhrdata.lowTF , xloc = xloc.bar_time, 
+                                                         textcolor = color.aqua, 
+                                                         text      = tf + "L", 
+                                                         size      = size.tiny, 
+                                                         style     = label.style_label_left, 
+                                                         color     = #00000000
+                                                         ))

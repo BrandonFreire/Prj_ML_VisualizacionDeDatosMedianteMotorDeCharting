@@ -11,7 +11,7 @@ use Market::Indicators::SMC_Structures;
 sub smc_market {
     my $last_index = shift;
     my @rows = (
-        [101,  99, 100, 100], [102, 100, 101, 101], [103, 101, 102, 104],
+        [101,  99, 100, 100], [102, 100, 101, 101], [104, 101, 103, 101],
         [110, 103, 104, 104], [106, 102, 103, 103], [105, 100, 101, 101],
         [107, 101, 106, 106], [108, 103, 107, 107], [112, 104, 111, 111],
         [109, 104, 106, 106], [108, 103, 105, 105], [107, 102, 104, 104],
@@ -59,9 +59,9 @@ my ($ob) = grep {
     ($_->{direction} // '') eq 'bull' && ($_->{triggered_by} // -1) == 8
 } @{ $smc->get_ob_zones() };
 ok($ob, 'un BOS alcista crea su Order Block asociado');
-is($ob->{index}, 2, 'Order Block usa la última vela bajista previa al swing');
-is($ob->{top}, 104, 'Order Block alcista usa la apertura de la vela opuesta');
-is($ob->{bottom}, 101, 'Order Block alcista usa el mínimo de la vela opuesta');
+is($ob->{index}, 5, 'Order Block usa el parsedLow extremo entre pivote y ruptura');
+is($ob->{top}, 105, 'Order Block conserva el high completo de la vela fuente');
+is($ob->{bottom}, 100, 'Order Block conserva el low completo de la vela fuente');
 ok($ob->{relevant}, 'el Order Block asociado a un desplazamiento fuerte queda marcado como relevante');
 cmp_ok($ob->{relevance_score}, '>', 0, 'el Order Block expone una puntuación auditable');
 
@@ -75,8 +75,8 @@ is($fvg->{mitigated_at}, 4, 'FVG conserva la vela exacta de mitigación');
 is($fvg->{fill_ratio}, 1, 'FVG mitigado registra fill completo');
 
 is($ob->{status}, 'mitigated', 'Order Block registra su mitigación en el motor');
-is($ob->{first_touch_at}, 10, 'Order Block registra la primera penetración real, no un roce del borde');
-is($ob->{end_index}, 11, 'Order Block sólo se mitiga después de penetrar al menos el 50%');
+is($ob->{first_touch_at}, 9, 'Order Block registra la primera penetración real');
+is($ob->{end_index}, 13, 'Order Block se mitiga al llenar por completo el rango High/Low');
 
 my $wick_only = [{
     direction => 'bull', top => 10, bottom => 8, triggered_by => -1,
@@ -93,8 +93,8 @@ my $closed_through = [{
 Market::Indicators::SMC_Structures::_annotate_order_block_lifecycle(
     [{ high => 13, low => 9, close => 13 }], $closed_through,
 );
-is($closed_through->[0]{status}, 'invalidated',
-    'un cierre más allá del límite distal invalida el Order Block');
+is($closed_through->[0]{status}, 'mitigated',
+    'la referencia High/Low usa un único estado final de mitigación');
 
 my $prefix = smc_for(7);
 is_deeply($prefix->get_bos_events(), [], 'antes de la vela 8 no existe el BOS futuro');

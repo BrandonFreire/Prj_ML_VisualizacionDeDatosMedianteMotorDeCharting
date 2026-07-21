@@ -364,6 +364,8 @@ my %overlay_visibility = (
     show_internal_structure => 1,
     show_external_structure => 1,
     show_ob            => 1,
+    show_internal_ob   => 1,
+    show_external_ob   => 1,
     show_trendlines    => 0,
     show_fvg           => 1,
     show_market_regime => 0,
@@ -507,6 +509,8 @@ my %overlay_parent_for = (
     show_internal_structure => 'smc_enabled',
     show_external_structure => 'smc_enabled',
     show_ob            => 'smc_enabled',
+    show_internal_ob   => 'smc_enabled',
+    show_external_ob   => 'smc_enabled',
     show_trendlines    => 'smc_enabled',
     show_fvg           => 'smc_enabled',
     show_market_regime => 'smc_enabled',
@@ -732,6 +736,8 @@ $build_overlay_detail = sub {
         $add_overlay_toggle->( 'Internal',        'show_internal_structure', 0 );
         $add_overlay_toggle->( 'External',        'show_external_structure', 0 );
         $add_overlay_toggle->( 'Order Blocks',    'show_ob', 0 );
+        $add_overlay_toggle->( 'OB internos',     'show_internal_ob', 0 );
+        $add_overlay_toggle->( 'OB externos',     'show_external_ob', 0 );
         $add_overlay_toggle->( 'Major High/Low',  'show_major_levels', 0 );
         $add_overlay_toggle->( 'Premium/Discount','show_premium_discount', 0 );
         $add_overlay_toggle->( 'FVG (activos)',   'show_fvg', 0 );

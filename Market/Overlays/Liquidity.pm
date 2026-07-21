@@ -105,8 +105,7 @@ sub _limit_equal_levels_for_view {
             && $start <= $current_bar && $pair <= $current_bar
             && (($side eq 'sh' && $_->{is_eqh}) || ($side eq 'sl' && $_->{is_eql}))
             && $self->_show_level_scope($_, $current_bar)
-            && (($start > $pair ? $start : $pair) >= $d_start)
-            && (($start < $pair ? $start : $pair) <= $d_end)
+            && (!defined($_->{swept_at}) || $_->{swept_at} > $current_bar)
     } @{ $levels // [] };
 
     @pairs = sort {
@@ -118,7 +117,13 @@ sub _limit_equal_levels_for_view {
     } @pairs;
     my $limit = int($self->{max_equal_levels} // 6);
     @pairs = @pairs[0 .. $limit - 1] if $limit > 0 && @pairs > $limit;
-    return \@pairs;
+    my @visible = grep {
+        my $start = $_->{index};
+        my $pair  = $_->{eq_pair};
+        (($start > $pair ? $start : $pair) >= $d_start)
+            && (($start < $pair ? $start : $pair) <= $d_end)
+    } @pairs;
+    return \@visible;
 }
 
 sub _limit_levels_for_view {
@@ -322,9 +327,9 @@ sub _render_eq_connector {
     return if $x1 > $scale->{x_width} || $x2 < 0 || $x1 > $x2;
 
     my $pair_price = defined $lvl->{eq_pair_price} ? $lvl->{eq_pair_price} : $lvl->{price};
-    my $eq_price = defined($lvl->{eq_price})
-        ? $lvl->{eq_price} : ($pair_price + $lvl->{price}) / 2;
-    my ($p1, $p2) = ($eq_price, $eq_price);
+    my $current_price = $lvl->{price};
+    my $p1 = _interpolate_eq_price($from, $pair_price, $to, $current_price, $draw_start);
+    my $p2 = _interpolate_eq_price($from, $pair_price, $to, $current_price, $draw_end);
     my $y1 = $scale->value_to_y($p1);
     my $y2 = $scale->value_to_y($p2);
     return if defined $scale->{y_height}
