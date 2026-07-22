@@ -46,6 +46,14 @@ sub render {
         );
     }
 
+    # Obtener pivotes externos (necesarios para regresion y fibonacci aunque ZZ no se muestre)
+    my $ext_pivots;
+    if ( $ind->can('get_external_pivots') ) {
+        $ext_pivots = $ind->can('get_external_pivots_until')
+            ? $ind->get_external_pivots_until($current_bar)
+            : $ind->get_external_pivots();
+    }
+
     if ( $self->_visible('show_zz_external', 1) && $ind->can('get_external_segments') ) {
         my $segments = $ind->can('get_external_segments_until')
             ? $ind->get_external_segments_until($current_bar)
@@ -55,15 +63,89 @@ sub render {
             $segments // [],
             $COLOR_EXTERNAL, 3, 'zz_external'
         );
-        if ( $self->_visible('show_zz_hldv', 1) && $ind->can('get_external_pivots') ) {
-            my $pivots = $ind->can('get_external_pivots_until')
-                ? $ind->get_external_pivots_until($current_bar)
-                : $ind->get_external_pivots();
+        if ( $self->_visible('show_zz_hldv', 1) && $ext_pivots ) {
             $self->_render_hldv_labels(
                 $canvas, $d_start, $d_end, $scale, $current_bar,
-                $pivots // []
+                $ext_pivots // []
             );
         }
+    }
+
+    # Canal de regresion automatico: funciona aunque ZZ externo no se muestre
+    if ( $self->_visible('show_regression_auto', 0) && $ext_pivots ) {
+        my $candles = $ind->can('get_candles') ? ($ind->get_candles() // []) : [];
+        $self->_render_auto_regression(
+            $canvas, $d_start, $d_end, $scale, $current_bar,
+            $ext_pivots, $candles
+        );
+    }
+
+    # Fibonacci automatico: requiere ZZ externo activo para que sea coherente
+    if ( $self->_visible('show_zz_fibonacci', 0) && $ext_pivots && @$ext_pivots ) {
+        $self->_render_fibonacci(
+            $canvas, $d_start, $d_end, $scale, $current_bar,
+            $ext_pivots
+        );
+    }
+}
+
+sub _render_auto_regression {
+    my ($self, $canvas, $d_start, $d_end, $scale, $current_bar, $pivots, $candles) = @_;
+    return unless $pivots && @$pivots >= 2;
+
+    my @pts = grep {
+        defined $_->{index} && defined $_->{price} && $_->{index} <= $current_bar
+    } @$pivots;
+    return unless @pts >= 2;
+
+    my $n = scalar @pts;
+    my ($sum_x, $sum_y, $sum_xy, $sum_x2) = (0, 0, 0, 0);
+    for my $p (@pts) {
+        $sum_x  += $p->{index};
+        $sum_y  += $p->{price};
+        $sum_xy += $p->{index} * $p->{price};
+        $sum_x2 += $p->{index} * $p->{index};
+    }
+    my $denom = $n * $sum_x2 - $sum_x * $sum_x;
+    return if $denom == 0;
+    my $slope     = ($n * $sum_xy - $sum_x * $sum_y) / $denom;
+    my $intercept = ($sum_y - $slope * $sum_x) / $n;
+
+    my $sum_res2 = 0;
+    for my $p (@pts) {
+        my $res = $p->{price} - ($slope * $p->{index} + $intercept);
+        $sum_res2 += $res * $res;
+    }
+    my $std_dev = $n > 1 ? sqrt($sum_res2 / $n) : 0;
+
+    my $x_from = $pts[0]{index};
+    my $x_to   = $current_bar;
+    return if $x_from > $d_end || $x_to < $d_start;
+
+    my $draw_from = $x_from < $d_start ? $d_start : $x_from;
+    my $draw_to   = $x_to   > $d_end   ? $d_end   : $x_to;
+    return if $draw_from > $draw_to;
+
+    my $px1 = $scale->index_to_center_x($draw_from);
+    my $px2 = $scale->index_to_center_x($draw_to);
+    return if $px1 > $scale->{x_width} || $px2 < 0;
+
+    my $reg = sub { $slope * $_[0] + $intercept };
+    for my $band (
+        [ $std_dev,  '#26a69a', 1, [4, 3] ],
+        [ 0,         $COLOR_EXTERNAL, 2, []    ],
+        [ -$std_dev, '#ef5350', 1, [4, 3] ],
+    ) {
+        my ($offset, $color, $width, $dash) = @$band;
+        my $y1 = $scale->value_to_y($reg->($draw_from) + $offset);
+        my $y2 = $scale->value_to_y($reg->($draw_to)   + $offset);
+        my @opts = (
+            -fill  => $color,
+            -width => $width,
+            -tags  => ['zz_overlay', 'zz_regression'],
+        );
+        push @opts, (-dash => $dash) if @$dash;
+        $canvas->createLine($px1, $y1, $px2, $y2, @opts);
     }
 }
 
@@ -141,6 +223,105 @@ sub _render_hldv_labels {
             -font   => ['Helvetica', 8, 'bold'],
             -anchor => 'center',
             -tags   => ['zz_overlay', 'zz_hldv', lc($label)],
+        );
+    }
+}
+
+sub _render_fibonacci {
+    my ($self, $canvas, $d_start, $d_end, $scale, $current_bar, $pivots) = @_;
+
+    # Toma el ultimo swing grande: busca el ultimo high y ultimo low confirmados
+    my ($last_high, $last_low);
+    for my $p (reverse @$pivots) {
+        next if ($p->{confirmed_at} // $p->{index}) > $current_bar;
+        next if $p->{index} > $current_bar;
+        if ( !defined $last_high && ($p->{type} // '') eq 'high' ) {
+            $last_high = $p;
+        }
+        if ( !defined $last_low && ($p->{type} // '') eq 'low' ) {
+            $last_low = $p;
+        }
+        last if defined $last_high && defined $last_low;
+    }
+    return unless defined $last_high && defined $last_low;
+
+    # El swing es del pivote mas antiguo al mas reciente
+    my ($swing_start, $swing_end) =
+        $last_high->{index} < $last_low->{index}
+        ? ($last_high, $last_low)
+        : ($last_low,  $last_high);
+
+    my $price_high = $last_high->{price};
+    my $price_low  = $last_low->{price};
+    my $range      = $price_high - $price_low;
+    return if $range == 0;
+
+    # Niveles Fibonacci (retroceso: 0 = extremo inicial, 1 = extremo opuesto)
+    my @levels = (
+        [ 0,     '#787b86', '0' ],
+        [ 0.236, '#f7c948', '0.236' ],
+        [ 0.382, '#ef5350', '0.382' ],
+        [ 0.5,   '#ffffff', '0.5' ],
+        [ 0.618, '#26a69a', '0.618' ],
+        [ 0.786, '#ab47bc', '0.786' ],
+        [ 1,     '#787b86', '1' ],
+    );
+
+    # Precio actual (ultima vela visible)
+    my $candles = $self->{indicator}->can('get_candles')
+                ? ($self->{indicator}->get_candles() // [])
+                : [];
+    my $cur_price;
+    if ( @$candles && $current_bar >= 0 && $current_bar < scalar @$candles ) {
+        my $c = $candles->[$current_bar];
+        $cur_price = ref($c) eq 'HASH' ? $c->{close} : (ref($c) eq 'ARRAY' ? $c->[4] : undef);
+    }
+
+    my $x_from = $scale->index_to_center_x( $swing_start->{index} < $d_start ? $d_start : $swing_start->{index} );
+    my $x_to   = $scale->index_to_center_x( $d_end );
+
+    for my $lv (@levels) {
+        my ($ratio, $color, $label_txt) = @$lv;
+        # Si swing sube (high > low y high es el final), retroceso desde high hacia low
+        # Si swing baja (low > high y low es el final), retroceso desde low hacia high
+        my $price;
+        if ( $last_high->{index} > $last_low->{index} ) {
+            # Swing bajista (high primero, low despues) => retroceso sube desde low
+            $price = $price_low + $range * (1 - $ratio);
+        } else {
+            # Swing alcista (low primero, high despues) => retroceso baja desde high
+            $price = $price_high - $range * $ratio;
+        }
+
+        my $y = $scale->value_to_y($price);
+        $canvas->createLine(
+            $x_from, $y, $x_to, $y,
+            -fill  => $color,
+            -width => 1,
+            -dash  => [4, 3],
+            -tags  => ['zz_overlay', 'zz_fibonacci'],
+        );
+
+        # Etiqueta con nivel y precio
+        my $price_str = sprintf("%.5g", $price);
+        my $lbl = "$label_txt  $price_str";
+
+        # Marca el nivel donde esta el precio actual
+        if ( defined $cur_price ) {
+            my $band = $range * 0.005;
+            if ( abs($cur_price - $price) <= $band ) {
+                $lbl = ">> $lbl <<";
+                $color = '#ffffff';
+            }
+        }
+
+        $canvas->createText(
+            $x_to - 4, $y - 7,
+            -text   => $lbl,
+            -fill   => $color,
+            -font   => ['Helvetica', 7],
+            -anchor => 'e',
+            -tags   => ['zz_overlay', 'zz_fibonacci'],
         );
     }
 }

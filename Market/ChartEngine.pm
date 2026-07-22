@@ -1915,7 +1915,7 @@ sub step_forward {
     my $real_last = $self->{market}->last_index();
     return if $self->{replay_cursor} >= $real_last;
     $self->{replay_cursor}++;
-    $self->_anchor_cursor_to_right_edge();
+    $self->_ensure_cursor_visible();
     $self->{_render_state} = undef;
     $self->request_render();
 }
@@ -1925,7 +1925,7 @@ sub step_backward {
     return unless $self->{replay_mode};
     return if $self->{replay_cursor} <= 0;
     $self->{replay_cursor}--;
-    $self->_anchor_cursor_to_right_edge();
+    $self->_ensure_cursor_visible();
     $self->{_render_state} = undef;
     $self->request_render();
 }
@@ -1975,7 +1975,7 @@ sub _tick_replay {
     }
 
     $self->{replay_cursor}++;
-    $self->_anchor_cursor_to_right_edge();
+    $self->_ensure_cursor_visible();
     $self->{_render_state} = undef;
     $self->request_render();
 
@@ -2009,6 +2009,41 @@ sub _anchor_cursor_to_right_edge {
     $self->{offset}        = $new_off;
     $self->{_offset_exact} = $new_off * 1.0;
     $self->{_x_offset}     = 0.0;
+}
+
+# Solo ajusta el offset si el cursor sale del viewport visible.
+# Cuando el cursor avanza dentro del viewport, el grafico queda quieto.
+# Cuando llega al borde derecho, desplaza una barra a la vez.
+sub _ensure_cursor_visible {
+    my ($self) = @_;
+    my $cursor    = $self->{replay_cursor};
+    my $real_last = $self->{market}->last_index();
+    return unless defined $cursor;
+    $cursor = 0          if $cursor < 0;
+    $cursor = $real_last if $cursor > $real_last;
+    $self->{replay_cursor} = $cursor;
+
+    my $n       = $self->{visible_bars} || 100;
+    my $v_end   = $real_last - $self->{offset};
+    my $v_start = $v_end - $n + 1;
+
+    if ( $cursor > $v_end ) {
+        # Cursor salio por la derecha: scroll minimo, mantiene espacio derecho
+        my $right_space   = $self->_right_space_bars();
+        my $new_off       = $self->_offset_for_index_with_right_space($cursor);
+        $self->{offset}        = $new_off;
+        $self->{_offset_exact} = $new_off * 1.0;
+        $self->{_x_offset}     = 0.0;
+    }
+    elsif ( $cursor < $v_start ) {
+        # Cursor salio por la izquierda: scroll minimo para que quede visible
+        my $new_v_end = $cursor + $n - 1;
+        my $new_off   = $real_last - $new_v_end;
+        $self->{offset}        = $new_off;
+        $self->{_offset_exact} = $new_off * 1.0;
+        $self->{_x_offset}     = 0.0;
+    }
+    # cursor dentro del viewport => no mover nada
 }
 
 sub _vertical_zoom {

@@ -26,7 +26,7 @@ use warnings;
 
 sub new {
     my ($class, %args) = @_;
-    my $eq_tolerance_atr = $args{eq_tolerance_atr} // 0.10;
+    my $eq_tolerance_atr = $args{eq_tolerance_atr} // 0.05;
     die 'Liquidity::new: eq_tolerance_atr debe estar entre 0 y 1'
         unless defined($eq_tolerance_atr) && !ref($eq_tolerance_atr)
             && $eq_tolerance_atr =~ /^(?:\d+(?:\.\d*)?|\.\d+)$/
@@ -300,7 +300,7 @@ sub _make_level {
 sub _mark_equal_levels {
     my ($levels, $atr, $candles, $kind, $tolerance_factor) = @_;
     return unless $levels && @$levels > 1;
-    $tolerance_factor //= 0.10;
+    $tolerance_factor //= 0.05;
     my $flag = $kind eq 'high' ? 'is_eqh' : 'is_eql';
     my $prefix = $kind eq 'high' ? 'EQH' : 'EQL';
 
@@ -315,6 +315,7 @@ sub _mark_equal_levels {
             my $prior = $levels->[$a];
             my $prior_idx = $prior->{index};
             next unless defined $prior_idx && $prior_idx < $new_idx;
+            last if ($new_idx - $prior_idx) > 100;
 
             my @atr_values = grep { defined($_) && $_ > 0 }
                 ($atr->[$prior_idx], $atr->[$new_idx]);

@@ -364,59 +364,61 @@ my %overlay_visibility = (
     show_ll            => 0,
     show_sh            => 0,
     show_sl            => 0,
-    show_choch         => 1,
-    show_bos           => 1,
+    show_choch         => 0,
+    show_bos           => 0,
     show_internal_structure => 1,
     show_external_structure => 1,
-    show_ob            => 1,
-    show_internal_ob   => 1,
-    show_external_ob   => 1,
+    show_ob            => 0,
+    show_internal_ob   => 0,
+    show_external_ob   => 0,
     show_trendlines    => 0,
-    show_fvg           => 1,
+    show_fvg           => 0,
     show_market_regime => 0,
-    show_major_levels  => 1,
-    show_premium_discount => 1,
+    show_major_levels  => 0,
+    show_premium_discount => 0,
     show_fibonacci_auto => 0,
-    show_manual_fibonacci => 1,
+    show_manual_fibonacci => 0,
 
     liquidity_enabled  => 1,
     show_bsl           => 1,
     show_ssl           => 1,
-    show_eqh           => 1,
-    show_eql           => 1,
-    show_grab          => 1,
-    show_sweep         => 1,
-    show_run           => 1,
+    show_eqh           => 0,
+    show_eql           => 0,
+    show_grab          => 0,
+    show_sweep         => 0,
+    show_run           => 0,
 
     show_zz_external   => 1,
     show_zz_internal   => 0,
     show_zz_hldv       => 0,
+    show_regression_auto => 0,
+    show_zz_fibonacci  => 0,
 
     # Pivot High/Low y Missed Reversal
     pmr_enabled        => 1,
     show_pmr_regular   => 0,
-    show_pmr_missed    => 1,
-    show_pmr_levels    => 1,
-    show_pmr_provisional => 1,
+    show_pmr_missed    => 0,
+    show_pmr_levels    => 0,
+    show_pmr_provisional => 0,
     show_pmr_segments  => 0,
 
     # Strategy Builder
     strategy_enabled   => 1,
-    show_supertrend    => 1,
-    show_halftrend     => 1,
-    show_range_filter  => 1,
-    show_supply_demand => 1,
+    show_supertrend    => 0,
+    show_halftrend     => 0,
+    show_range_filter  => 0,
+    show_supply_demand => 0,
 
     # Volume Profile
     vp_enabled         => 1,
-    show_vp_poc        => 1,
-    show_vp_vah        => 1,
-    show_vp_val        => 1,
+    show_vp_poc        => 0,
+    show_vp_vah        => 0,
+    show_vp_val        => 0,
 
     # Anchored VWAP
     vwap_enabled       => 1,
-    show_vwap_band1    => 1,
-    show_vwap_band2    => 1,
+    show_vwap_band1    => 0,
+    show_vwap_band2    => 0,
     show_vwap_band3    => 0,
 );
 
@@ -529,7 +531,8 @@ my %overlay_parent_for = (
     show_grab          => 'liquidity_enabled',
     show_sweep         => 'liquidity_enabled',
     show_run           => 'liquidity_enabled',
-    show_zz_hldv       => 'show_zz_external',
+    show_zz_hldv         => 'show_zz_external',
+    show_zz_fibonacci    => 'show_zz_external',
     show_pmr_regular   => 'pmr_enabled',
     show_pmr_missed    => 'pmr_enabled',
     show_pmr_levels    => 'pmr_enabled',
@@ -745,7 +748,7 @@ $build_overlay_detail = sub {
         $add_overlay_toggle->( 'OB externos',     'show_external_ob', 0 );
         $add_overlay_toggle->( 'Major High/Low',  'show_major_levels', 0 );
         $add_overlay_toggle->( 'Premium/Discount','show_premium_discount', 0 );
-        $add_overlay_toggle->( 'FVG (activos)',   'show_fvg', 0 );
+        $add_overlay_toggle->( 'FVG',             'show_fvg', 0 );
         $add_overlay_toggle->( 'Fibonacci auto',  'show_fibonacci_auto', 0 );
         $add_overlay_toggle->( 'Market Regime',   'show_market_regime', 0 );
     } elsif ( $group eq 'liquidity' ) {
@@ -760,9 +763,10 @@ $build_overlay_detail = sub {
         $add_overlay_toggle->( 'Sweep',           'show_sweep', 0 );
         $add_overlay_toggle->( 'Run',             'show_run', 0 );
     } elsif ( $group eq 'zigzag' ) {
-        $add_overlay_toggle->( 'Direccion Externa',  'show_zz_external', 0 );
-        $add_overlay_toggle->( 'Direccion Interna',  'show_zz_internal', 0 );
-        $add_overlay_toggle->( 'HLDV (HH/HL/LH/LL)','show_zz_hldv',     0 );
+        $add_overlay_toggle->( 'Direccion Externa',   'show_zz_external',    0 );
+        $add_overlay_toggle->( 'Direccion Interna',   'show_zz_internal',    0 );
+        $add_overlay_toggle->( 'HLDV (HH/HL/LH/LL)', 'show_zz_hldv',        0 );
+        $add_overlay_toggle->( 'Fibonacci Auto ZZ',  'show_zz_fibonacci',    0 );
     } elsif ( $group eq 'pivots' ) {
         $add_overlay_toggle->( 'Pivot Missed Reversal', 'pmr_enabled', 1 );
         $add_overlay_separator->();
@@ -821,6 +825,8 @@ $build_overlay_detail = sub {
         $add_overlay_action->( 'Quitar Canal de Regresi' . "\x{f3}n", sub {
             $engine->clear_regression_channel() if defined $engine;
         });
+        $add_overlay_separator->();
+        $add_overlay_toggle->( 'Canal Auto (ZigZag)', 'show_regression_auto', 0 );
     } else {
         $add_overlay_action->( 'Seleccionar zona', sub {
             $overlay_visibility{show_manual_fibonacci} = 1;

@@ -341,6 +341,7 @@ sub _render_fibonacci {
     @events = grep {
         defined $_->{index} && defined $_->{from} && defined $_->{level}
             && $self->_event_visible_at($_, $current_bar)
+            && ($_->{scope}//'internal') eq 'external'
     } @events;
     return unless @events;
 
@@ -454,11 +455,19 @@ sub _render_fvg {
     # Alinear el FVG a esos mismos bordes evita que el rectangulo sobresalga
     # visualmente media columna a cada lado.
     my $half_body = $bar_w * 0.35;
-    my $selected = _active_fvgs_at(
-        $fvgs, $current_bar, $self->{max_fvg_visible},
-    );
-    return unless @$selected;
-    for my $fvg (@$selected) {
+    # Viewport-aware FVG selection: prefer FVGs in the visible range first.
+    my $all_active = _active_fvgs_at($fvgs, $current_bar, 0);
+    my @fvg_in_view  = grep { ($_->{index} // 0) >= $d_start } @$all_active;
+    my @fvg_pre_view = grep { ($_->{index} // 0) <  $d_start } @$all_active;
+    my $max_fvg = int($self->{max_fvg_visible} // 20);
+    $max_fvg = 20 if $max_fvg <= 0;
+    @fvg_in_view  = @fvg_in_view[0 .. $max_fvg - 1]          if @fvg_in_view  > $max_fvg;
+    @fvg_pre_view = @fvg_pre_view[0 .. int($max_fvg/3) - 1]  if @fvg_pre_view > int($max_fvg/3);
+    my @selected_list = sort {
+        ($a->{formed_at}//$a->{confirmed_at}//0) <=> ($b->{formed_at}//$b->{confirmed_at}//0)
+    } (@fvg_in_view, @fvg_pre_view);
+    return unless @selected_list;
+    for my $fvg (@selected_list) {
         my $idx = $fvg->{index};
         next unless defined $idx;
         my $formed_at = $fvg->{formed_at} // ($idx + 1);
@@ -522,6 +531,7 @@ sub _render_fvg {
             );
         }
     }
+    $canvas->lower('fvg', 'candles') if $canvas->find('withtag', 'candles');
 }
 
 sub _active_fvgs_at {
@@ -601,17 +611,21 @@ sub _render_order_blocks {
             && $self->_show_ob_scope($_, $current_bar)
     } @$obs;
 
-    # Preparar el ciclo de vida antes de limitar la cantidad. Antes se tomaban
-    # los últimos 20 y luego se descartaban los mitigados; en historiales
-    # amplios eso dejaba apenas uno o dos bloques, todos al extremo derecho.
-    my @candidates = sort {
-        (($b->{confirmed_at} // 0) <=> ($a->{confirmed_at} // 0))
-            || (($b->{index} // 0) <=> ($a->{index} // 0))
-    } @eligible;
-    my $max_ob = int($self->{max_ob_visible} // 0);
-    @candidates = @candidates[0 .. $max_ob - 1]
-        if $max_ob > 0 && @candidates > $max_ob;
-    @candidates = sort { ($a->{index}//0) <=> ($b->{index}//0) } @candidates;
+    # Priorizar OBs que caen en o cerca del rango visible. Sin esta prioridad,
+    # en historiales largos el limite global solo devuelve bloques del extremo
+    # derecho y el viewport queda vacio al explorar barras mas antiguas.
+    my @in_view  = sort { (($b->{confirmed_at}//0) <=> ($a->{confirmed_at}//0))
+                           || (($b->{index}//0) <=> ($a->{index}//0)) }
+                   grep { ($_->{index} // 0) >= $d_start } @eligible;
+    my @pre_view = sort { (($b->{confirmed_at}//0) <=> ($a->{confirmed_at}//0))
+                           || (($b->{index}//0) <=> ($a->{index}//0)) }
+                   grep { ($_->{index} // 0) <  $d_start } @eligible;
+    my $max_ob = int($self->{max_ob_visible} // 30);
+    $max_ob = 30 if $max_ob <= 0;
+    @in_view  = @in_view[0 .. $max_ob - 1]        if @in_view  > $max_ob;
+    @pre_view = @pre_view[0 .. int($max_ob/3) - 1] if @pre_view > int($max_ob/3);
+    my @candidates = sort { ($a->{index}//0) <=> ($b->{index}//0) }
+                     (@in_view, @pre_view);
 
     for my $ob (@candidates) {
         next unless defined $ob->{top} && defined $ob->{bottom};
@@ -650,6 +664,7 @@ sub _render_order_blocks {
             );
         }
     }
+    $canvas->lower('ob', 'candles') if $canvas->find('withtag', 'candles');
 }
 
 sub _ob_is_active_at {
@@ -736,13 +751,13 @@ sub _claim_label_slot {
 }
 
 sub _prioritize_structure_events {
-    my ($self, $events, $current_bar) = @_;
+    my ($self, $events, $current_bar, $skip_scope_filter) = @_;
     $events //= [];
     my @ready = grep {
         defined $_->{index}
             && $_->{index} <= $current_bar
             && $self->_event_visible_at($_, $current_bar)
-            && $self->_show_structure_scope($_, $current_bar)
+            && ($skip_scope_filter || $self->_show_structure_scope($_, $current_bar))
     } @$events;
 
     my $limit = int( $self->{max_structure_events} // 80 );
@@ -774,7 +789,7 @@ sub _render_bos {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
     $current_bar //= $d_end;
     my $bos_list = $self->_prioritize_structure_events(
-        $self->{indicator}->get_bos_events(), $current_bar
+        $self->{indicator}->get_bos_events(), $current_bar, 1
     );
 
     for my $bos (@$bos_list) {
@@ -830,7 +845,7 @@ sub _render_choch {
     $current_bar //= $d_end;
     return unless $self->{indicator}->can('get_choch_events');
     my $list = $self->_prioritize_structure_events(
-        $self->{indicator}->get_choch_events(), $current_bar
+        $self->{indicator}->get_choch_events(), $current_bar, 1
     );
     return unless $list && @$list;
 

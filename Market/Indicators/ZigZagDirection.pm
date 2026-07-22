@@ -79,6 +79,7 @@ sub get_external_segments { return $_[0]->{_external_segments} }
 sub get_internal_pivots   { return $_[0]->{_internal_pivots}   }
 sub get_internal_segments { return $_[0]->{_internal_segments} }
 sub get_internal_candles  { return $_[0]->{_internal_candles}  }
+sub get_candles           { return $_[0]->{_candles}           }
 
 sub get_external_pivots_until {
     my ($self, $current_bar) = @_;
