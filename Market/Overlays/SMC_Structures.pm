@@ -557,13 +557,14 @@ sub _render_fvg {
             -tags    => ['smc_overlay', 'fvg'],
         );
 
-        my $lbl_y   = ($y1 + $y2) / 2;
-        if ( $self->_claim_label_slot( $x1 + 3, $lbl_y ) ) {
-            $canvas->createText( $x1 + 3, $lbl_y,
+        my $lbl_y = ($y1 + $y2) / 2;
+        my $lbl_x = ($x1 + $x2) / 2;
+        if ( $self->_claim_label_slot( $lbl_x, $lbl_y ) ) {
+            $canvas->createText( $lbl_x, $lbl_y,
                 -text   => 'FVG',
                 -fill   => $color,
                 -font   => ['Helvetica', 7, 'bold'],
-                -anchor => 'w',
+                -anchor => 'center',
                 -tags   => ['smc_overlay', 'smc_label', 'fvg'],
             );
         }
@@ -662,13 +663,15 @@ sub _render_order_blocks {
             -stipple => $stipple,
             -tags    => ['smc_overlay', 'ob', $life_tag, "ob_$scope"],
         );
-        if ($self->_claim_label_slot($x1 + 3, ($y1 + $y2) / 2)) {
+        my $lbl_x = ($x1 + $x2) / 2;
+        my $lbl_y = ($y1 + $y2) / 2;
+        if ($self->_claim_label_slot($lbl_x, $lbl_y)) {
             my $sc = $scope eq 'external' ? 'e' : 'i';
-            $canvas->createText($x1 + 3, ($y1 + $y2) / 2,
+            $canvas->createText($lbl_x, $lbl_y,
                 -text   => ($is_bull ? 'OB+' : 'OB-') . $sc,
                 -fill   => $color,
                 -font   => ['Helvetica', 7, 'bold'],
-                -anchor => 'w',
+                -anchor => 'center',
                 -tags   => ['smc_overlay', 'smc_label', 'ob'],
             );
         }
