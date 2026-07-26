@@ -85,6 +85,7 @@ sub new {
         replay_mode    => 0,       # 1 = en modo replay
         replay_selecting => 0,     # 1 = boton Replay armado para elegir vela inicial
         replay_cursor  => undef,   # indice de la ultima vela visible (barrera temporal)
+        _replay_following => 1,    # 1 = vista anclada al cursor de replay, 0 = scroll libre
         selected_replay_index => undef, # ultima vela seleccionada dentro de Replay
         replay_playing => 0,       # 1 = avanzando automaticamente
         replay_speed   => 400,     # ms entre pasos en modo play normal
@@ -179,6 +180,7 @@ sub compute_window {
 sub goto_last {
     my ($self) = @_;
     if ( $self->{replay_mode} && defined $self->{replay_cursor} ) {
+        $self->{_replay_following} = 1;
         $self->_anchor_cursor_to_right_edge();
         $self->{_render_state} = undef;
         $self->request_render();
@@ -1616,8 +1618,7 @@ sub drag_move {
     my $max_off = $self->{market}->last_index() + $pad;
     my $min_off = -$pad;
     if ( $self->{replay_mode} && defined $self->{replay_cursor} ) {
-        my $replay_min_off = $self->_offset_for_index_with_right_space( $self->{replay_cursor} );
-        $min_off = $replay_min_off if $replay_min_off > $min_off;
+        $self->{_replay_following} = 0;
     }
     $new_off = $min_off if $new_off < $min_off;
     $new_off = $max_off if $new_off > $max_off;
@@ -1665,8 +1666,9 @@ sub zoom {
     $new_bars = 5    if $new_bars < 5;
     $new_bars = 5000 if $new_bars > 5000;
     $self->{visible_bars} = $new_bars;
-    $self->_anchor_cursor_to_right_edge()
-        if $self->{replay_mode} && defined $self->{replay_cursor};
+    if ( $self->{replay_mode} && defined $self->{replay_cursor} && $self->{_replay_following} ) {
+        $self->_anchor_cursor_to_right_edge();
+    }
     $self->{_render_state} = undef;    # force full render after zoom
     my $tf = $self->{market}{current_tf};
     $self->{price_canvas}->toplevel->title("Market Chart | " . $self->tf_label($tf) . "  [velas: $new_bars]");
@@ -1674,20 +1676,6 @@ sub zoom {
 }
 
 # Zoom centrado en cursor_x: la vela bajo el cursor mantiene su posicion en pantalla.
-#
-# Problema del enfoque anterior (frac-based): redondear new_bars introduce un error
-# que se acumula en cada paso de zoom consecutivo porque target_ix se recalcula
-# desde la escala ya redondeada.
-#
-# Solucion: guardar _offset_exact (float) entre llamadas. Cada llamada calcula
-# target_ix desde _offset_exact (no desde el offset entero redondeado), por lo que
-# el error por paso es como maximo 0.5 * bar_w y NO se acumula.
-#
-# Derivacion:
-#   target_ix  = start_exact + cursor_x * old_bars / pw
-#   new_start  = target_ix - cursor_x * new_bars / pw
-#   new_end    = new_start + new_bars - 1
-#   new_offset = last - new_end
 sub zoom_at {
     my ($self, $delta, $cursor_x) = @_;
 
@@ -1719,11 +1707,11 @@ sub zoom_at {
     my $clamped = 0;
     my $min_off = -$self->_right_space_bars($new_bars);
     if ( $self->{replay_mode} && defined $self->{replay_cursor} ) {
-        my $min_replay_off = $self->_offset_for_index_with_right_space( $self->{replay_cursor}, $new_bars );
-        $min_off = $min_replay_off if $min_replay_off > $min_off;
+        $self->{_replay_following} = 0;
     }
     if ( $new_off < $min_off ) { $new_off = $min_off; $clamped = 1; }
     if ( $new_off > $last ) { $new_off = $last;  $clamped = 1; }
+
 
     $self->{_offset_exact} = $clamped ? $new_off * 1.0 : $new_offset_exact;
 
@@ -1925,7 +1913,9 @@ sub step_forward {
     my $real_last = $self->{market}->last_index();
     return if $self->{replay_cursor} >= $real_last;
     $self->{replay_cursor}++;
-    $self->_ensure_cursor_visible();
+    if ( $self->{_replay_following} ) {
+        $self->_anchor_cursor_to_right_edge();
+    }
     $self->{_render_state} = undef;
     $self->request_render();
 }
@@ -1935,7 +1925,9 @@ sub step_backward {
     return unless $self->{replay_mode};
     return if $self->{replay_cursor} <= 0;
     $self->{replay_cursor}--;
-    $self->_ensure_cursor_visible();
+    if ( $self->{_replay_following} ) {
+        $self->_anchor_cursor_to_right_edge();
+    }
     $self->{_render_state} = undef;
     $self->request_render();
 }
@@ -1985,7 +1977,9 @@ sub _tick_replay {
     }
 
     $self->{replay_cursor}++;
-    $self->_ensure_cursor_visible();
+    if ( $self->{_replay_following} ) {
+        $self->_anchor_cursor_to_right_edge();
+    }
     $self->{_render_state} = undef;
     $self->request_render();
 
