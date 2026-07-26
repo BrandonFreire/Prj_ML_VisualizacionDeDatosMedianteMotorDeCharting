@@ -41,10 +41,26 @@ sub render {
     $canvas->delete('vwap_overlay');
     return unless $self->_visible('vwap_enabled', 1);
 
+    # En modo manual, no dibujar nada si el usuario aún no ha seleccionado
+    # un punto de anclaje explícito (vela específica).  El cálculo y dibujado
+    # del VWAP depende estrictamente de que exista un anchor_index validado.
+    if (($ind->get_anchor_mode() // 'manual') eq 'manual') {
+        my $manual_anchors = $ind->{_manual_anchors} // [];
+        return unless @$manual_anchors;
+    }
+
     my $lines = $ind->can('get_vwap_lines_at')
         ? ($ind->get_vwap_lines_at($current_bar) // [])
         : ($ind->get_vwap_lines() // []);
     return unless @$lines;
+
+    # En modo manual, renderizar SOLO las líneas ancladas por el usuario.
+    # _calculate_lines() también genera una línea auto_missed_pivot que se
+    # inyecta en _vwap_lines — esa línea fantasma no debe dibujarse.
+    if (($ind->get_anchor_mode() // 'manual') eq 'manual') {
+        $lines = [ grep { ($_->{anchor_source} // '') eq 'manual' } @$lines ];
+        return unless @$lines;
+    }
 
     my %label_slots;
 

@@ -383,7 +383,7 @@ $engine = Market::ChartEngine->new(
 
 # ---- Timeframe buttons (1m → W) ----
 my %overlay_visibility = (
-    smc_enabled             => 1,
+    smc_enabled             => 0,
     show_hh                 => 0,
     show_hl                 => 0,
     show_lh                 => 0,
@@ -392,8 +392,8 @@ my %overlay_visibility = (
     show_sl                 => 0,
     show_choch              => 0,
     show_bos                => 0,
-    show_internal_structure => 1,
-    show_external_structure => 1,
+    show_internal_structure => 0,
+    show_external_structure => 0,
     show_ob                 => 0,
     show_internal_ob        => 0,
     show_external_ob        => 0,
@@ -405,23 +405,23 @@ my %overlay_visibility = (
     show_fibonacci_auto     => 0,
     show_manual_fibonacci   => 0,
 
-    liquidity_enabled => 1,
-    show_bsl          => 1,
-    show_ssl          => 1,
+    liquidity_enabled => 0,
+    show_bsl          => 0,
+    show_ssl          => 0,
     show_eqh          => 0,
     show_eql          => 0,
     show_grab         => 0,
     show_sweep        => 0,
     show_run          => 0,
 
-    show_zz_external     => 1,
+    show_zz_external     => 0,
     show_zz_internal     => 0,
     show_zz_hldv         => 0,
     show_regression_auto => 0,
     show_zz_fibonacci    => 0,
 
     # Pivot High/Low y Missed Reversal
-    pmr_enabled          => 1,
+    pmr_enabled          => 0,
     show_pmr_regular     => 0,
     show_pmr_missed      => 0,
     show_pmr_levels      => 0,
@@ -429,20 +429,20 @@ my %overlay_visibility = (
     show_pmr_segments    => 0,
 
     # Strategy Builder
-    strategy_enabled   => 1,
+    strategy_enabled   => 0,
     show_supertrend    => 0,
     show_halftrend     => 0,
     show_range_filter  => 0,
     show_supply_demand => 0,
 
     # Volume Profile
-    vp_enabled  => 1,
+    vp_enabled  => 0,
     show_vp_poc => 0,
     show_vp_vah => 0,
     show_vp_val => 0,
 
     # Anchored VWAP
-    vwap_enabled    => 1,
+    vwap_enabled    => 0,
     show_vwap_band1 => 0,
     show_vwap_band2 => 0,
     show_vwap_band3 => 0,
@@ -671,6 +671,12 @@ $add_overlay_toggle = sub {
     my $toggle = sub {
         return unless $is_overlay_key_enabled->($key);
         $overlay_visibility{$key} = $overlay_visibility{$key} ? 0 : 1;
+        if ( $key eq 'vp_enabled' && defined $engine ) {
+            $engine->clear_vp();
+        }
+        if ( $key eq 'vwap_enabled' && defined $engine ) {
+            $engine->clear_vwap();
+        }
         if ( $key eq 'show_manual_fibonacci' && defined $engine ) {
             $engine->set_manual_fibonacci_visible( $overlay_visibility{$key} );
         }
@@ -1302,12 +1308,30 @@ $mw->bind( '<0>',           sub { $engine->reset_view() } );
 $mw->bind( '<End>',         sub { $engine->goto_last() } )
   ;    # ultima vela con margen derecho
 
-$mw->update();    # ensure canvas dimensions are resolved
-$engine->render();
+# Re-render on window resize / layout resolution
+my $on_canvas_configure = sub {
+    return unless defined $engine;
+    $engine->{_render_state} = undef;
+    $engine->request_render();
+};
 
-# Re-render on window resize
-$price_canvas->bind( '<Configure>', sub { $engine->request_render(); } );
-$volume_canvas->bind( '<Configure>', sub { $engine->request_render(); } );
-$atr_canvas->bind( '<Configure>', sub { $engine->request_render(); } );
+$price_canvas->bind( '<Configure>', $on_canvas_configure );
+$volume_canvas->bind( '<Configure>', $on_canvas_configure );
+$atr_canvas->bind( '<Configure>', $on_canvas_configure );
+
+$mw->update();
+$engine->reset_view();
+
+# Esperar 50ms a que el gestor de ventanas resolucion la geometria final
+# y ajustar la auto-escala Y conservando el margen derecho obligatorio.
+$mw->after(
+    50,
+    sub {
+        if ( defined $engine ) {
+            $engine->{_render_state} = undef;
+            $engine->goto_last();
+        }
+    }
+);
 
 MainLoop();

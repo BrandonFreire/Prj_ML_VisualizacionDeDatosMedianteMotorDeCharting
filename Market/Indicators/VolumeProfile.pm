@@ -61,8 +61,9 @@ sub add_manual_anchor {
     # end_idx indefinido representa un perfil anclado "desde esta vela hasta
     # la última vela disponible".  Un end_idx explícito representa Fixed Range.
     push @{ $self->{_manual_anchors} }, {
-        start => int($start_idx),
-        end   => defined $end_idx ? int($end_idx) : undef,
+        start  => int($start_idx),
+        end    => defined $end_idx ? int($end_idx) : undef,
+        source => 'manual',
     };
     $self->{_profile_cache} = {};
 }
@@ -169,7 +170,7 @@ sub _segments_for_mode {
         return @segments;
     }
 
-    return $self->_contingency_segments($n);
+    return $mode eq 'contingency' ? $self->_contingency_segments($n) : ();
 }
 
 sub _contingency_segments {
@@ -217,10 +218,12 @@ sub _compute_profile {
     my @bins;
     for my $b (0 .. $num_bins - 1) {
         push @bins, {
-            price_low  => $price_min + $b * $bin_size,
-            price_high => $price_min + ($b + 1) * $bin_size,
-            price      => $price_min + ($b + 0.5) * $bin_size,
-            volume     => 0,
+            price_low   => $price_min + $b * $bin_size,
+            price_high  => $price_min + ($b + 1) * $bin_size,
+            price       => $price_min + ($b + 0.5) * $bin_size,
+            volume      => 0,
+            up_volume   => 0,   # volumen comprador (close >= open)
+            down_volume => 0,   # volumen vendedor  (close <  open)
         };
     }
 
@@ -232,6 +235,10 @@ sub _compute_profile {
         my $vol = $c->{volume};
         next if $vol <= 0;
 
+        # Clasificar vela como compradora o vendedora
+        my $is_up = (defined $c->{close} && defined $c->{open}
+                     && $c->{close} >= $c->{open}) ? 1 : 0;
+
         my $c_range = $c->{high} - $c->{low};
 
         # Una vela sin rango sigue aportando todo su volumen al nivel negociado;
@@ -241,6 +248,8 @@ sub _compute_profile {
             $bin = 0 if $bin < 0;
             $bin = $num_bins - 1 if $bin >= $num_bins;
             $bins[$bin]{volume} += $vol;
+            if ($is_up) { $bins[$bin]{up_volume}   += $vol; }
+            else        { $bins[$bin]{down_volume} += $vol; }
             $total_vol += $vol;
             next;
         }
@@ -259,7 +268,10 @@ sub _compute_profile {
             $overlap = 0 if $overlap < 0;
 
             my $frac = $overlap / $c_range;
-            $bins[$b]{volume} += $vol * $frac;
+            my $contrib = $vol * $frac;
+            $bins[$b]{volume} += $contrib;
+            if ($is_up) { $bins[$b]{up_volume}   += $contrib; }
+            else        { $bins[$b]{down_volume} += $contrib; }
         }
         $total_vol += $vol;
     }

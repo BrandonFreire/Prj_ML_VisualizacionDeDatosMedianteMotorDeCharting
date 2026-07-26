@@ -43,9 +43,16 @@ sub render {
     $canvas->delete('vp_overlay');
     return unless $self->_visible('vp_enabled', 1);
 
+    # Bloqueo absoluto: el Perfil de Volumen sólo se renderiza si el usuario ha hecho
+    # clic directo para definir un anclaje manual explícito (anchor_index validado).
+    # Se aborta inmediatamente (return;) ignorando cualquier cálculo histórico por defecto o contingencia.
+    my $manual_anchors = $ind->{_manual_anchors} // [];
+    return unless @$manual_anchors && defined $manual_anchors->[0]{start};
+
     my $profiles = $ind->can('get_profiles_at')
         ? ($ind->get_profiles_at($current_bar) // [])
         : ($ind->get_profiles() // []);
+    $profiles = [ grep { ($_->{source} // '') eq 'manual' } @$profiles ];
     return unless @$profiles;
 
     for my $profile (@$profiles) {
@@ -65,8 +72,16 @@ sub render {
 }
 
 # ================================================================
-# Histograma horizontal de volumen
+# Histograma horizontal de volumen — renderizado dual Up/Down
 # ================================================================
+
+# Colores estilo TradingView institucional
+my $COLOR_UP_IN_VA   = '#26a69a';   # teal — comprador dentro del Value Area
+my $COLOR_DOWN_IN_VA = '#ef5350';   # rojo  — vendedor  dentro del Value Area
+my $COLOR_UP_OUT     = '#1a6b63';   # teal oscuro  — comprador fuera del VA
+my $COLOR_DOWN_OUT   = '#8b2d2d';   # rojo  oscuro — vendedor  fuera del VA
+my $COLOR_POC_FILL   = '#f6c90e';   # amarillo — bin del POC resaltado
+
 sub _render_histogram {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar, $profile) = @_;
     my $bins    = $profile->{bins} // [];
@@ -79,10 +94,10 @@ sub _render_histogram {
     my $draw_end = $p_end > $current_bar ? $current_bar : $p_end;
     $draw_end    = $d_end if $draw_end > $d_end;
 
-    # El motor sólo entrega perfiles manuales.  El histograma queda al lado
-    # derecho del rango elegido y crece hacia dentro para no ocultar el precio
-    # posterior al anclaje. Para un perfil open_ended, draw_end es la última
-    # vela disponible (o la barrera de Replay que recibe render()).
+    my $poc_price = $profile->{poc} // 0;
+    my $vah_price = $profile->{vah} // 1e30;
+    my $val_price = $profile->{val} // -1e30;
+
     my $x_anchor = $scale->index_to_center_x($draw_end);
 
     for my $bin (@$bins) {
@@ -97,21 +112,59 @@ sub _render_histogram {
         my $bar_w = ($bin->{volume} / $max_vol) * $max_bar;
         $bar_w = 2 if $bar_w < 2;
 
-        # Histograma dibujado a la izquierda del ancla
-        my $x1 = $x_anchor - $bar_w;
-        my $x2 = $x_anchor;
-
-        # Resaltar el bin del POC
-        my $is_poc = abs($bin->{price} - ($profile->{poc} // 0)) < 
+        # Detectar si es el bin del POC
+        my $is_poc = abs($bin->{price} - $poc_price) <
                      abs(($bin->{price_high} - $bin->{price_low}) / 2 + 0.001);
-        my $color = $is_poc ? $COLOR_POC : $COLOR_HIST;
 
-        $canvas->createRectangle($x1, $y1, $x2, $y2,
-            -fill    => $color,
-            -outline => '',
-            -stipple => $is_poc ? 'gray50' : 'gray25',
-            -tags    => ['vp_overlay', 'vp_hist'],
-        );
+        # Detectar si está dentro del Value Area
+        my $in_va = ($bin->{price} >= $val_price && $bin->{price} <= $vah_price) ? 1 : 0;
+
+        # Proporciones Up/Down dentro del bin
+        my $up_vol   = $bin->{up_volume}   // 0;
+        my $down_vol = $bin->{down_volume} // 0;
+        my $bin_total = $up_vol + $down_vol;
+        $bin_total = $bin->{volume} if $bin_total <= 0;   # fallback
+
+        my $down_frac = $bin_total > 0 ? ($down_vol / $bin_total) : 0.5;
+        my $up_frac   = 1 - $down_frac;
+
+        my $down_w = $bar_w * $down_frac;
+        my $up_w   = $bar_w * $up_frac;
+
+        # Colores según posición en el Value Area
+        my ($color_down, $color_up);
+        if ($is_poc) {
+            $color_down = $COLOR_POC_FILL;
+            $color_up   = $COLOR_POC_FILL;
+        } elsif ($in_va) {
+            $color_down = $COLOR_DOWN_IN_VA;
+            $color_up   = $COLOR_UP_IN_VA;
+        } else {
+            $color_down = $COLOR_DOWN_OUT;
+            $color_up   = $COLOR_UP_OUT;
+        }
+
+        # Histograma dibujado a la izquierda del ancla:
+        # [down_volume | up_volume] <-- x_anchor
+        my $x_start = $x_anchor - $bar_w;
+
+        # Rectángulo Down Volume (izquierda)
+        if ($down_w >= 1) {
+            $canvas->createRectangle($x_start, $y1, $x_start + $down_w, $y2,
+                -fill    => $color_down,
+                -outline => '',
+                -tags    => ['vp_overlay', 'vp_hist'],
+            );
+        }
+
+        # Rectángulo Up Volume (derecha)
+        if ($up_w >= 1) {
+            $canvas->createRectangle($x_start + $down_w, $y1, $x_anchor, $y2,
+                -fill    => $color_up,
+                -outline => '',
+                -tags    => ['vp_overlay', 'vp_hist'],
+            );
+        }
     }
 }
 

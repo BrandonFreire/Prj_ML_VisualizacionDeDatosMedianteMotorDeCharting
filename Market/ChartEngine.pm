@@ -106,6 +106,12 @@ sub new {
     };
     bless $self, $class;
 
+    if ($self->{market}) {
+        my $init_off = $self->_offset_for_index_with_right_space($self->{market}->last_index());
+        $self->{offset}       = $init_off;
+        $self->{_offset_exact}= $init_off * 1.0;
+    }
+
     $self->{price_panel} = Market::Panels::PricePanel->new(
         canvas       => $self->{price_canvas},
         scale_canvas => $self->{price_scale_canvas},
@@ -1387,6 +1393,9 @@ sub _vwap_start {
     $self->{vwap_anchor_index} = $ix;
     my $ind = $self->_vwap_indicator();
     if ($ind) {
+        # Limpiar cualquier anclaje manual previo para garantizar que
+        # solo existe un único VWAP: el de la vela recién seleccionada.
+        $ind->clear_manual_anchors();
         $ind->add_manual_anchor($ix);
         $ind->compute_all($self->{market});
         $self->{_render_state} = undef;
@@ -1458,6 +1467,7 @@ sub _vp_finish {
     $self->{vp_anchor_index} = $start;
     my $ind = $self->_vp_indicator();
     if ($ind) {
+        $ind->clear_manual_anchors();
         $ind->add_manual_anchor($start, $end);
         $ind->compute_all($self->{market});
         $self->{_render_state} = undef;
