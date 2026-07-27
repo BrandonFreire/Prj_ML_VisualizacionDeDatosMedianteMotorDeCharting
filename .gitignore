@@ -25,10 +25,23 @@ MANIFEST.bak
 *.bs
 *.so
 
-# Local dev / libraries
+# Local dev / libraries / Virtual environments
 local/
 locallib/
 cpanfile.snapshot
+.venv/
+venv/
+env/
+ENV/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
 
 # Test / coverage
 t/.cache/

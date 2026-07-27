@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="360" viewBox="0 0 760 360">
+<rect width="100%" height="100%" fill="#ffffff"/><text x="48" y="25" font-family="sans-serif" font-size="16">MSE: entrenamiento vs validación</text>
+<line x1="48" y1="312" x2="712" y2="312" stroke="#333"/><line x1="48" y1="48" x2="48" y2="312" stroke="#333"/>
+<polyline fill="none" stroke="#1f77b4" stroke-width="2" points="48.00,89.46 76.87,157.92 105.74,173.35 134.61,184.20 163.48,198.21 192.35,210.02 221.22,220.45 250.09,232.03 278.96,239.30 307.83,250.01 336.70,257.42 365.57,266.08 394.43,277.80 423.30,282.99 452.17,284.08 481.04,289.18 509.91,292.21 538.78,295.73 567.65,299.34 596.52,301.78 625.39,307.44 654.26,310.92 683.13,311.35 712.00,312.00"/><polyline fill="none" stroke="#d62728" stroke-width="2" points="48.00,104.71 76.87,105.17 105.74,113.07 134.61,119.01 163.48,111.14 192.35,108.76 221.22,101.55 250.09,93.39 278.96,95.44 307.83,76.02 336.70,74.21 365.57,78.66 394.43,67.68 423.30,65.33 452.17,70.25 481.04,58.85 509.91,63.02 538.78,52.29 567.65,48.12 596.52,60.72 625.39,56.28 654.26,48.00 683.13,55.75 712.00,50.62"/>
+<text x="550" y="30" fill="#1f77b4" font-family="sans-serif" font-size="12">azul: entrenamiento</text><text x="550" y="47" fill="#d62728" font-family="sans-serif" font-size="12">rojo: validación</text>
+<text x="5" y="53" font-family="sans-serif" font-size="11">5.0313</text><text x="5" y="312" font-family="sans-serif" font-size="11">1.5776</text>
+</svg>

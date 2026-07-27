@@ -1,0 +1,47 @@
+{
+  "dataset": "artifacts/preprocessed/test_preprocessed.npz",
+  "metadata": "artifacts/preprocessed/test_metadata.csv",
+  "model": "artifacts/models/trained_model.pt",
+  "scaler": "artifacts/preprocessed/scaler.joblib",
+  "scaler_kind": "standard",
+  "device": "cuda",
+  "target_names": [
+    "Y_3m",
+    "Y_5m",
+    "Y_10m",
+    "Y_15m"
+  ],
+  "sequence_length": 16,
+  "total_test_rows": 2440,
+  "rows_without_initial_history": 15,
+  "prediction_rows": 2425,
+  "metric_rows": 2425,
+  "checkpoint_best_validation_mse": 4.102341775684895,
+  "metrics": {
+    "Y_3m": {
+      "n": 2425,
+      "mae": 0.8715421557426453,
+      "rmse": 1.0590515273024677,
+      "r2": -0.03350943904537207
+    },
+    "Y_5m": {
+      "n": 2425,
+      "mae": 1.2111953496932983,
+      "rmse": 1.5072897365569136,
+      "r2": -0.07490074105659694
+    },
+    "Y_10m": {
+      "n": 2425,
+      "mae": 1.8392020463943481,
+      "rmse": 2.313149953695711,
+      "r2": -0.09530120942771947
+    },
+    "Y_15m": {
+      "n": 2425,
+      "mae": 2.3078083992004395,
+      "rmse": 2.9252262582241735,
+      "r2": -0.08258628316126826
+    }
+  },
+  "comparison_csv": "artifacts/evaluation/test_predictions_comparison.csv"
+}

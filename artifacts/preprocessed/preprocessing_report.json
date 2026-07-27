@@ -1,0 +1,40 @@
+{
+  "leakage_guard": {
+    "fit_performed_only_on": "train_features.csv",
+    "train_sha256": "df2f665888d168cf84e28bfe0cd6ecc9b783eaf62525451bfbfc836cbbb0114a",
+    "test_operation": "transform_only_from_reloaded_scaler.joblib",
+    "metadata_excluded_from_X": [
+      "event_id",
+      "event_timestamp",
+      "event_date",
+      "event_hour",
+      "event_minute",
+      "event_index",
+      "ghost_index",
+      "complete"
+    ],
+    "targets_never_imputed": true
+  },
+  "rows": {
+    "train_input": 7986,
+    "train_complete_targets": 7986,
+    "train_dropped_incomplete_targets": 0,
+    "test_input": 2440,
+    "test_complete_targets": 2440,
+    "test_pending_targets": 0
+  },
+  "features": {
+    "numeric_input": 62,
+    "categorical_input": 2,
+    "model_output_dimension": 66,
+    "dropped_all_missing_columns": []
+  },
+  "scaling": {
+    "kind": "standard",
+    "numeric_features": 62,
+    "train_abs_mean_max": 2.124238598417814e-11,
+    "train_std_min_nonconstant": 0.9999999999999998,
+    "train_std_max_nonconstant": 1.0000000000000002,
+    "constant_numeric_features": 0
+  }
+}
