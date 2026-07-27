@@ -49,8 +49,10 @@ use Market::Indicators::Strategy_Builder;
 use Market::Indicators::VolumeProfile;
 use Market::Indicators::AnchoredVWAP;
 use Market::Indicators::PivotMissedReversal;
+use Market::Indicators::GhostsInSwings;
 use Market::Indicators::InternalZigZag;
 use Market::Indicators::ZonaInterna;
+use Market::ML::GhostTargets;
 use Market::Overlays::SMC_Structures;
 use Market::Overlays::Liquidity;
 use Market::Overlays::ZigZagDirection;
@@ -58,6 +60,7 @@ use Market::Overlays::Strategy_Builder;
 use Market::Overlays::VolumeProfile;
 use Market::Overlays::AnchoredVWAP;
 use Market::Overlays::PivotMissedReversal;
+use Market::Overlays::GhostsInSwings;
 use Market::ChartEngine;
 
 # ---- Configuration ----
@@ -117,6 +120,8 @@ printf
 # ---- 3. Compute indicators for 1m timeframe ----
 my $indicators = Market::IndicatorManager->new();
 $indicators->register( 'ATR', Market::Indicators::ATR->new($ATR_PERIOD) );
+my $ghosts_ind = Market::Indicators::GhostsInSwings->new( length => 50 );
+$indicators->register( 'GhostsInSwings', $ghosts_ind );
 my $zz_ind = Market::Indicators::ZigZagDirection->new(
     external_length     => $ZZ_EXTERNAL_LENGTH,
     internal_resolution => $ZZ_INTERNAL_RESOLUTION,
@@ -133,6 +138,16 @@ printf
   scalar @{ $zz_ind->get_internal_pivots() },
   scalar @{ $zz_ind->get_internal_segments() };
 print "Done.\n";
+
+# Etiquetas Y retrospectivas para el dataset de ML.  No participan en el
+# render de Replay: cada fila sólo queda completa cuando existen 15 velas
+# futuras después de la reubicación del fantasma.
+my $ghost_targets = Market::ML::GhostTargets->new;
+my $ghost_target_records = $ghost_targets->compute_from_indicator($ghosts_ind);
+printf "  GhostsInSwings: %d reubicaciones / %d rastros / %d targets completos\n",
+  scalar @{ $ghosts_ind->get_relocations() },
+  scalar @{ $ghosts_ind->get_trails() },
+  scalar grep { $_->{complete} } @$ghost_target_records;
 
 # ---- 3a. ZigZag interno confirmado y ZonaInterna Fibonacci ----
 # Estos cálculos son independientes de cualquier overlay: consumen ATR y
@@ -428,6 +443,11 @@ my %overlay_visibility = (
     show_pmr_provisional => 0,
     show_pmr_segments    => 0,
 
+    # Fantasma móvil y sus rastros "1" (solo disponible en 1m)
+    ghosts_enabled       => 0,
+    show_ghost_active    => 0,
+    show_ghost_trails    => 0,
+
     # Strategy Builder
     strategy_enabled   => 0,
     show_supertrend    => 0,
@@ -566,6 +586,8 @@ my %overlay_parent_for = (
     show_pmr_levels         => 'pmr_enabled',
     show_pmr_provisional    => 'pmr_enabled',
     show_pmr_segments       => 'pmr_enabled',
+    show_ghost_active       => 'ghosts_enabled',
+    show_ghost_trails       => 'ghosts_enabled',
     show_supertrend         => 'strategy_enabled',
     show_halftrend          => 'strategy_enabled',
     show_range_filter       => 'strategy_enabled',
@@ -825,6 +847,10 @@ $build_overlay_detail = sub {
             'show_pmr_provisional', 0
         );
         $add_overlay_toggle->( 'Segmentos de pivotes', 'show_pmr_segments', 0 );
+        $add_overlay_separator->();
+        $add_overlay_toggle->( 'Ghosts in Swings (1m)', 'ghosts_enabled', 1 );
+        $add_overlay_toggle->( 'Fantasma activo', 'show_ghost_active', 0 );
+        $add_overlay_toggle->( 'Rastros (1)', 'show_ghost_trails', 0 );
     }
     elsif ( $group eq 'strategy' ) {
         $add_overlay_toggle->( 'Strategy Builder', 'strategy_enabled', 1 );
@@ -1245,6 +1271,13 @@ $engine->add_overlay(
     Market::Overlays::PivotMissedReversal->new(
         indicator  => $pivot_missed_ind,
         visibility => \%overlay_visibility,
+    )
+);
+$engine->add_overlay(
+    Market::Overlays::GhostsInSwings->new(
+        indicator  => $ghosts_ind,
+        visibility => \%overlay_visibility,
+        market     => $market,
     )
 );
 $engine->add_overlay(
