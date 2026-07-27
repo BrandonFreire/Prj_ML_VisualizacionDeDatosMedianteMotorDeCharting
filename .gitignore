@@ -39,6 +39,19 @@ cover.html
 *.log
 .env
 
+# Python virtual environments and interpreter caches
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Generated ML datasets, metadata, reports and persisted preprocessors
+artifacts/
+
 # Data files (no subir al repo)
 
 # Misc
