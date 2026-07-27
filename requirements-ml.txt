@@ -2,3 +2,4 @@ pandas>=1.5
 scikit-learn>=1.1
 joblib>=1.2
 numpy>=1.23
+torch>=2.0
