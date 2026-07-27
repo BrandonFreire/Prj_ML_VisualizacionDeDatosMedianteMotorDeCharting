@@ -967,6 +967,196 @@ $overlay_btn = $toolbar->Button(
     -command          => sub { $toggle_overlay_menu->(); },
 )->pack( -side => 'left', -padx => 8, -pady => 2 );
 
+# ---- Boton ML ----
+my $ml_win;
+
+sub _open_ml_window {
+    if ( defined $ml_win && Tk::Exists($ml_win) ) {
+        $ml_win->raise();
+        $ml_win->focus();
+        return;
+    }
+
+    $ml_win = $mw->Toplevel( -bg => '#131722' );
+    $ml_win->title('Predicciones ML — Fantasmas');
+    $ml_win->geometry('720x540');
+    $ml_win->resizable( 1, 1 );
+    $ml_win->protocol( 'WM_DELETE_WINDOW', sub { $ml_win->destroy(); $ml_win = undef; } );
+
+    # Header
+    my $hdr = $ml_win->Frame( -bg => '#1e222d' )->pack( -fill => 'x' );
+    $hdr->Label(
+        -text => 'Modelo: Predicci\x{f3}n de Rastros de Fantasmas',
+        -bg   => '#1e222d', -fg   => '#83a9ff',
+        -font => [ 'Helvetica', 10, 'bold' ], -pady => 6,
+    )->pack( -side => 'left', -padx => 10 );
+    $hdr->Label(
+        -text => "CSV: $CSV_FILE",
+        -bg   => '#1e222d', -fg => '#8b929e',
+        -font => [ 'Helvetica', 9 ],
+    )->pack( -side => 'right', -padx => 10 );
+
+    # Botones
+    my $btn_frame = $ml_win->Frame( -bg => '#1e222d' )->pack( -fill => 'x', -pady => 2 );
+
+    # Text + scrollbar
+    my $txt_frame = $ml_win->Frame( -bg => '#131722' )
+        ->pack( -fill => 'both', -expand => 1, -padx => 6, -pady => 4 );
+    my $sb = $txt_frame->Scrollbar( -bg => '#2a2d3e', -troughcolor => '#1e222d' );
+    my $txt = $txt_frame->Text(
+        -bg             => '#0d1117', -fg     => '#c9d1d9',
+        -font           => [ 'Courier', 9 ],
+        -relief         => 'flat',   -wrap   => 'word',
+        -yscrollcommand => sub { $sb->set(@_) },
+    );
+    $sb->configure( -command => sub { $txt->yview(@_) } );
+    $sb->pack( -side => 'right', -fill => 'y' );
+    $txt->pack( -side => 'left', -fill => 'both', -expand => 1 );
+
+    $txt->tagConfigure( 'ok',   -foreground => '#26a69a' );
+    $txt->tagConfigure( 'err',  -foreground => '#ef5350' );
+    $txt->tagConfigure( 'info', -foreground => '#83a9ff' );
+    $txt->tagConfigure( 'head', -foreground => '#f6c90e',
+        -font => [ 'Courier', 9, 'bold' ] );
+    $txt->tagConfigure( 'muted', -foreground => '#8b929e' );
+
+    my $status_lbl;
+    my $run_busy = 0;
+
+    my $append = sub {
+        my ($line) = @_;
+        my $tag = 'muted';
+        if    ( $line =~ /error|ERROR|Can't|Died/i )     { $tag = 'err'  }
+        elsif ( $line =~ /^[=]{4,}/ )                    { $tag = 'head' }
+        elsif ( $line =~ /^\[OK\]/ )                     { $tag = 'ok'   }
+        elsif ( $line =~ /\d+ registros|guardado|Listo/i ){ $tag = 'ok'  }
+        elsif ( $line =~ /Cargando|Calculando|Pre-calc
+                          |Detectando|Indicadores
+                          |Extrayendo|Entrenando
+                          |Evaluan|Predicciones/ix )      { $tag = 'info' }
+        $txt->insert( 'end', $line, $tag );
+        $txt->see('end');
+    };
+
+    my $ml_dir = 'ml';
+
+    my $run_cmd = sub {
+        my ( $label, @cmd ) = @_;
+        return if $run_busy;
+        $run_busy = 1;
+        $txt->delete( '1.0', 'end' );
+        $append->( "\$ " . join( ' ', @cmd ) . "\n" );
+        $status_lbl->configure( -text => "Ejecutando: $label...", -fg => '#f6c90e' )
+            if defined $status_lbl;
+
+        my $pid = open( my $proc, '-|', @cmd );
+        unless ($pid) {
+            $append->( "ERROR: no se pudo lanzar el proceso: $!\n" );
+            $run_busy = 0;
+            return;
+        }
+
+        $ml_win->fileevent( $proc, 'readable', sub {
+            my $line = <$proc>;
+            if ( defined $line ) {
+                $append->($line);
+            }
+            else {
+                $ml_win->fileevent( $proc, 'readable', '' );
+                close $proc;
+                $run_busy = 0;
+                my $ok = ( $? == 0 );
+                if ( defined $status_lbl ) {
+                    $status_lbl->configure(
+                        -text => $ok ? "$label: completado" : "$label: error (ver salida)",
+                        -fg   => $ok ? '#26a69a' : '#ef5350',
+                    );
+                }
+                $append->( $ok ? "\n[OK]\n" : "\n[ERROR: codigo " . ( $? >> 8 ) . "]\n" );
+            }
+        } );
+    };
+
+    my $features_out = "$ml_dir/features_live.csv";
+    my $model_file   = "$ml_dir/model_fantasmas.joblib";
+
+    my $mk_btn = sub {
+        my ( $text, $fg, $cmd_sub ) = @_;
+        $btn_frame->Button(
+            -text             => $text,
+            -bg               => '#2a2d3e', -fg               => $fg,
+            -relief           => 'flat',
+            -padx             => 12,        -pady             => 5,
+            -activebackground => '#3a3d4e', -activeforeground => '#ffffff',
+            -font             => [ 'Helvetica', 9, 'bold' ],
+            -command          => $cmd_sub,
+        );
+    };
+
+    $mk_btn->( 'Extraer Features', '#83a9ff', sub {
+        $run_cmd->(
+            'Extraer Features',
+            'perl', "$ml_dir/extract_features.pl", $CSV_FILE, $features_out,
+        );
+    } )->pack( -side => 'left', -padx => 6, -pady => 4 );
+
+    $mk_btn->( 'Predecir', '#26a69a', sub {
+        unless ( -f $model_file ) {
+            $txt->delete( '1.0', 'end' );
+            $append->( "No se encontro el modelo: $model_file\n" );
+            $append->( "Primero ejecuta 'Entrenar Modelo'.\n" );
+            return;
+        }
+        unless ( -f $features_out ) {
+            $txt->delete( '1.0', 'end' );
+            $append->( "No se encontraron features: $features_out\n" );
+            $append->( "Primero presiona 'Extraer Features'.\n" );
+            return;
+        }
+        $run_cmd->( 'Predecir', 'python3', "$ml_dir/predict.py", $features_out, '--last', '15' );
+    } )->pack( -side => 'left', -padx => 2, -pady => 4 );
+
+    $mk_btn->( 'Entrenar Modelo', '#f6c90e', sub {
+        unless ( -f $features_out ) {
+            $txt->delete( '1.0', 'end' );
+            $append->( "No se encontraron features: $features_out\n" );
+            $append->( "Primero presiona 'Extraer Features'.\n" );
+            return;
+        }
+        $run_cmd->( 'Entrenar', 'python3', "$ml_dir/train.py", $features_out );
+    } )->pack( -side => 'left', -padx => 2, -pady => 4 );
+
+    $mk_btn->( 'Limpiar', '#8b929e', sub {
+        $txt->delete( '1.0', 'end' );
+        $status_lbl->configure( -text => 'Listo', -fg => '#8b929e' )
+            if defined $status_lbl;
+    } )->pack( -side => 'right', -padx => 6, -pady => 4 );
+
+    # Status bar
+    my $sf = $ml_win->Frame( -bg => '#1e222d' )->pack( -fill => 'x' );
+    $status_lbl = $sf->Label(
+        -text => 'Listo', -bg => '#1e222d', -fg => '#8b929e',
+        -font => [ 'Helvetica', 8 ], -anchor => 'w', -pady => 3,
+    )->pack( -side => 'left', -padx => 8 );
+    $sf->Label(
+        -text => "ml/", -bg => '#1e222d', -fg => '#485366',
+        -font => [ 'Helvetica', 8 ], -anchor => 'e',
+    )->pack( -side => 'right', -padx => 8 );
+}
+
+$toolbar->Button(
+    -text             => 'ML',
+    -bg               => '#2a2d3e',
+    -fg               => '#ab47bc',
+    -relief           => 'flat',
+    -padx             => 10,
+    -pady             => 3,
+    -activebackground => '#3a3d4e',
+    -activeforeground => '#ffffff',
+    -font             => [ 'Helvetica', 9, 'bold' ],
+    -command          => \&_open_ml_window,
+)->pack( -side => 'left', -padx => 4, -pady => 2 );
+
 $overlay_menu_panel = $mw->Frame(
     -bg                 => $MENU_BORDER,
     -borderwidth        => 1,
