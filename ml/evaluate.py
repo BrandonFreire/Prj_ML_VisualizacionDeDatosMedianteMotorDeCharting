@@ -1,100 +1,175 @@
 #!/usr/bin/env python3
-"""
-Evaluación del modelo predictivo en datos de testeo (Julio)
+"""Evalua el modelo LSTM persistido sobre features del 1 al 24 de julio."""
 
-Uso:
-    python3 evaluate.py features_test.csv
-"""
+from __future__ import annotations
 
-import sys
-import pandas as pd
-import numpy as np
-from sklearn.metrics import mean_absolute_error, r2_score, mean_squared_error
-import joblib
+import argparse
+import csv
 import json
+import sys
+from pathlib import Path
 
-# ============================================================
-_DIR        = os.path.dirname(os.path.abspath(__file__))
-INPUT_CSV   = sys.argv[1] if len(sys.argv) > 1 else os.path.join(_DIR, "features_test.csv")
-MODEL_FILE  = os.path.join(_DIR, "model_fantasmas.joblib")
-SCALER_FILE = os.path.join(_DIR, "scaler_params.joblib")
-PARAMS_FILE = os.path.join(_DIR, "norm_params.json")
+import numpy as np
 
-TARGETS = ['traces_3m', 'traces_5m', 'traces_10m', 'traces_15m']
-META_COLS = ['datetime', 'epoch', 'ghost_index']
-# ============================================================
+from lstm_core import (
+    TARGETS,
+    LSTMRegressor,
+    Preprocessor,
+    build_sequences,
+    enforce_count_constraints,
+    load_feature_csv,
+    regression_metrics,
+    sha256_file,
+    write_json,
+)
 
-print(f"Cargando modelo desde {MODEL_FILE}...")
-model  = joblib.load(MODEL_FILE)
-scaler = joblib.load(SCALER_FILE)
 
-with open(PARAMS_FILE) as f:
-    params = json.load(f)
-FEATURES = params['features']
+HERE = Path(__file__).resolve().parent
 
-print(f"Cargando datos de testeo desde {INPUT_CSV}...")
-df = pd.read_csv(INPUT_CSV)
-print(f"  {len(df)} registros")
 
-df = df.dropna(subset=FEATURES + TARGETS)
-for t in TARGETS:
-    df = df[df[t] >= 0]
-print(f"  {len(df)} registros válidos")
+def arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "input_csv", nargs="?", default=str(HERE / "features_test.csv")
+    )
+    parser.add_argument(
+        "--model", default=str(HERE / "model_fantasmas_lstm.npz")
+    )
+    parser.add_argument(
+        "--scaler", default=str(HERE / "scaler_params_lstm.npz")
+    )
+    parser.add_argument(
+        "--config", default=str(HERE / "model_config_lstm.json")
+    )
+    parser.add_argument(
+        "--metrics", default=str(HERE / "test_metrics_lstm.json")
+    )
+    parser.add_argument("--predictions", default=None)
+    parser.add_argument(
+        "--enforce-project-range",
+        action="store_true",
+        help="Exige fechas 2026-07-01..2026-07-24.",
+    )
+    return parser.parse_args()
 
-if len(df) == 0:
-    print("ERROR: sin datos válidos para evaluar.")
-    sys.exit(1)
 
-X = df[FEATURES].values
-y = df[TARGETS].values
+def main() -> int:
+    args = arguments()
+    print(f"Cargando modelo LSTM: {args.model}")
+    model, target_mean, target_scale, sequence_length = LSTMRegressor.load(
+        args.model
+    )
+    preprocessor = Preprocessor.load(args.scaler)
+    with open(args.config, encoding="utf-8") as handle:
+        config = json.load(handle)
+    if config.get("architecture") != "LSTM":
+        raise ValueError("La configuracion no declara arquitectura LSTM")
+    if config.get("convolutional_layers") not in ([], None):
+        raise ValueError("La configuracion contiene capas convolucionales")
 
-X_scaled = scaler.transform(X)
-y_pred   = model.predict(X_scaled)
-y_pred_i = np.round(y_pred).astype(int).clip(0)
+    print(f"Cargando test externo: {args.input_csv}")
+    rows, targets = load_feature_csv(args.input_csv, require_targets=True)
+    assert targets is not None
+    dates = [row.get("event_date", "") for row in rows]
+    if args.enforce_project_range and any(
+        not ("2026-07-01" <= date <= "2026-07-24") for date in dates
+    ):
+        raise ValueError(
+            "El test del proyecto solo admite datos del 1 al 24 de julio de 2026"
+        )
 
-# ============================================================
-# REPORTE DE EVALUACIÓN
-# ============================================================
-print("\n" + "="*60)
-print("EVALUACIÓN EN DATOS DE TESTEO (JULIO)")
-print("="*60)
-print(f"{'Ventana':<12} {'MAE':>8} {'RMSE':>8} {'R²':>8} {'Acc±0':>8} {'Acc±1':>8}")
-print("-"*60)
+    features = preprocessor.transform(rows)
+    if features.shape[1] != model.input_size:
+        raise ValueError(
+            f"Dimensiones incompatibles: scaler={features.shape[1]}, "
+            f"modelo={model.input_size}"
+        )
+    sequences, sequence_targets, indices = build_sequences(
+        features,
+        targets,
+        range(len(rows)),
+        sequence_length,
+    )
+    assert sequence_targets is not None
+    if not len(sequences):
+        raise ValueError("No hay historia suficiente para formar secuencias")
 
-for i, t in enumerate(TARGETS):
-    mae  = mean_absolute_error(y[:, i], y_pred[:, i])
-    rmse = np.sqrt(mean_squared_error(y[:, i], y_pred[:, i]))
-    r2   = r2_score(y[:, i], y_pred[:, i])
-    acc0 = np.mean(y[:, i].astype(int) == y_pred_i[:, i]) * 100
-    acc1 = np.mean(np.abs(y[:, i] - y_pred_i[:, i]) <= 1) * 100
-    print(f"{t:<12} {mae:>8.3f} {rmse:>8.3f} {r2:>8.3f} {acc0:>7.1f}% {acc1:>7.1f}%")
+    normalized_prediction = model.predict(sequences)
+    prediction = enforce_count_constraints(
+        normalized_prediction * target_scale + target_mean
+    )
+    metrics = regression_metrics(sequence_targets, prediction)
 
-print("="*60)
+    prediction_path = args.predictions
+    if prediction_path is None:
+        source = Path(args.input_csv)
+        prediction_path = str(
+            source.with_name(f"{source.stem}_lstm_predictions.csv")
+        )
+    Path(prediction_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(prediction_path, "w", newline="", encoding="utf-8") as handle:
+        header = [
+            "event_id",
+            "event_timestamp",
+            "event_date",
+            "event_hour",
+            "event_minute",
+            "event_index",
+            "ghost_index",
+        ]
+        for target in TARGETS:
+            header.extend((f"actual_{target}", f"prediction_{target}", f"residual_{target}"))
+        writer = csv.DictWriter(handle, fieldnames=header)
+        writer.writeheader()
+        for sequence_row, source_index in enumerate(indices):
+            source = rows[int(source_index)]
+            output = {name: source.get(name, "") for name in header[:7]}
+            for target_index, target in enumerate(TARGETS):
+                actual = float(sequence_targets[sequence_row, target_index])
+                predicted = float(prediction[sequence_row, target_index])
+                output[f"actual_{target}"] = actual
+                output[f"prediction_{target}"] = predicted
+                output[f"residual_{target}"] = predicted - actual
+            writer.writerow(output)
 
-# Ejemplos de predicciones
-print("\nEJEMPLOS DE PREDICCIONES (primeros 10 fantasmas del test):")
-print(f"{'#':<4} {'Fecha':<22} {'Tipo':<6} " +
-      " ".join(f"{'R'+t[7:]+'|P'+t[7:]:<10}" for t in TARGETS))
-print("-"*90)
+    payload = {
+        "architecture": "LSTM",
+        "convolutional_layers": [],
+        "test_csv": str(Path(args.input_csv).resolve()),
+        "test_sha256": sha256_file(args.input_csv),
+        "date_min": min(dates),
+        "date_max": max(dates),
+        "model": str(Path(args.model).resolve()),
+        "scaler_reloaded_transform_only": str(Path(args.scaler).resolve()),
+        "sequence_length": sequence_length,
+        "input_rows": len(rows),
+        "prediction_rows": len(indices),
+        "rows_without_initial_history": sequence_length - 1,
+        "metrics": metrics,
+        "comparison_csv": str(Path(prediction_path).resolve()),
+    }
+    write_json(args.metrics, payload)
 
-meta_available = all(c in df.columns for c in ['datetime', 'ghost_type'])
-for idx in range(min(10, len(df))):
-    row = df.iloc[idx]
-    fecha = str(row['datetime'])[:19] if 'datetime' in df.columns else str(idx)
-    tipo  = "ALTO" if row.get('ghost_type', 0) == 1 else "BAJO"
-    reales = [int(row[t]) for t in TARGETS]
-    preds  = [int(y_pred_i[idx, i]) for i in range(len(TARGETS))]
-    cols   = " ".join(f"{r}|{p:<8}" for r,p in zip(reales, preds))
-    print(f"{idx:<4} {fecha:<22} {tipo:<6} {cols}")
+    print("\nEvaluacion externa de julio:")
+    print(
+        f"{'Ventana':<10} {'MAE':>8} {'RMSE':>8} {'R2':>9} "
+        f"{'Exacta':>9} {'±1':>9}"
+    )
+    for target in TARGETS:
+        metric = metrics[target]
+        print(
+            f"{target:<10} {metric['mae']:>8.3f} {metric['rmse']:>8.3f} "
+            f"{metric['r2']:>9.3f} {metric['exact_accuracy']:>8.1f}% "
+            f"{metric['within_one_accuracy']:>8.1f}%"
+        )
+    print(f"\nMetricas guardadas:     {args.metrics}")
+    print(f"Comparacion guardada:   {prediction_path}")
+    return 0
 
-# Comparación por tipo de fantasma
-print("\nComparación por tipo de fantasma:")
-for tipo in [0, 1]:
-    mask = df['ghost_type'] == tipo if 'ghost_type' in df.columns else np.ones(len(df), bool)
-    if not mask.any():
-        continue
-    label = "ALTO" if tipo == 1 else "BAJO"
-    print(f"\n  Fantasma {label} ({mask.sum()} casos):")
-    for i, t in enumerate(TARGETS):
-        mae = mean_absolute_error(y[mask, i], y_pred[mask, i])
-        print(f"    {t}: MAE={mae:.3f}")
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, ValueError, AssertionError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        raise SystemExit(2)

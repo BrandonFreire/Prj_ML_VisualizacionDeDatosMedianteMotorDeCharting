@@ -341,8 +341,12 @@ sub _render_fibonacci {
     @events = grep {
         defined $_->{index} && defined $_->{from} && defined $_->{level}
             && $self->_event_visible_at($_, $current_bar)
-            && ($_->{scope}//'internal') eq 'external'
     } @events;
+    # El impulso externo es la fuente preferida. Durante su warm-up se usa la
+    # estructura interna ya confirmada para no dejar el control Fibonacci sin
+    # salida visual; nunca se mezclan ambos scopes en una misma geometria.
+    my @external = grep { ($_->{scope}//'internal') eq 'external' } @events;
+    @events = @external if @external;
     return unless @events;
 
     my ($ev) = sort { $b->{index} <=> $a->{index} } @events;
@@ -531,7 +535,6 @@ sub _render_fvg {
             );
         }
     }
-    $canvas->lower('fvg', 'candles') if $canvas->find('withtag', 'candles');
 }
 
 sub _active_fvgs_at {
@@ -664,7 +667,6 @@ sub _render_order_blocks {
             );
         }
     }
-    $canvas->lower('ob', 'candles') if $canvas->find('withtag', 'candles');
 }
 
 sub _ob_is_active_at {

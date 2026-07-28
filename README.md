@@ -67,3 +67,51 @@ my $ml = Market::ML::RegimePipeline->new(
 `Market::Indicators::PivotMissedReversal` ofrece pivotes regulares,
 reversiones omitidas, su nivel activo y un extremo provisional. Los eventos
 se publican al confirmarse, nunca en la vela extrema con información futura.
+Su Replay de rastros usa el `Pivot Length = 50` de `Ghosts_in_swings.txt`: una
+aparición al cambiar el ancla y un `move` únicamente cuando el precio marca un
+extremo estrictamente nuevo. Los empates mueven el icono vivo, pero no crean un
+`1` ni un target artificial. La interfaz conserva el AVWAP manual y añade las
+dos curvas del Pine: `Swing VWAP` desde el último pivote regular confirmado y
+`Ghost VWAP` desde la ubicación causal del fantasma vivo. En
+**Indicadores y Overlays → Pivots → Rastros (1)** se pueden verificar las
+etiquetas causalmente durante Replay.
+
+## Pipeline final Ghosts_in_swings
+
+El pipeline supervisado final usa exclusivamente:
+
+- `2026_Abril-Junio.csv` para seleccionar y ajustar una red LSTM;
+- `2026_07_24.csv` como test externo, sin reajustar scaler ni pesos;
+- apariciones y reubicaciones observables mediante Replay de 1 minuto;
+- distancias en PIP a los once grupos exigidos en 1m, 10m y 1h;
+- cuatro salidas simultáneas: `Y_3m`, `Y_5m`, `Y_10m` y `Y_15m`.
+
+```bash
+bash ml/run_all.sh
+```
+
+El extractor analítico vive en `Market::ML::GhostFeatureExtractor` y no carga
+Tk ni overlays. El entrenamiento guarda por separado
+`ml/model_fantasmas_lstm.npz`, `ml/scaler_params_lstm.npz`,
+`ml/model_config_lstm.json` y `ml/training_report_lstm.json`. El evaluador
+recarga esos artefactos y genera `ml/test_metrics_lstm.json`.
+
+Los artefactos históricos `.joblib` (Random Forest) y
+`artifacts/models/trained_model.pt` (GRU) se conservan sólo por trazabilidad;
+la interfaz y el pipeline oficial ya no los consumen.
+
+La interfaz no carga abril-junio al arrancar ni reentrena automáticamente.
+Por defecto muestra `2026_07_24.csv`, carga el modelo/scaler ya persistidos
+para predecir y sólo usa abril-junio cuando se pulsa **Entrenar Modelo**. Para
+visualizar otro archivo sin cambiar el conjunto oficial de entrenamiento:
+
+```bash
+perl market.pl ruta/al/archivo.csv
+```
+
+Pruebas específicas:
+
+```bash
+prove -I. t/27_ghost_feature_extractor.t
+python3 -m unittest ml/test_lstm_core.py
+```

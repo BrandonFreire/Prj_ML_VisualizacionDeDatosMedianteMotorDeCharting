@@ -22,6 +22,7 @@ sub new {
         band_1_enabled     => exists $args{band_1_enabled} ? $args{band_1_enabled} : 1,
         band_2_enabled     => exists $args{band_2_enabled} ? $args{band_2_enabled} : 1,
         band_3_enabled     => exists $args{band_3_enabled} ? $args{band_3_enabled} : 0,
+        ghost_swing_enabled => $args{ghost_swing_enabled} ? 1 : 0,
         # manual conserva la herramienta de dibujo. multipivot incorpora los
         # cinco anclajes analíticos exigidos por la Fase 2.
         anchor_mode        => $args{anchor_mode} // 'manual',
@@ -234,7 +235,100 @@ sub _calculate_lines {
         push @vwap_lines, $auto->{line} if $auto->{visible} && $auto->{line};
     }
 
+    # Ghosts_in_swings.txt mantiene dos AVWAP dinámicos: uno desde el último
+    # pivote regular confirmado (penúltimo swing frente al fantasma vivo) y
+    # otro desde la vela donde está el fantasma provisional. Son analíticos e
+    # independientes del anclaje manual, que se conserva sin cambios.
+    if ($self->{ghost_swing_enabled}) {
+        push @vwap_lines, @{ $self->_ghost_swing_lines($arr) };
+    }
+
     return (\@vwap_lines, $auto_result);
+}
+
+sub _ghost_swing_lines {
+    my ($self, $candles) = @_;
+    my $pivot = $self->{_pivot_ref};
+    return [] unless $pivot && @$candles;
+    my $cursor = $#$candles;
+    my @lines;
+
+    if ($pivot->can('get_ghost_anchors')) {
+        my @anchors = sort {
+            ($a->{confirmed_at} // 0) <=> ($b->{confirmed_at} // 0)
+                || ($a->{index} // 0) <=> ($b->{index} // 0)
+        } grep {
+            defined($_->{confirmed_at}) && $_->{confirmed_at} <= $cursor
+                && defined($_->{index}) && $_->{index} >= 0
+                && $_->{index} <= $cursor
+                && (($_->{type} // '') eq 'high'
+                    || ($_->{type} // '') eq 'low')
+        } @{ $pivot->get_ghost_anchors() // [] };
+        if (my $anchor = $anchors[-1]) {
+            my $line = $self->_vwap_line_from_anchor(
+                $candles, $anchor->{index}, $cursor,
+                anchor_source => 'ghost_regular_pivot',
+                pivot_type => $anchor->{type},
+                confirmation_index => $anchor->{confirmed_at},
+            );
+            push @lines, $line if $line;
+        }
+    }
+
+    my $ghost = $pivot->can('get_provisional_pivot_at')
+        ? $pivot->get_provisional_pivot_at($cursor)
+        : $pivot->can('get_current_ghost')
+            ? $pivot->get_current_ghost() : undef;
+    if ($ghost && defined($ghost->{index}) && $ghost->{index} <= $cursor) {
+        my $line = $self->_vwap_line_from_anchor(
+            $candles, $ghost->{index}, $cursor,
+            anchor_source => 'ghost_live',
+            pivot_type => $ghost->{type},
+            replay_safe => 1,
+        );
+        push @lines, $line if $line;
+    }
+    return \@lines;
+}
+
+sub _vwap_line_from_anchor {
+    my ($self, $candles, $start, $end, %metadata) = @_;
+    return undef unless defined($start) && defined($end)
+        && $start >= 0 && $start <= $end && $end <= $#$candles;
+    my (@values, @std_dev);
+    $#values = $#std_dev = $end;
+    my ($weight, $mean, $m2, $last) = (0, 0, 0, undef);
+    for my $index ($start .. $end) {
+        my $candle = $candles->[$index];
+        next unless _valid_vwap_candle($candle);
+        my $price = ($candle->{high} + $candle->{low} + $candle->{close}) / 3;
+        my $next_weight = $weight + $candle->{volume};
+        my $delta = $price - $mean;
+        my $next_mean = $mean + $candle->{volume} / $next_weight * $delta;
+        $m2 += $candle->{volume} * $delta * ($price - $next_mean);
+        ($weight, $mean) = ($next_weight, $next_mean);
+        my $variance = $m2 / $weight;
+        $variance = 0 if $variance < 0 && $variance > -1e-12;
+        $values[$index] = $mean + 0;
+        $std_dev[$index] = $variance > 0 ? sqrt($variance) : 0;
+        $last = $index;
+    }
+    return undef unless defined $last;
+    return {
+        id => join('_', $metadata{anchor_source} // 'ghost_swing', $start, $end),
+        anchor_idx => $start,
+        end_idx => $last,
+        values => \@values,
+        std_dev => \@std_dev,
+        mult_1 => $self->{std_mult_1},
+        mult_2 => $self->{std_mult_2},
+        mult_3 => $self->{std_mult_3},
+        band_1_enabled => $self->{band_1_enabled} ? 1 : 0,
+        band_2_enabled => $self->{band_2_enabled} ? 1 : 0,
+        band_3_enabled => $self->{band_3_enabled} ? 1 : 0,
+        replay_safe => 1,
+        %metadata,
+    };
 }
 
 # Construye una única instancia desde el missed pivot confirmado más reciente.

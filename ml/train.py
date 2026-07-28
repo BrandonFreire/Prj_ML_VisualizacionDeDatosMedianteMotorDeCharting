@@ -1,160 +1,292 @@
 #!/usr/bin/env python3
-"""
-Entrenamiento del modelo predictivo de Fantasmas
-Predice cuántos rastros deja el fantasma en ventanas de 3, 5, 10 y 15 minutos
+"""Entrena una LSTM causal multi-salida para Y_3m, Y_5m, Y_10m y Y_15m."""
 
-Uso:
-    python3 train.py features_train.csv
-"""
+from __future__ import annotations
 
+import argparse
 import sys
-import pandas as pd
+from pathlib import Path
+
 import numpy as np
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.multioutput import MultiOutputRegressor
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, r2_score, mean_squared_error
-import joblib
-import json
-import os
 
-# ============================================================
-# CONFIGURACIÓN
-# ============================================================
-_DIR        = os.path.dirname(os.path.abspath(__file__))
-INPUT_CSV   = sys.argv[1] if len(sys.argv) > 1 else os.path.join(_DIR, "features_train.csv")
-MODEL_FILE  = os.path.join(_DIR, "model_fantasmas.joblib")
-SCALER_FILE = os.path.join(_DIR, "scaler_params.joblib")
-PARAMS_FILE = os.path.join(_DIR, "norm_params.json")
-
-TARGETS = ['traces_3m', 'traces_5m', 'traces_10m', 'traces_15m']
-
-# Columnas de metadata (NO entran al modelo)
-META_COLS = ['datetime', 'epoch', 'ghost_index']
-
-FEATURES = [
-    'ghost_type',
-    'dist_ghost_pips',
-    'atr',
-    'body_atr', 'upper_wick_atr', 'lower_wick_atr',
-    'rsi', 'close_ret1_atr', 'close_ret5_atr', 'close_ret15_atr',
-    'vol', 'vol_ema9', 'vol_ratio',
-    'dist_sh5_above', 'dist_sl5_below',
-    'n_sh5_near', 'n_sl5_near',
-    'dist_sh10_above', 'dist_sl10_below',
-    'dist_bsl_above', 'dist_ssl_below',
-    'dist_bos_above', 'dist_bos_below',
-    'dist_fvg_above', 'dist_fvg_below',
-    'dist_ob_above', 'dist_ob_below',
-    'dist_fib_pips',
-    'zz_high_dist_pips', 'zz_low_dist_pips',
-]
-
-# ============================================================
-# CARGA Y LIMPIEZA
-# ============================================================
-print(f"Cargando {INPUT_CSV}...")
-df = pd.read_csv(INPUT_CSV)
-print(f"  {len(df)} registros, {len(df.columns)} columnas")
-
-# 999 = "sin nivel cercano detectado" — es información válida para el modelo,
-# no un valor faltante. Solo eliminamos filas con NaN reales (primeras barras
-# donde ATR/RSI aún no convergen) y filas con targets negativos (sin barras futuras).
-df = df.dropna(subset=FEATURES + TARGETS)
-for t in TARGETS:
-    df = df[df[t] >= 0]
-print(f"  {len(df)} registros después de limpieza")
-
-if len(df) < 50:
-    print("ERROR: muy pocos registros para entrenar. Verifique el CSV de entrada.")
-    sys.exit(1)
-
-X = df[FEATURES].values
-y = df[TARGETS].values
-
-# ============================================================
-# NORMALIZACIÓN
-# ============================================================
-print("Normalizando features...")
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
-
-# Guardar parámetros de normalización (para reproducibilidad)
-norm_params = {
-    "features": FEATURES,
-    "mean": scaler.mean_.tolist(),
-    "scale": scaler.scale_.tolist(),
-    "targets": TARGETS
-}
-with open(PARAMS_FILE, 'w') as f:
-    json.dump(norm_params, f, indent=2)
-
-# ============================================================
-# SPLIT TRAIN / VALIDACIÓN (80/20, sin shuffle para respetar tiempo)
-# ============================================================
-split = int(len(X_scaled) * 0.8)
-X_train, X_val = X_scaled[:split], X_scaled[split:]
-y_train, y_val = y[:split], y[split:]
-print(f"  Train: {len(X_train)} | Val: {len(X_val)}")
-
-# ============================================================
-# MODELO — Random Forest Multi-salida
-# Cada target (3m, 5m, 10m, 15m) tiene su propio árbol
-# ============================================================
-print("\nEntrenando Random Forest (MultiOutput)...")
-rf = RandomForestRegressor(
-    n_estimators=200,
-    max_depth=12,
-    min_samples_leaf=3,
-    random_state=42,
-    n_jobs=-1,
+from lstm_core import (
+    CATEGORICAL_COLUMNS,
+    METADATA_COLUMNS,
+    NUMERIC_COLUMNS,
+    TARGETS,
+    LSTMRegressor,
+    Preprocessor,
+    build_sequences,
+    enforce_count_constraints,
+    load_feature_csv,
+    regression_metrics,
+    sha256_file,
+    target_scaler,
+    train_epochs,
+    write_json,
 )
-model = MultiOutputRegressor(rf)
-model.fit(X_train, y_train)
 
-# ============================================================
-# EVALUACIÓN EN VALIDACIÓN
-# ============================================================
-y_pred = model.predict(X_val)
-y_pred_int = np.round(y_pred).astype(int).clip(0)
 
-print("\n" + "="*55)
-print("RESULTADOS EN VALIDACIÓN")
-print("="*55)
-print(f"{'Ventana':<12} {'MAE':>8} {'RMSE':>8} {'R²':>8} {'Exactitud±1':>12}")
-print("-"*55)
+HERE = Path(__file__).resolve().parent
 
-for i, target in enumerate(TARGETS):
-    mae  = mean_absolute_error(y_val[:, i], y_pred[:, i])
-    rmse = np.sqrt(mean_squared_error(y_val[:, i], y_pred[:, i]))
-    r2   = r2_score(y_val[:, i], y_pred[:, i])
-    # Exactitud: predicción dentro de ±1 del valor real
-    acc1 = np.mean(np.abs(y_val[:, i] - y_pred_int[:, i]) <= 1) * 100
-    print(f"{target:<12} {mae:>8.3f} {rmse:>8.3f} {r2:>8.3f} {acc1:>11.1f}%")
 
-print("="*55)
+def arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "input_csv",
+        nargs="?",
+        default=str(HERE / "features_train.csv"),
+        help="Features extraidas exclusivamente de abril-junio.",
+    )
+    parser.add_argument(
+        "--model", default=str(HERE / "model_fantasmas_lstm.npz")
+    )
+    parser.add_argument(
+        "--scaler", default=str(HERE / "scaler_params_lstm.npz")
+    )
+    parser.add_argument(
+        "--config", default=str(HERE / "model_config_lstm.json")
+    )
+    parser.add_argument(
+        "--report", default=str(HERE / "training_report_lstm.json")
+    )
+    parser.add_argument("--sequence-length", type=int, default=16)
+    parser.add_argument("--hidden-size", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--validation-fraction", type=float, default=0.20)
+    parser.add_argument("--patience", type=int, default=6)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--enforce-project-range",
+        action="store_true",
+        help="Exige que todas las filas pertenezcan a 2026-04-01..2026-06-30.",
+    )
+    return parser.parse_args()
 
-# Distribución de los targets en validación
-print("\nDistribución de rastros reales (validación):")
-for i, t in enumerate(TARGETS):
-    vals, counts = np.unique(y_val[:, i].astype(int), return_counts=True)
-    dist = " | ".join(f"{v}:{c}" for v,c in zip(vals, counts))
-    print(f"  {t}: {dist}")
 
-# Importancia de features (del primer estimador como referencia)
-if hasattr(model.estimators_[0], 'feature_importances_'):
-    imp = model.estimators_[0].feature_importances_
-    top5 = sorted(zip(FEATURES, imp), key=lambda x: -x[1])[:5]
-    print("\nTop-5 features más importantes (para traces_3m):")
-    for name, score in top5:
-        print(f"  {name:<30} {score:.4f}")
+def main() -> int:
+    args = arguments()
+    if args.sequence_length < 2:
+        raise ValueError("--sequence-length debe ser al menos 2")
+    if args.hidden_size < 2 or args.epochs < 1 or args.batch_size < 1:
+        raise ValueError("hidden-size, epochs y batch-size deben ser positivos")
+    if not 0.05 <= args.validation_fraction <= 0.40:
+        raise ValueError("--validation-fraction debe estar entre 0.05 y 0.40")
 
-# ============================================================
-# GUARDAR MODELO Y SCALER
-# ============================================================
-joblib.dump(model,  MODEL_FILE)
-joblib.dump(scaler, SCALER_FILE)
-print(f"\nModelo guardado en:  {MODEL_FILE}")
-print(f"Scaler guardado en:  {SCALER_FILE}")
-print(f"Parámetros en:       {PARAMS_FILE}")
+    print(f"Cargando features de entrenamiento: {args.input_csv}")
+    rows, targets = load_feature_csv(args.input_csv, require_targets=True)
+    assert targets is not None
+    if len(rows) < max(40, args.sequence_length * 3):
+        raise ValueError("No hay suficientes eventos para entrenar y validar")
+    dates = [row.get("event_date", "") for row in rows]
+    if args.enforce_project_range and any(
+        not ("2026-04-01" <= date <= "2026-06-30") for date in dates
+    ):
+        raise ValueError(
+            "El entrenamiento del proyecto solo admite datos de abril a junio de 2026"
+        )
+
+    split = int(len(rows) * (1.0 - args.validation_fraction))
+    split = max(args.sequence_length, min(split, len(rows) - args.sequence_length))
+    validation_start_time = int(float(rows[split]["event_timestamp"]))
+    # Purga de 15 minutos: ningun target de entrenamiento puede extenderse
+    # dentro del periodo usado como validacion.
+    train_end = split
+    while (
+        train_end > args.sequence_length
+        and int(float(rows[train_end - 1]["event_timestamp"])) + 15 * 60
+        >= validation_start_time
+    ):
+        train_end -= 1
+    if train_end < args.sequence_length * 2:
+        raise ValueError("La purga temporal deja muy pocas filas de entrenamiento")
+
+    selection_preprocessor = Preprocessor.fit(rows[:train_end])
+    selection_features = selection_preprocessor.transform(rows)
+    selection_target_mean, selection_target_scale = target_scaler(
+        targets[:train_end]
+    )
+    normalized_targets = (
+        targets - selection_target_mean
+    ) / selection_target_scale
+
+    train_x, train_y, train_indices = build_sequences(
+        selection_features,
+        normalized_targets,
+        range(args.sequence_length - 1, train_end),
+        args.sequence_length,
+    )
+    validation_x, validation_y, validation_indices = build_sequences(
+        selection_features,
+        normalized_targets,
+        range(split, len(rows)),
+        args.sequence_length,
+    )
+    assert train_y is not None and validation_y is not None
+    if not len(train_x) or not len(validation_x):
+        raise ValueError("No se pudieron formar secuencias de train/validacion")
+
+    print(
+        f"Eventos: {len(rows)} | train purgado: {len(train_indices)} | "
+        f"validacion: {len(validation_indices)}"
+    )
+    print(
+        f"Arquitectura: LSTM({selection_features.shape[1]} -> "
+        f"{args.hidden_size}) -> Dense(4), sin CNN"
+    )
+
+    selection_model = LSTMRegressor(
+        input_size=selection_features.shape[1],
+        hidden_size=args.hidden_size,
+        output_size=len(TARGETS),
+        seed=args.seed,
+    )
+    history, _, best_epoch = train_epochs(
+        selection_model,
+        train_x,
+        train_y,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        seed=args.seed,
+        validation=(validation_x, validation_y),
+        patience=args.patience,
+    )
+    for record in history:
+        print(
+            f"Epoca {int(record['epoch']):02d} "
+            f"train_mse={record['train_mse']:.5f} "
+            f"val_mse={record['validation_mse']:.5f}"
+        )
+
+    validation_normalized = selection_model.predict(validation_x)
+    validation_prediction = enforce_count_constraints(
+        validation_normalized * selection_target_scale + selection_target_mean
+    )
+    validation_actual = targets[validation_indices]
+    validation_metrics = regression_metrics(
+        validation_actual, validation_prediction
+    )
+
+    # Seleccionados los hiperparametros/numero de epocas sin mirar julio, se
+    # reajusta scaler y modelo final con TODO abril-junio.
+    final_preprocessor = Preprocessor.fit(rows)
+    final_features = final_preprocessor.transform(rows)
+    final_target_mean, final_target_scale = target_scaler(targets)
+    final_normalized_targets = (
+        targets - final_target_mean
+    ) / final_target_scale
+    final_x, final_y, final_indices = build_sequences(
+        final_features,
+        final_normalized_targets,
+        range(args.sequence_length - 1, len(rows)),
+        args.sequence_length,
+    )
+    assert final_y is not None
+    final_model = LSTMRegressor(
+        input_size=final_features.shape[1],
+        hidden_size=args.hidden_size,
+        output_size=len(TARGETS),
+        seed=args.seed,
+    )
+    final_history, _, _ = train_epochs(
+        final_model,
+        final_x,
+        final_y,
+        epochs=best_epoch,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        seed=args.seed,
+        validation=None,
+    )
+
+    Path(args.model).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.scaler).parent.mkdir(parents=True, exist_ok=True)
+    final_model.save(
+        args.model,
+        final_target_mean,
+        final_target_scale,
+        args.sequence_length,
+    )
+    final_preprocessor.save(args.scaler)
+
+    model_features = Preprocessor.model_feature_names()
+    forbidden = set(METADATA_COLUMNS) | set(TARGETS)
+    if forbidden.intersection(model_features):
+        raise AssertionError("Metadatos o targets ingresaron al tensor X")
+
+    config = {
+        "architecture": "LSTM",
+        "convolutional_layers": [],
+        "input_size": int(final_features.shape[1]),
+        "hidden_size": args.hidden_size,
+        "lstm_layers": 1,
+        "output_size": len(TARGETS),
+        "targets": list(TARGETS),
+        "sequence_length": args.sequence_length,
+        "numeric_features": list(NUMERIC_COLUMNS),
+        "categorical_features": list(CATEGORICAL_COLUMNS),
+        "model_feature_names": list(model_features),
+        "metadata_excluded_from_X": list(METADATA_COLUMNS),
+        "prediction_constraints": {
+            "nonnegative": True,
+            "monotonic_across_windows": True,
+            "maximum_per_window": [3, 5, 10, 15],
+        },
+    }
+    write_json(args.config, config)
+    report = {
+        "architecture": "LSTM recurrente sin capas convolucionales",
+        "source_csv": str(Path(args.input_csv).resolve()),
+        "source_sha256": sha256_file(args.input_csv),
+        "date_min": min(dates),
+        "date_max": max(dates),
+        "rows_complete": len(rows),
+        "selection": {
+            "split_index": split,
+            "train_end_after_15m_purge": train_end,
+            "validation_start_timestamp": validation_start_time,
+            "best_epoch": best_epoch,
+            "history": history,
+            "validation_metrics": validation_metrics,
+            "scaler_fit_rows": train_end,
+        },
+        "final_fit": {
+            "rows": len(rows),
+            "sequences": len(final_indices),
+            "epochs": best_epoch,
+            "history": final_history,
+            "scaler_fit_only_on_april_june_features": True,
+        },
+        "artifacts": {
+            "model": str(Path(args.model).resolve()),
+            "scaler": str(Path(args.scaler).resolve()),
+            "config": str(Path(args.config).resolve()),
+        },
+        "metadata_excluded_from_X": list(METADATA_COLUMNS),
+        "targets_predicted_simultaneously": list(TARGETS),
+    }
+    write_json(args.report, report)
+
+    print("\nValidacion temporal (antes del ajuste final):")
+    for target in TARGETS:
+        metric = validation_metrics[target]
+        print(
+            f"  {target}: MAE={metric['mae']:.3f} "
+            f"RMSE={metric['rmse']:.3f} R2={metric['r2']:.3f}"
+        )
+    print(f"\nModelo LSTM guardado: {args.model}")
+    print(f"Scaler guardado:      {args.scaler}")
+    print(f"Configuracion:         {args.config}")
+    print(f"Reporte:               {args.report}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, ValueError, AssertionError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        raise SystemExit(2)

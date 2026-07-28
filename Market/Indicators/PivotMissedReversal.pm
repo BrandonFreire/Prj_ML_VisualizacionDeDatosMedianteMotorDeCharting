@@ -4,13 +4,15 @@ use strict;
 use warnings;
 
 # Detector secuencial de pivotes regulares y de extremos de reversión que el
-# zigzag convencional omitió. Un pivote en i existe solo al cerrar i+length;
-# los "missed" se crean al confirmarse el siguiente pivote, nunca antes.
+# zigzag convencional omitió. También reproduce, vela a vela, el fantasma vivo
+# y los rastros "1" de Ghosts_in_swings.txt. Un pivote en i existe solo al
+# cerrar i+length; los "missed" se crean al confirmarse el siguiente pivote,
+# nunca antes.
 
 sub new {
     my ($class, %args) = @_;
     return bless {
-        length       => _length($args{length} // $args{pivot_length} // 20),
+        length       => _length($args{length} // $args{pivot_length} // 50),
         show_regular => exists $args{show_regular} ? ($args{show_regular} ? 1 : 0) : 1,
         show_missed  => exists $args{show_missed}  ? ($args{show_missed}  ? 1 : 0) : 1,
         _candles     => undef,
@@ -19,6 +21,9 @@ sub new {
         _levels      => [],
         _ambiguous   => [],
         _provisional => undef,
+        _trace_events => [],
+        _ghost_anchors => [],
+        _current_ghost => undef,
         _max_visible_index => -1,
     }, $class;
 }
@@ -30,6 +35,9 @@ sub reset {
     $self->{_levels}  = [];
     $self->{_ambiguous} = [];
     $self->{_provisional} = undef;
+    $self->{_trace_events} = [];
+    $self->{_ghost_anchors} = [];
+    $self->{_current_ghost} = undef;
     $self->{_candles} = undef;
     $self->{_max_visible_index} = -1;
     return;
@@ -173,6 +181,12 @@ sub compute {
             ($follow_max, $follow_min, $follow_max_i, $follow_min_i) = ($low, $low, $center, $center);
         }
     }
+    my ($trace_events, $ghost_anchors, $current_ghost) =
+        _reference_trace_replay(\@series, $length, $max_idx);
+    $self->{_trace_events} = $trace_events;
+    $self->{_ghost_anchors} = $ghost_anchors;
+    $self->{_current_ghost} = $current_ghost;
+
     return $self->_result($max_idx, $last_type, $last_index, $last_price);
 }
 
@@ -262,6 +276,10 @@ sub _result {
         } @{ $self->{_levels} } ],
         ambiguous_pivots   => [ map { { %$_ } } @{ $self->{_ambiguous} } ],
         provisional_pivot  => $provisional,
+        trace_events       => [ map { { %$_ } } @{ $self->{_trace_events} } ],
+        ghost_anchors      => [ map { { %$_ } } @{ $self->{_ghost_anchors} } ],
+        current_ghost      => $self->{_current_ghost}
+            ? { %{ $self->{_current_ghost} } } : undef,
         replay_safe        => 1,
     };
 }
@@ -294,7 +312,7 @@ sub _validate_candles {
 
 sub _length {
     my ($length) = @_;
-    $length = 20 unless defined($length) && $length =~ /^\d+$/;
+    $length = 50 unless defined($length) && $length =~ /^\d+$/;
     $length = int($length);
     $length = 1 if $length < 1;
     $length = 500 if $length > 500;
@@ -303,6 +321,14 @@ sub _length {
 
 sub get_regular_pivots  { return $_[0]->{_regular} }
 sub get_missed_pivots   { return $_[0]->{_missed}  }
+sub get_trace_events    { return $_[0]->{_trace_events} }
+sub get_ghost_anchors   {
+    return [ map { { %$_ } } @{ $_[0]->{_ghost_anchors} // [] } ];
+}
+sub get_current_ghost {
+    my ($self) = @_;
+    return $self->{_current_ghost} ? { %{ $self->{_current_ghost} } } : undef;
+}
 sub get_reversal_levels {
     my ($self) = @_;
     my $max_idx = $self->{_max_visible_index} // -1;
@@ -330,38 +356,156 @@ sub get_provisional_pivot_at {
     $current_bar = $#$candles if $current_bar > $#$candles;
     return undef if $current_bar < 0;
 
-    my @eligible = grep {
-        defined($_->{confirmed_at}) && $_->{confirmed_at} <= $current_bar
-            && defined($_->{index}) && $_->{index} <= $current_bar
-    } @{ $self->{_regular} // [] };
-    return undef unless @eligible;
-    my ($last) = sort {
-        $b->{confirmed_at} <=> $a->{confirmed_at}
-            || $b->{index} <=> $a->{index}
-    } @eligible;
-    return undef unless $last->{index} < $current_bar;
-
-    my $type = ($last->{type} // '') eq 'high' ? 'low' : 'high';
-    my ($best_index, $best_price);
-    for my $i ($last->{index} + 1 .. $current_bar) {
-        my $price = $candles->[$i]{$type};
-        next unless defined $price;
-        if (!defined($best_price)
-            || ($type eq 'high' ? $price > $best_price : $price < $best_price)) {
-            ($best_index, $best_price) = ($i, $price);
-        }
+    my $anchor;
+    for my $candidate (@{ $self->{_ghost_anchors} // [] }) {
+        last if ($candidate->{confirmed_at} // 0) > $current_bar;
+        $anchor = $candidate;
     }
+    return undef unless $anchor && $anchor->{index} < $current_bar;
+
+    my $type = $anchor->{os} == 1 ? 'low' : 'high';
+    my ($best_index, $best_price) = _latest_extreme(
+        $candles, $anchor->{index} + 1, $current_bar, $type,
+    );
     return undef unless defined $best_index;
-    return {
+    my %result = (
         id => join('_', 'provisional', $type, $best_index),
         kind => 'provisionalPivot', source => 'provisional',
         type => $type, pivotType => $type,
         index => $best_index, time => $candles->[$best_index]{time},
         price => $best_price + 0,
-        from_index => $last->{index}, from_price => $last->{price} + 0,
+        from_index => $anchor->{index},
         status => 'temporary', confirmed => 0, provisional => 1,
         max_visible_index => $current_bar, label => "\x{1F47B}", replay_safe => 1,
+    );
+    $result{from_price} = $anchor->{price} + 0
+        if defined $anchor->{price};
+    return \%result;
+}
+
+# Traducción causal del bloque "Live Floating Ghost Pivot" del Pine adjunto.
+# El código recibido imprimía dos "1" en cada cierre aunque x_last/y_last no
+# cambiasen. La intención documentada y el objetivo del proyecto son contar
+# movimientos hacia afuera del rango: se emite una aparición al cambiar el
+# ancla y un movimiento sólo ante un extremo de precio estrictamente nuevo.
+sub _reference_trace_replay {
+    my ($candles, $length, $max_idx) = @_;
+    my @anchors = ({
+        confirmed_at => 0, index => 0, os => 0,
+        type => 'initial', price => undef,
+    });
+    my (@events, $active);
+    my ($anchor_index, $anchor_price, $os) = (0, undef, 0);
+
+    for my $event_index (0 .. $max_idx) {
+        my ($pivot_high, $pivot_low, $center) = (0, 0, $event_index - $length);
+        if ($center >= $length) {
+            $pivot_high = _is_pivot($candles, $center, $length, 'high');
+            $pivot_low  = _is_pivot($candles, $center, $length, 'low');
+        }
+
+        my $new_anchor = $pivot_high || $pivot_low;
+        if ($pivot_high) {
+            ($anchor_index, $anchor_price, $os) =
+                ($center, $candles->[$center]{high} + 0, 1);
+        }
+        # En el Pine ambos if son independientes. Si una vela exterior es PH
+        # y PL simultáneamente, el bloque PL se ejecuta de último y prevalece.
+        if ($pivot_low) {
+            ($anchor_index, $anchor_price, $os) =
+                ($center, $candles->[$center]{low} + 0, 0);
+        }
+        if ($new_anchor) {
+            push @anchors, {
+                confirmed_at => $event_index, index => $anchor_index,
+                os => $os, type => $os == 1 ? 'high' : 'low',
+                price => $anchor_price,
+            };
+        }
+
+        my $ghost_type = $os == 1 ? 'low' : 'high';
+        if ($new_anchor || !$active) {
+            my ($ghost_index, $ghost_price) = _latest_extreme(
+                $candles, $anchor_index + 1, $event_index, $ghost_type,
+            );
+            next unless defined $ghost_index;
+            $active = {
+                type => $ghost_type, index => $ghost_index,
+                price => $ghost_price + 0,
+            };
+            push @events, _trace_event(
+                \@events, $candles, $event_index, $active, 'appearance',
+                $anchor_index, $os,
+            );
+            next;
+        }
+
+        my $price = $candles->[$event_index]{$ghost_type};
+        my $moves_outward = $ghost_type eq 'high'
+            ? $price > $active->{price}
+            : $price < $active->{price};
+        if ($moves_outward) {
+            @{$active}{qw(index price)} = ($event_index, $price + 0);
+            push @events, _trace_event(
+                \@events, $candles, $event_index, $active, 'move',
+                $anchor_index, $os,
+            );
+        }
+        elsif ($price == $active->{price}) {
+            # array.indexof() busca desde i=0 (vela más reciente); un empate
+            # mueve el icono vivo, pero no amplía el rango ni deja un rastro.
+            $active->{index} = $event_index;
+        }
+    }
+
+    my $current;
+    if ($active) {
+        $current = {
+            %$active,
+            anchor_index => $anchor_index,
+            anchor_price => $anchor_price,
+            anchor_type => $os == 1 ? 'high' : 'low',
+            max_visible_index => $max_idx,
+            replay_safe => 1,
+        };
+    }
+    return (\@events, \@anchors, $current);
+}
+
+sub _trace_event {
+    my ($events, $candles, $event_index, $active, $relocation,
+        $anchor_index, $os) = @_;
+    my $serial = scalar @$events;
+    return {
+        event_id => join('_', 'ghost_trace', $active->{type},
+            $event_index, $active->{index}, $serial),
+        kind => 'ghostTrace', source => 'Ghosts_in_swings.txt',
+        event_index => $event_index,
+        ghost_index => $active->{index},
+        ghost_price => $active->{price} + 0,
+        ghost_type => $active->{type},
+        relocation => $relocation,
+        anchor_index => $anchor_index,
+        anchor_type => $os == 1 ? 'high' : 'low',
+        event_timestamp => $candles->[$event_index]{time},
+        label => '1', confirmed => 1, replay_safe => 1,
     };
+}
+
+sub _latest_extreme {
+    my ($candles, $start, $end, $type) = @_;
+    $start = 0 if $start < 0;
+    return if $start > $end || $end > $#$candles;
+    my ($best_index, $best_price);
+    for my $index ($start .. $end) {
+        my $price = $candles->[$index]{$type};
+        next unless defined $price;
+        if (!defined($best_price)
+            || ($type eq 'high' ? $price >= $best_price : $price <= $best_price)) {
+            ($best_index, $best_price) = ($index, $price);
+        }
+    }
+    return ($best_index, $best_price);
 }
 
 sub _finite {

@@ -8,6 +8,8 @@ use warnings;
 # Lee datos de Market::Indicators::AnchoredVWAP — sin cálculos aquí.
 
 my $COLOR_VWAP  = '#ff9800';   # Naranja principal
+my $COLOR_SWING_UP = '#2962ff';
+my $COLOR_SWING_DOWN = '#9c27b0';
 my $COLOR_BAND1 = '#64b5f6';   # Azul claro
 my $COLOR_BAND2 = '#26a69a';   # Verde agua
 my $COLOR_BAND3 = '#e57373';   # Rojo claro
@@ -46,7 +48,7 @@ sub render {
     # del VWAP depende estrictamente de que exista un anchor_index validado.
     if (($ind->get_anchor_mode() // 'manual') eq 'manual') {
         my $manual_anchors = $ind->{_manual_anchors} // [];
-        return unless @$manual_anchors;
+        return unless @$manual_anchors || $ind->{ghost_swing_enabled};
     }
 
     my $lines = $ind->can('get_vwap_lines_at')
@@ -58,7 +60,12 @@ sub render {
     # _calculate_lines() también genera una línea auto_missed_pivot que se
     # inyecta en _vwap_lines — esa línea fantasma no debe dibujarse.
     if (($ind->get_anchor_mode() // 'manual') eq 'manual') {
-        $lines = [ grep { ($_->{anchor_source} // '') eq 'manual' } @$lines ];
+        $lines = [ grep {
+            my $source = $_->{anchor_source} // '';
+            $source eq 'manual'
+                || $source eq 'ghost_regular_pivot'
+                || $source eq 'ghost_live'
+        } @$lines ];
         return unless @$lines;
     }
 
@@ -80,6 +87,16 @@ sub render {
 
         my $color = $COLOR_VWAP;
         my $label = 'VWAP';
+        if (($line->{anchor_source} // '') eq 'ghost_regular_pivot') {
+            $color = ($line->{pivot_type} // '') eq 'high'
+                ? $COLOR_SWING_DOWN : $COLOR_SWING_UP;
+            $label = 'Swing VWAP';
+        }
+        elsif (($line->{anchor_source} // '') eq 'ghost_live') {
+            $color = ($line->{pivot_type} // '') eq 'high'
+                ? $COLOR_SWING_DOWN : $COLOR_SWING_UP;
+            $label = 'Ghost VWAP';
+        }
 
         # Construir coordenadas de la línea principal y bandas
         my (@coords_vwap, @coords_u1, @coords_l1, @coords_u2, @coords_l2, @coords_u3, @coords_l3);

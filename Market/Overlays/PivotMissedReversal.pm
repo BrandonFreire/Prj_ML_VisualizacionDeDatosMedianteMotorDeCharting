@@ -50,6 +50,8 @@ sub render {
         ? ($ind->get_missed_pivots() // []) : [];
     my $levels = $ind->can('get_reversal_levels')
         ? ($ind->get_reversal_levels() // []) : [];
+    my $traces = $ind->can('get_trace_events')
+        ? ($ind->get_trace_events() // []) : [];
 
     my @regular_visible = grep {
         _pivot_visible_at($_, $current_bar)
@@ -75,6 +77,10 @@ sub render {
         $canvas, $d_start, $d_end, $scale, \@missed_visible,
     ) if $self->_visible('show_pmr_missed', 1);
 
+    $self->_render_traces(
+        $canvas, $d_start, $d_end, $scale, $current_bar, $traces,
+    ) if $self->_visible('show_pmr_traces', 0);
+
     if ($self->_visible('show_pmr_provisional', 1)) {
         my $provisional = $ind->can('get_provisional_pivot_at')
             ? $ind->get_provisional_pivot_at($current_bar)
@@ -83,6 +89,32 @@ sub render {
         $self->_render_provisional(
             $canvas, $d_start, $d_end, $scale, $current_bar, $provisional,
         ) if $provisional;
+    }
+}
+
+sub _render_traces {
+    my ($self, $canvas, $d_start, $d_end, $scale, $current_bar, $traces) = @_;
+    my @visible = grep {
+        defined($_->{event_index}) && $_->{event_index} <= $current_bar
+            && defined($_->{ghost_index}) && defined($_->{ghost_price})
+            && $_->{ghost_index} >= $d_start && $_->{ghost_index} <= $d_end
+    } @$traces;
+    if ($self->{max_labels} > 0 && @visible > $self->{max_labels}) {
+        @visible = @visible[-$self->{max_labels} .. -1];
+    }
+    for my $trace (@visible) {
+        my $x = $scale->index_to_center_x($trace->{ghost_index});
+        my $price_y = $scale->value_to_y($trace->{ghost_price});
+        next if _outside_y($scale, $price_y, 24);
+        my $is_high = ($trace->{ghost_type} // '') eq 'high';
+        my $y = $price_y + ($is_high ? -13 : 13);
+        $canvas->createText(
+            $x, $y,
+            -text => '1',
+            -fill => _type_color($trace->{ghost_type}),
+            -font => [ 'Helvetica', 8, 'bold' ],
+            -tags => [ 'pmr_overlay', 'pmr_label', 'pmr_trace' ],
+        );
     }
 }
 

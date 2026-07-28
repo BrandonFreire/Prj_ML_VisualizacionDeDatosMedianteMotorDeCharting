@@ -137,4 +137,44 @@ cmp_ok($stored_points, '<=', scalar(@candles),
 ok(!(grep { ($_->{values_offset} // -1) != $_->{anchor_idx} } @{ $compact->get_vwap_lines }),
     'cada tramo compacto declara el desplazamiento de sus valores');
 
+{
+    package TestGhostSwingPivot;
+    sub new { bless {}, $_[0] }
+    sub get_missed_pivots { return [] }
+    sub get_ghost_anchors {
+        return [
+            { confirmed_at => 0, index => 0, os => 0, type => 'initial' },
+            { confirmed_at => 2, index => 1, os => 1,
+              type => 'high', price => 15 },
+        ];
+    }
+    sub get_provisional_pivot_at {
+        my ($self, $cursor) = @_;
+        return {
+            index => $cursor, price => 8, type => 'low',
+            from_index => 1, from_price => 15,
+        };
+    }
+}
+
+my $ghost_swing = Market::Indicators::AnchoredVWAP->new(
+    ghost_swing_enabled => 1,
+);
+$ghost_swing->set_pivot_missed_indicator(TestGhostSwingPivot->new);
+$ghost_swing->compute_all($market);
+my @swing_lines = grep {
+    ($_->{anchor_source} // '') =~ /^ghost_(?:regular_pivot|live)$/
+} @{ $ghost_swing->get_vwap_lines };
+is(scalar @swing_lines, 2,
+    'integra los AVWAP del último swing regular y del fantasma vivo');
+is($swing_lines[0]{anchor_idx}, 1,
+    'el Swing VWAP se ancla al pivote regular confirmado');
+is($swing_lines[1]{anchor_idx}, 4,
+    'el Ghost VWAP se ancla a la vela actual del fantasma');
+my @swing_at_2 = grep {
+    ($_->{anchor_source} // '') =~ /^ghost_(?:regular_pivot|live)$/
+} @{ $ghost_swing->get_vwap_lines_at(2) };
+is_deeply([ map { $_->{anchor_idx} } @swing_at_2 ], [1, 2],
+    'Replay reconstruye ambas anclas sólo con el cursor solicitado');
+
 done_testing();

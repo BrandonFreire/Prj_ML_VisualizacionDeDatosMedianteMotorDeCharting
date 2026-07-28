@@ -14,6 +14,43 @@ sub c {
     };
 }
 
+my $reference_defaults = Market::Indicators::PivotMissedReversal->new;
+is($reference_defaults->{length}, 50,
+    'usa Pivot Length 50, igual que Ghosts_in_swings.txt adjunto');
+
+my $trace_fixture = [
+    c(0, 10, 5),
+    c(1, 11, 6),  # aparición inicial HIGH
+    c(2, 15, 7),  # nuevo extremo HIGH
+    c(3, 12, 8),  # PH(2) confirmado: nueva ancla, fantasma LOW
+    c(4, 11, 7),  # nuevo extremo LOW
+    c(5, 13, 7),  # empate: mueve icono, pero no sale del rango
+    c(6, 14, 6),  # nuevo extremo LOW
+];
+my $trace_result = Market::Indicators::PivotMissedReversal->compute(
+    candles => $trace_fixture, length => 1,
+);
+is_deeply(
+    [
+        map {
+            [ $_->{event_index}, $_->{ghost_index}, $_->{ghost_type},
+              $_->{relocation}, $_->{ghost_price} ]
+        } @{ $trace_result->{trace_events} }
+    ],
+    [
+        [1, 1, 'high', 'appearance', 11],
+        [2, 2, 'high', 'move',       15],
+        [3, 3, 'low',  'appearance', 8],
+        [4, 4, 'low',  'move',       7],
+        [6, 6, 'low',  'move',       6],
+    ],
+    'Replay replica apariciones y deja un solo rastro por extremo nuevo',
+);
+ok(!grep({ $_->{event_index} == 5 } @{ $trace_result->{trace_events} }),
+    'un empate de precio no se etiqueta como movimiento fuera del rango');
+is($trace_result->{current_ghost}{index}, 6,
+    'expone el fantasma vivo en el extremo del último cursor');
+
 my $regular_candles = [
     c(0, 10, 5), c(1, 11, 6), c(2, 15, 7), c(3, 12, 6),
     c(4, 11, 4), c(5, 10, 6), c(6, 14, 7), c(7, 13, 6), c(8, 12, 5),

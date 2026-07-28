@@ -1,0 +1,119 @@
+{
+  "architecture": "LSTM recurrente sin capas convolucionales",
+  "source_csv": "/home/estudiante/Documents/Prj_ML_VisualizacionDeDatosMedianteMotorDeCharting/ml/features_train.csv",
+  "source_sha256": "4940e3f00a44535c9beac995bdc0a0e95e81376b89fc036aeec4d9bedad0bff3",
+  "date_min": "2026-04-01",
+  "date_max": "2026-06-30",
+  "rows_complete": 8012,
+  "selection": {
+    "split_index": 6409,
+    "train_end_after_15m_purge": 6409,
+    "validation_start_timestamp": 1781510520,
+    "best_epoch": 1,
+    "history": [
+      {
+        "epoch": 1.0,
+        "train_mse": 1.0012854528427124,
+        "validation_mse": 1.1519830226898193
+      },
+      {
+        "epoch": 2.0,
+        "train_mse": 0.9111928933858872,
+        "validation_mse": 1.1677955389022827
+      },
+      {
+        "epoch": 3.0,
+        "train_mse": 0.8559401696920395,
+        "validation_mse": 1.2083088159561157
+      },
+      {
+        "epoch": 4.0,
+        "train_mse": 0.8030248576402664,
+        "validation_mse": 1.2498924732208252
+      },
+      {
+        "epoch": 5.0,
+        "train_mse": 0.7508969515562057,
+        "validation_mse": 1.2741338014602661
+      },
+      {
+        "epoch": 6.0,
+        "train_mse": 0.7038478457927704,
+        "validation_mse": 1.329050064086914
+      },
+      {
+        "epoch": 7.0,
+        "train_mse": 0.6638884794712067,
+        "validation_mse": 1.3750280141830444
+      }
+    ],
+    "validation_metrics": {
+      "Y_3m": {
+        "n": 1603,
+        "mae": 0.8948774337768555,
+        "rmse": 1.052186369895935,
+        "r2": -0.0690044633337501,
+        "exact_accuracy": 28.509045539613226,
+        "within_one_accuracy": 85.71428571428571
+      },
+      "Y_5m": {
+        "n": 1603,
+        "mae": 1.2514084577560425,
+        "rmse": 1.4590468406677246,
+        "r2": -0.013473778637679956,
+        "exact_accuracy": 19.213973799126638,
+        "within_one_accuracy": 61.07298814722395
+      },
+      "Y_10m": {
+        "n": 1603,
+        "mae": 1.8818919658660889,
+        "rmse": 2.263068914413452,
+        "r2": -0.04152700738771231,
+        "exact_accuracy": 13.849033063006862,
+        "within_one_accuracy": 41.734248284466624
+      },
+      "Y_15m": {
+        "n": 1603,
+        "mae": 2.3784120082855225,
+        "rmse": 2.86916184425354,
+        "r2": -0.044958991945318605,
+        "exact_accuracy": 10.979413599500935,
+        "within_one_accuracy": 34.18590143480973
+      }
+    },
+    "scaler_fit_rows": 6409
+  },
+  "final_fit": {
+    "rows": 8012,
+    "sequences": 7997,
+    "epochs": 1,
+    "history": [
+      {
+        "epoch": 1.0,
+        "train_mse": 0.9963918962478637
+      }
+    ],
+    "scaler_fit_only_on_april_june_features": true
+  },
+  "artifacts": {
+    "model": "/home/estudiante/Documents/Prj_ML_VisualizacionDeDatosMedianteMotorDeCharting/ml/model_fantasmas_lstm.npz",
+    "scaler": "/home/estudiante/Documents/Prj_ML_VisualizacionDeDatosMedianteMotorDeCharting/ml/scaler_params_lstm.npz",
+    "config": "/home/estudiante/Documents/Prj_ML_VisualizacionDeDatosMedianteMotorDeCharting/ml/model_config_lstm.json"
+  },
+  "metadata_excluded_from_X": [
+    "event_id",
+    "event_timestamp",
+    "event_date",
+    "event_hour",
+    "event_minute",
+    "event_index",
+    "ghost_index",
+    "complete"
+  ],
+  "targets_predicted_simultaneously": [
+    "Y_3m",
+    "Y_5m",
+    "Y_10m",
+    "Y_15m"
+  ]
+}

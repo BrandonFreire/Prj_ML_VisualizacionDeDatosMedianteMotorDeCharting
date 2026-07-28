@@ -1,71 +1,45 @@
 #!/usr/bin/env bash
-# Pipeline completo: extrae features → entrena → evalúa → predice
-# Uso: bash run_all.sh [CSV_TRAIN] [CSV_TEST]
-#   CSV_TRAIN: archivo de datos de entrenamiento (default: ../2026_03_mayo.csv)
-#   CSV_TEST:  archivo de datos de prueba       (default: ../2026_03_julio.csv)
+# Pipeline oficial: abril-junio -> entrenamiento; 1-24 julio -> test externo.
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-TRAIN_DATA="${1:-../2026_03_mayo.csv}"
-TEST_DATA="${2:-../2026_03_julio.csv}"
+TRAIN_DATA="${1:-../2026_Abril-Junio.csv}"
+TEST_DATA="${2:-../2026_07_24.csv}"
 TRAIN_FEATURES="features_train.csv"
 TEST_FEATURES="features_test.csv"
 
-echo "=========================================="
-echo "  PIPELINE ML - PREDICCIÓN DE FANTASMAS"
-echo "=========================================="
-echo "  Datos de entrenamiento: $TRAIN_DATA"
-echo "  Datos de testeo:        $TEST_DATA"
-echo ""
+for source in "$TRAIN_DATA" "$TEST_DATA"; do
+    if [[ ! -f "$source" ]]; then
+        echo "ERROR: no se encontro $source" >&2
+        exit 1
+    fi
+done
 
-# ------------------------------------------
-# PASO 1: Extracción de features (Perl)
-# ------------------------------------------
-echo "[1/4] Extrayendo features de entrenamiento..."
-if [ ! -f "$TRAIN_DATA" ]; then
-    echo "ERROR: No se encontró $TRAIN_DATA"
-    exit 1
-fi
+echo "============================================================"
+echo " PIPELINE LSTM — RASTROS DE GHOSTS_IN_SWINGS"
+echo " Train: abril-junio | Test externo: 1-24 julio"
+echo "============================================================"
+
+echo "[1/5] Extraccion causal de entrenamiento..."
 perl extract_features.pl "$TRAIN_DATA" "$TRAIN_FEATURES"
-echo "  -> $TRAIN_FEATURES"
 
-echo "[2/4] Extrayendo features de testeo..."
-if [ ! -f "$TEST_DATA" ]; then
-    echo "ERROR: No se encontró $TEST_DATA"
-    exit 1
-fi
+echo "[2/5] Extraccion causal de test..."
 perl extract_features.pl "$TEST_DATA" "$TEST_FEATURES"
-echo "  -> $TEST_FEATURES"
 
-# ------------------------------------------
-# PASO 2: Entrenamiento (Python)
-# ------------------------------------------
-echo ""
-echo "[3/4] Entrenando modelo..."
-python3 train.py "$TRAIN_FEATURES"
+echo "[3/5] Entrenamiento y persistencia LSTM..."
+python3 train.py "$TRAIN_FEATURES" --enforce-project-range
 
-# ------------------------------------------
-# PASO 3: Evaluación en datos de testeo
-# ------------------------------------------
-echo ""
-echo "[4/4] Evaluando en datos de testeo (julio)..."
-python3 evaluate.py "$TEST_FEATURES"
+echo "[4/5] Evaluacion con modelo y scaler recargados..."
+python3 evaluate.py "$TEST_FEATURES" --enforce-project-range
 
-# ------------------------------------------
-# PASO 4 (opcional): Demo de predicción
-# ------------------------------------------
-echo ""
-echo "=========================================="
-echo "  Demo: últimas 5 predicciones en testeo"
-echo "=========================================="
-python3 predict.py "$TEST_FEATURES" --last 5
+echo "[5/5] Demostracion de las ultimas 10 predicciones..."
+python3 predict.py "$TEST_FEATURES" --last 10
 
-echo ""
-echo "Pipeline completo. Archivos generados:"
-echo "  model_fantasmas.joblib    <- modelo entrenado"
-echo "  scaler_params.joblib      <- normalizador"
-echo "  norm_params.json          <- parámetros de features"
-echo "  $TRAIN_FEATURES           <- features de entrenamiento"
-echo "  $TEST_FEATURES            <- features de testeo"
-echo "  ${TEST_FEATURES%.csv}_predictions.csv <- predicciones"
+echo
+echo "Pipeline completado:"
+echo "  model_fantasmas_lstm.npz       pesos LSTM finales"
+echo "  scaler_params_lstm.npz         imputacion/escalado de abril-junio"
+echo "  model_config_lstm.json         esquema y arquitectura"
+echo "  training_report_lstm.json      seleccion temporal y entrenamiento"
+echo "  test_metrics_lstm.json         evaluacion externa de julio"

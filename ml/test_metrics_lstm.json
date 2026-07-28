@@ -1,0 +1,49 @@
+{
+  "architecture": "LSTM",
+  "convolutional_layers": [],
+  "test_csv": "/home/estudiante/Documents/Prj_ML_VisualizacionDeDatosMedianteMotorDeCharting/ml/features_test.csv",
+  "test_sha256": "5f18159c5e0bc1205804a4f7e9c4921c4cef79c0cc2041719c025877b9dd5b13",
+  "date_min": "2026-07-01",
+  "date_max": "2026-07-24",
+  "model": "/home/estudiante/Documents/Prj_ML_VisualizacionDeDatosMedianteMotorDeCharting/ml/model_fantasmas_lstm.npz",
+  "scaler_reloaded_transform_only": "/home/estudiante/Documents/Prj_ML_VisualizacionDeDatosMedianteMotorDeCharting/ml/scaler_params_lstm.npz",
+  "sequence_length": 16,
+  "input_rows": 2440,
+  "prediction_rows": 2425,
+  "rows_without_initial_history": 15,
+  "metrics": {
+    "Y_3m": {
+      "n": 2425,
+      "mae": 0.8875556588172913,
+      "rmse": 1.045794129371643,
+      "r2": -0.006801688383135218,
+      "exact_accuracy": 28.123711340206185,
+      "within_one_accuracy": 86.14432989690721
+    },
+    "Y_5m": {
+      "n": 2425,
+      "mae": 1.2423924207687378,
+      "rmse": 1.4783061742782593,
+      "r2": -0.03458335335104046,
+      "exact_accuracy": 20.618556701030926,
+      "within_one_accuracy": 64.5360824742268
+    },
+    "Y_10m": {
+      "n": 2425,
+      "mae": 1.8300821781158447,
+      "rmse": 2.2019405364990234,
+      "r2": 0.014833024252330573,
+      "exact_accuracy": 14.309278350515465,
+      "within_one_accuracy": 43.71134020618557
+    },
+    "Y_15m": {
+      "n": 2425,
+      "mae": 2.330082893371582,
+      "rmse": 2.811929941177368,
+      "r2": 0.006426021958020889,
+      "exact_accuracy": 12.20618556701031,
+      "within_one_accuracy": 35.175257731958766
+    }
+  },
+  "comparison_csv": "/home/estudiante/Documents/Prj_ML_VisualizacionDeDatosMedianteMotorDeCharting/ml/features_test_lstm_predictions.csv"
+}

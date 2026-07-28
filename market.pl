@@ -61,7 +61,11 @@ use Market::Overlays::PivotMissedReversal;
 use Market::ChartEngine;
 
 # ---- Configuration ----
-my $CSV_FILE               = '2026_03.csv';
+# La interfaz visualiza/evalúa datos operativos; no carga automáticamente el
+# conjunto de entrenamiento. Se puede escoger otro CSV con:
+#   perl market.pl ruta/al/archivo.csv
+my $CSV_FILE               = @ARGV ? shift @ARGV : "$Bin/2026_07_24.csv";
+die "Uso: perl market.pl [DATOS_PARA_GRAFICA.csv]\n" if @ARGV;
 my $ATR_PERIOD             = 14;
 my $PRICE_H                = 500;
 my $VOLUME_H               = 90;
@@ -236,7 +240,7 @@ print "Done.\n";
 # ---- 3g. Anchored VWAP Multipivot (5 anchors) ----
 print "Computing Pivot Missed Reversal...\n";
 my $pivot_missed_ind =
-  Market::Indicators::PivotMissedReversal->new( length => 20 );
+  Market::Indicators::PivotMissedReversal->new( length => 50 );
 $pivot_missed_ind->compute_all($market);
 printf "  Regular: %d  Missed: %d\n",
   scalar @{ $pivot_missed_ind->get_regular_pivots() },
@@ -258,6 +262,7 @@ my $vwap_ind = Market::Indicators::AnchoredVWAP->new(
    # La visibilidad inicial sigue apagada; habilitar el cálculo permite que
    # el interruptor "Banda 3x" del menú haga efecto cuando el usuario lo marque.
     band_3_enabled => 1,
+    ghost_swing_enabled => 1,
 
     # El CSV usa -05:00. Market Open queda separado de Session Start y toma
     # la apertura oficial de las 09:30 en la zona horaria de los datos.
@@ -425,6 +430,7 @@ my %overlay_visibility = (
     show_pmr_regular     => 0,
     show_pmr_missed      => 0,
     show_pmr_levels      => 0,
+    show_pmr_traces      => 0,
     show_pmr_provisional => 0,
     show_pmr_segments    => 0,
 
@@ -564,6 +570,7 @@ my %overlay_parent_for = (
     show_pmr_regular        => 'pmr_enabled',
     show_pmr_missed         => 'pmr_enabled',
     show_pmr_levels         => 'pmr_enabled',
+    show_pmr_traces         => 'pmr_enabled',
     show_pmr_provisional    => 'pmr_enabled',
     show_pmr_segments       => 'pmr_enabled',
     show_supertrend         => 'strategy_enabled',
@@ -820,6 +827,7 @@ $build_overlay_detail = sub {
         $add_overlay_toggle->( 'Pivotes regulares',  'show_pmr_regular', 0 );
         $add_overlay_toggle->( 'Fantasmas (missed)', 'show_pmr_missed',  0 );
         $add_overlay_toggle->( 'Niveles fantasma',   'show_pmr_levels',  0 );
+        $add_overlay_toggle->( 'Rastros (1)',         'show_pmr_traces',  0 );
         $add_overlay_toggle->(
             'Fantasma provisional',
             'show_pmr_provisional', 0
@@ -991,9 +999,10 @@ sub _open_ml_window {
         -font => [ 'Helvetica', 10, 'bold' ], -pady => 6,
     )->pack( -side => 'left', -padx => 10 );
     $hdr->Label(
-        -text => "CSV: $CSV_FILE",
+        -text => "Vista/prediccion: $CSV_FILE\n"
+               . "Entrenamiento fijo: 2026_Abril-Junio.csv",
         -bg   => '#1e222d', -fg => '#8b929e',
-        -font => [ 'Helvetica', 9 ],
+        -font => [ 'Helvetica', 8 ], -justify => 'right',
     )->pack( -side => 'right', -padx => 10 );
 
     # Botones
@@ -1038,7 +1047,7 @@ sub _open_ml_window {
         $txt->see('end');
     };
 
-    my $ml_dir = 'ml';
+    my $ml_dir = "$Bin/ml";
 
     my $run_cmd = sub {
         my ( $label, @cmd ) = @_;
@@ -1078,7 +1087,7 @@ sub _open_ml_window {
     };
 
     my $features_out = "$ml_dir/features_live.csv";
-    my $model_file   = "$ml_dir/model_fantasmas.joblib";
+    my $model_file   = "$ml_dir/model_fantasmas_lstm.npz";
 
     my $mk_btn = sub {
         my ( $text, $fg, $cmd_sub ) = @_;
@@ -1096,7 +1105,8 @@ sub _open_ml_window {
     $mk_btn->( 'Extraer Features', '#83a9ff', sub {
         $run_cmd->(
             'Extraer Features',
-            'perl', "$ml_dir/extract_features.pl", $CSV_FILE, $features_out,
+            'perl', "$ml_dir/extract_features.pl", '--include-incomplete',
+            $CSV_FILE, $features_out,
         );
     } )->pack( -side => 'left', -padx => 6, -pady => 4 );
 
@@ -1117,13 +1127,10 @@ sub _open_ml_window {
     } )->pack( -side => 'left', -padx => 2, -pady => 4 );
 
     $mk_btn->( 'Entrenar Modelo', '#f6c90e', sub {
-        unless ( -f $features_out ) {
-            $txt->delete( '1.0', 'end' );
-            $append->( "No se encontraron features: $features_out\n" );
-            $append->( "Primero presiona 'Extraer Features'.\n" );
-            return;
-        }
-        $run_cmd->( 'Entrenar', 'python3', "$ml_dir/train.py", $features_out );
+        $run_cmd->(
+            'Pipeline oficial abril-junio / julio',
+            'bash', "$ml_dir/run_all.sh",
+        );
     } )->pack( -side => 'left', -padx => 2, -pady => 4 );
 
     $mk_btn->( 'Limpiar', '#8b929e', sub {

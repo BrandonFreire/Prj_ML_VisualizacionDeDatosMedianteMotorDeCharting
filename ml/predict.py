@@ -1,164 +1,154 @@
 #!/usr/bin/env python3
-"""
-Demo de predicción — carga el modelo entrenado y predice sobre un CSV de features.
+"""Carga la LSTM y el scaler persistidos y genera predicciones reproducibles."""
 
-Uso:
-    python3 predict.py features_test.csv          # predice todos
-    python3 predict.py features_test.csv 5        # muestra los primeros N
-    python3 predict.py features_test.csv --last 3 # muestra los últimos N
+from __future__ import annotations
 
-Salida:
-    Tabla con fecha, tipo de fantasma, predicciones y (si están disponibles) los
-    valores reales para comparar.
-"""
-
-import sys
-import os
-import pandas as pd
-import numpy as np
-import joblib
+import argparse
+import csv
 import json
+import math
+import sys
+from pathlib import Path
 
-# ============================================================
-_DIR        = os.path.dirname(os.path.abspath(__file__))
-MODEL_FILE  = os.path.join(_DIR, "model_fantasmas.joblib")
-SCALER_FILE = os.path.join(_DIR, "scaler_params.joblib")
-PARAMS_FILE = os.path.join(_DIR, "norm_params.json")
-TARGETS     = ['traces_3m', 'traces_5m', 'traces_10m', 'traces_15m']
-# ============================================================
+import numpy as np
 
-def load_model():
-    if not os.path.exists(MODEL_FILE):
-        print(f"ERROR: No se encontró el modelo '{MODEL_FILE}'.")
-        print("  Ejecute primero:  python3 train.py features_train.csv")
-        sys.exit(1)
-    model  = joblib.load(MODEL_FILE)
-    scaler = joblib.load(SCALER_FILE)
-    with open(PARAMS_FILE) as f:
-        params = json.load(f)
-    return model, scaler, params['features']
+from lstm_core import (
+    TARGETS,
+    LSTMRegressor,
+    Preprocessor,
+    build_sequences,
+    enforce_count_constraints,
+    load_feature_csv,
+)
 
-def main():
-    args = sys.argv[1:]
-    if not args:
-        print(__doc__)
-        sys.exit(0)
 
-    input_csv = args[0]
-    n_show = None
-    show_last = False
+HERE = Path(__file__).resolve().parent
 
-    i = 1
-    while i < len(args):
-        if args[i] == '--last' and i + 1 < len(args):
-            show_last = True
-            n_show = int(args[i + 1])
-            i += 2
-        elif args[i].lstrip('-').isdigit():
-            n_show = int(args[i])
-            i += 1
-        else:
-            i += 1
 
-    if not os.path.exists(input_csv):
-        print(f"ERROR: No se encontró el archivo '{input_csv}'")
-        sys.exit(1)
+def arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("input_csv")
+    parser.add_argument(
+        "--model", default=str(HERE / "model_fantasmas_lstm.npz")
+    )
+    parser.add_argument(
+        "--scaler", default=str(HERE / "scaler_params_lstm.npz")
+    )
+    parser.add_argument(
+        "--config", default=str(HERE / "model_config_lstm.json")
+    )
+    parser.add_argument("--output", default=None)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--last", type=int, default=None)
+    group.add_argument("--limit", type=int, default=None)
+    return parser.parse_args()
 
-    print(f"Cargando modelo...")
-    model, scaler, features = load_model()
 
-    print(f"Cargando {input_csv}...")
-    df = pd.read_csv(input_csv)
-    total = len(df)
-    print(f"  {total} registros")
+def _optional_actual(row: dict, target: str) -> float | None:
+    text = str(row.get(target, "")).strip()
+    if not text:
+        return None
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) else None
 
-    df_clean = df.dropna(subset=features)
-    print(f"  {len(df_clean)} registros con features completas")
 
-    if len(df_clean) == 0:
-        print("ERROR: ningún registro tiene todas las features.")
-        sys.exit(1)
+def main() -> int:
+    args = arguments()
+    model, target_mean, target_scale, sequence_length = LSTMRegressor.load(
+        args.model
+    )
+    preprocessor = Preprocessor.load(args.scaler)
+    with open(args.config, encoding="utf-8") as handle:
+        config = json.load(handle)
+    if config.get("architecture") != "LSTM":
+        raise ValueError("El artefacto configurado no es LSTM")
 
-    X = df_clean[features].values
-    X_scaled = scaler.transform(X)
-    y_pred = model.predict(X_scaled)
-    y_pred_i = np.round(y_pred).astype(int).clip(0)
+    rows, _ = load_feature_csv(args.input_csv, require_targets=False)
+    features = preprocessor.transform(rows)
+    if features.shape[1] != model.input_size:
+        raise ValueError("El CSV no coincide con el esquema persistido")
+    sequences, _, indices = build_sequences(
+        features, None, range(len(rows)), sequence_length
+    )
+    if not len(sequences):
+        raise ValueError(
+            f"Se necesitan al menos {sequence_length} eventos para predecir"
+        )
+    normalized_prediction = model.predict(sequences)
+    prediction = enforce_count_constraints(
+        normalized_prediction * target_scale + target_mean
+    )
 
-    has_targets = all(t in df_clean.columns for t in TARGETS)
-    has_datetime = 'datetime' in df_clean.columns
+    output = args.output
+    if output is None:
+        source = Path(args.input_csv)
+        output = str(source.with_name(f"{source.stem}_lstm_predictions.csv"))
+    Path(output).parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "event_id",
+        "event_timestamp",
+        "event_date",
+        "event_hour",
+        "event_minute",
+        "ghost_type",
+        "relocation",
+    ]
+    for target in TARGETS:
+        fieldnames.append(f"prediction_{target}")
+        fieldnames.append(f"actual_{target}")
+    with open(output, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for prediction_index, source_index in enumerate(indices):
+            source = rows[int(source_index)]
+            result = {name: source.get(name, "") for name in fieldnames[:7]}
+            for target_index, target in enumerate(TARGETS):
+                result[f"prediction_{target}"] = float(
+                    prediction[prediction_index, target_index]
+                )
+                actual = _optional_actual(source, target)
+                result[f"actual_{target}"] = "" if actual is None else actual
+            writer.writerow(result)
 
-    if show_last:
-        subset = df_clean.iloc[-n_show:] if n_show else df_clean
-        pred_sub = y_pred_i[-n_show:] if n_show else y_pred_i
-    elif n_show:
-        subset = df_clean.iloc[:n_show]
-        pred_sub = y_pred_i[:n_show]
-    else:
-        subset = df_clean
-        pred_sub = y_pred_i
+    display_indices = np.arange(len(indices))
+    if args.last is not None:
+        if args.last < 1:
+            raise ValueError("--last debe ser positivo")
+        display_indices = display_indices[-args.last :]
+    elif args.limit is not None:
+        if args.limit < 1:
+            raise ValueError("--limit debe ser positivo")
+        display_indices = display_indices[: args.limit]
 
-    # ========================================================
-    # CABECERA
-    # ========================================================
-    print()
-    print("=" * 85)
-    print("PREDICCIONES DE RASTROS DE FANTASMAS")
-    print("Columnas: Real|Pred para cada ventana (si hay targets disponibles)")
-    print("=" * 85)
+    print("Predicciones LSTM de rastros futuros")
+    print(
+        f"{'Fecha':<20} {'Tipo':<5} {'Evento':<10} "
+        + " ".join(f"{target:>9}" for target in TARGETS)
+    )
+    for prediction_index in display_indices:
+        source = rows[int(indices[prediction_index])]
+        values = " ".join(
+            f"{prediction[prediction_index, target_index]:>9.2f}"
+            for target_index in range(len(TARGETS))
+        )
+        print(
+            f"{source.get('event_date', '')} "
+            f"{int(float(source.get('event_hour', 0))):02d}:"
+            f"{int(float(source.get('event_minute', 0))):02d} "
+            f"{source.get('ghost_type', ''):<5} "
+            f"{source.get('relocation', ''):<10} {values}"
+        )
+    print(f"\nPredicciones generadas: {len(indices)}")
+    print(f"Guardadas en: {output}")
+    return 0
 
-    header = f"{'#':<5} {'Fecha':<22} {'Tipo':<7}"
-    for t in TARGETS:
-        lbl = t[7:] + 'm'
-        header += f" {'R|P_'+lbl:<10}" if has_targets else f" {'Pred_'+lbl:<8}"
-    print(header)
-    print("-" * 85)
 
-    for row_i, (_, row) in enumerate(subset.iterrows()):
-        tipo = "ALTO" if row.get('ghost_type', 0) == 1 else "BAJO"
-        fecha = str(row['datetime'])[:19] if has_datetime else f"#{row_i}"
-        line = f"{row_i:<5} {fecha:<22} {tipo:<7}"
-
-        for ti, t in enumerate(TARGETS):
-            pred = pred_sub[row_i, ti]
-            if has_targets and not np.isnan(row.get(t, float('nan'))):
-                real = int(row[t])
-                diff = pred - real
-                marker = " " if diff == 0 else ("+" if diff > 0 else "-")
-                line += f" {real}|{pred}{marker}{'':5}"
-            else:
-                line += f" {pred:<8}"
-        print(line)
-
-    print("=" * 85)
-
-    # ========================================================
-    # RESUMEN ESTADÍSTICO
-    # ========================================================
-    print(f"\nTotal predicciones generadas: {len(df_clean)}")
-    print("\nDistribución de predicciones:")
-    print(f"{'Ventana':<14} {'Min':>5} {'Máx':>5} {'Media':>8} {'Mediana':>8}")
-    print("-" * 45)
-    for i, t in enumerate(TARGETS):
-        col = y_pred_i[:, i]
-        print(f"{t:<14} {col.min():>5} {col.max():>5} {col.mean():>8.2f} {np.median(col):>8.1f}")
-
-    if has_targets:
-        from sklearn.metrics import mean_absolute_error
-        y_real = df_clean[TARGETS].values
-        print("\nMAE en el conjunto predicho:")
-        for i, t in enumerate(TARGETS):
-            mask = ~np.isnan(y_real[:, i])
-            if mask.sum() > 0:
-                mae = mean_absolute_error(y_real[mask, i], y_pred_i[mask, i])
-                print(f"  {t}: {mae:.3f}")
-
-    # Guardar predicciones a CSV
-    out_path = input_csv.replace('.csv', '_predictions.csv')
-    out_df = df_clean.copy()
-    for i, t in enumerate(TARGETS):
-        out_df[f'pred_{t}'] = y_pred_i[:, i]
-    out_df.to_csv(out_path, index=False)
-    print(f"\nPredicciones guardadas en: {out_path}")
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, ValueError, AssertionError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        raise SystemExit(2)

@@ -22,6 +22,7 @@ use Market::Overlays::PivotMissedReversal;
     sub createRectangle { shift->_record('createRectangle', @_) }
     sub createOval      { shift->_record('createOval',      @_) }
     sub createPolygon   { shift->_record('createPolygon',   @_) }
+    sub createText      { shift->_record('createText',      @_) }
 
     sub clear { $_[0]->{calls} = [] }
 
@@ -72,12 +73,19 @@ use Market::Overlays::PivotMissedReversal;
                 { type => 'high', price => 18, start_index => 7, end_index => 10,
                   created_at => 9, active => 1 },
             ],
+            traces => [
+                {
+                    event_index => 6, ghost_index => 5, ghost_price => 6,
+                    ghost_type => 'low', relocation => 'appearance',
+                },
+            ],
         }, shift;
     }
 
     sub get_regular_pivots  { return $_[0]->{regular} }
     sub get_missed_pivots   { return $_[0]->{missed} }
     sub get_reversal_levels { return $_[0]->{levels} }
+    sub get_trace_events    { return $_[0]->{traces} }
 }
 
 {
@@ -101,6 +109,7 @@ my $visibility = {
     show_pmr_regular  => 1,
     show_pmr_missed   => 1,
     show_pmr_levels   => 1,
+    show_pmr_traces   => 1,
     show_pmr_segments => 1,
 };
 my $overlay = Market::Overlays::PivotMissedReversal->new(
@@ -119,6 +128,8 @@ is(scalar @{ $canvas->calls_with_tag('pmr_level', 'createLine') }, 0,
     'el nivel fantasma tampoco se adelanta en Replay');
 is(scalar @{ $canvas->calls_with_tag('pmr_segment', 'createLine') }, 0,
     'no inventa un segmento sin dos extremos visibles');
+is(scalar @{ $canvas->calls_with_tag('pmr_trace', 'createText') }, 0,
+    'un rastro no aparece antes de su evento Replay');
 
 $canvas->clear;
 $overlay->render($canvas, 0, 10, $scale, 6);
@@ -132,6 +143,8 @@ is($level_lines->[0]{args}[2], 65,
     'el nivel queda cortado exactamente en el cursor de Replay');
 ok(@{ $canvas->calls_with_tag('pmr_segment', 'createLine') } >= 1,
     'los segmentos opcionales conectan únicamente extremos ya visibles');
+is(scalar @{ $canvas->calls_with_tag('pmr_trace', 'createText') }, 1,
+    'el rastro 1 aparece exactamente al alcanzar su evento Replay');
 
 $canvas->clear;
 $overlay->render($canvas, 0, 10, $scale, 9);

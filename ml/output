@@ -1,16 +1,25 @@
-==========================================
-  PIPELINE ML - PREDICCIÓN DE FANTASMAS
-==========================================
-  Datos de entrenamiento: ../2026_03_junio.csv
-  Datos de testeo:        ../2026_03_julio.csv
+============================================================
+ REGISTRO LEGACY — NO CORRESPONDE AL PIPELINE FINAL
+============================================================
 
-[1/4] Extrayendo features de entrenamiento...
-Cargando datos de ../2026_03_junio.csv...
-  4529 barras cargadas.
-Calculando ATR(14), EMA_vol(9), RSI(14)...
-Pre-calculando swing highs/lows (k=5)...
-  SH: 264  SL: 267
-Detectando fantasmas (PivotMissedReversal, length=20)...
-  Fantasmas encontrados: 24
-Cargando market data para indicadores avanzados...
-Indicadores listos. Extrayendo features...
+El flujo oficial ya no usa CSV mensuales de marzo, Random Forest, GRU ni
+Pivot Length 20. Este archivo se conserva únicamente para trazabilidad.
+
+Pipeline vigente:
+  bash ml/run_all.sh
+
+Entrenamiento:
+  2026_Abril-Junio.csv
+
+Test externo:
+  2026_07_24.csv
+
+Indicador:
+  Ghosts_in_swings.txt, Pivot Length 50, un rastro por extremo nuevo
+
+Artefactos vigentes:
+  ml/model_fantasmas_lstm.npz
+  ml/scaler_params_lstm.npz
+  ml/model_config_lstm.json
+  ml/training_report_lstm.json
+  ml/test_metrics_lstm.json
