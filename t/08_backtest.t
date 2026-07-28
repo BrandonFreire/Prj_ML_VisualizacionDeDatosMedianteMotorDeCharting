@@ -23,7 +23,6 @@ my $engine = Market::Backtest->new(
 
 my $result = $engine->run(
     candles => [
-        # El high de esta vela no puede cerrar la señal que nace aquí.
         candle(0, 100, 200, 50, 100),
         candle(1, 100, 101, 99, 101),
         candle(2, 101, 105, 100, 104),

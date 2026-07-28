@@ -3,16 +3,13 @@ package Market::Overlays::AnchoredVWAP;
 use strict;
 use warnings;
 
-# Renderizado del Anchored VWAP sobre el Canvas de Perl/Tk.
-# Dibuja la línea VWAP continua y sus bandas de desviación estándar.
-# Lee datos de Market::Indicators::AnchoredVWAP — sin cálculos aquí.
 
-my $COLOR_VWAP  = '#ff9800';   # Naranja principal
+my $COLOR_VWAP  = '#ff9800';
 my $COLOR_SWING_UP = '#2962ff';
 my $COLOR_SWING_DOWN = '#9c27b0';
-my $COLOR_BAND1 = '#64b5f6';   # Azul claro
-my $COLOR_BAND2 = '#26a69a';   # Verde agua
-my $COLOR_BAND3 = '#e57373';   # Rojo claro
+my $COLOR_BAND1 = '#64b5f6';
+my $COLOR_BAND2 = '#26a69a';
+my $COLOR_BAND3 = '#e57373';
 
 sub new {
     my ($class, %args) = @_;
@@ -43,9 +40,6 @@ sub render {
     $canvas->delete('vwap_overlay');
     return unless $self->_visible('vwap_enabled', 1);
 
-    # En modo manual, no dibujar nada si el usuario aún no ha seleccionado
-    # un punto de anclaje explícito (vela específica).  El cálculo y dibujado
-    # del VWAP depende estrictamente de que exista un anchor_index validado.
     if (($ind->get_anchor_mode() // 'manual') eq 'manual') {
         my $manual_anchors = $ind->{_manual_anchors} // [];
         return unless @$manual_anchors || $ind->{ghost_swing_enabled};
@@ -56,9 +50,6 @@ sub render {
         : ($ind->get_vwap_lines() // []);
     return unless @$lines;
 
-    # En modo manual, renderizar SOLO las líneas ancladas por el usuario.
-    # _calculate_lines() también genera una línea auto_missed_pivot que se
-    # inyecta en _vwap_lines — esa línea fantasma no debe dibujarse.
     if (($ind->get_anchor_mode() // 'manual') eq 'manual') {
         $lines = [ grep {
             my $source = $_->{anchor_source} // '';
@@ -81,7 +72,6 @@ sub render {
         my $m2         = $line->{mult_2}     // 2.0;
         my $m3         = $line->{mult_3}     // 3.0;
 
-        # Saltar líneas completamente fuera del viewport
         next if $anchor_idx > $d_end || $end_idx < $d_start;
         next if $anchor_idx > $current_bar;
 
@@ -98,7 +88,6 @@ sub render {
             $label = 'Ghost VWAP';
         }
 
-        # Construir coordenadas de la línea principal y bandas
         my (@coords_vwap, @coords_u1, @coords_l1, @coords_u2, @coords_l2, @coords_u3, @coords_l3);
         my ($last_x, $last_y);
         my $vis_end = $end_idx > $current_bar ? $current_bar : $end_idx;
@@ -113,8 +102,6 @@ sub render {
             my $y = $scale->value_to_y($v);
             my $sd = $std_dev->[$slot] // 0;
 
-            # Omitir validación estricta de viewport vertical si queremos líneas que lo crucen,
-            # pero por optimización filtramos lo que esté muy lejos
             my $y_u3 = $scale->value_to_y($v + $sd * $m3);
             my $y_l3 = $scale->value_to_y($v - $sd * $m3);
 
@@ -140,7 +127,6 @@ sub render {
 
         next unless @coords_vwap >= 4;
 
-        # Dibujar VWAP principal
         $canvas->createLine(@coords_vwap,
             -fill   => $color,
             -width  => 1.5,
@@ -148,7 +134,6 @@ sub render {
             -tags   => ['vwap_overlay', 'vwap_main'],
         );
 
-        # Dibujar bandas
         if (@coords_u1 >= 4) {
             $canvas->createLine(@coords_u1, -fill => $COLOR_BAND1, -width => 1, -dash => [4, 4], -tags => ['vwap_overlay', 'vwap_band']);
             $canvas->createLine(@coords_l1, -fill => $COLOR_BAND1, -width => 1, -dash => [4, 4], -tags => ['vwap_overlay', 'vwap_band']);
@@ -162,7 +147,6 @@ sub render {
             $canvas->createLine(@coords_l3, -fill => $COLOR_BAND3, -width => 1, -dash => [4, 4], -tags => ['vwap_overlay', 'vwap_band']);
         }
 
-        # Etiqueta al final de la línea (evitar solapamiento)
         if (defined $last_x && defined $last_y) {
             my $slot_key = int(($last_x // 0) / 50) . ':' . int(($last_y // 0) / 18);
             unless ($label_slots{$slot_key}++) {

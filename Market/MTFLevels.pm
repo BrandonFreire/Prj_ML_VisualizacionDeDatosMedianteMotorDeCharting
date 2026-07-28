@@ -4,9 +4,6 @@ use strict;
 use warnings;
 use POSIX qw(floor);
 
-# Niveles de máximos/mínimos del período cerrado anterior. Trabaja con epoch
-# UTC y recibe explícitamente el offset de la sesión para no depender de la
-# zona horaria de la máquina que ejecuta el gráfico.
 
 sub new {
     my ($class, %args) = @_;
@@ -41,8 +38,6 @@ sub _previous_levels_for_period {
     my ($self, $candles, $reference_index, $period) = @_;
     my %groups;
 
-    # Solo se mira hasta reference_index: el resultado es replay-safe aunque
-    # el arreglo recibido contenga más historia a la derecha.
     for my $i (0 .. $reference_index) {
         my $c = $candles->[$i] // next;
         next unless defined $c->{time} && defined $c->{high} && defined $c->{low};

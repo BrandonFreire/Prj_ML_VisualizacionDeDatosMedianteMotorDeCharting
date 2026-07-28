@@ -3,15 +3,6 @@ package Market::Indicators::AnchoredVWAP;
 use strict;
 use warnings;
 
-# Anchored VWAP Multipivot — Motor de cálculo (Sección 8)
-#
-# Calcula el Precio Promedio Ponderado por Volumen Anclado reinicializando
-# las sumas acumuladas al detectar 5 tipos de eventos/pivots:
-#   1. Inicio de Sesión (primer tick/vela del día)
-#   2. Apertura de Mercado (hora oficial configurable)
-#   3. BOS Confirmado
-#   4. CHoCH Confirmado
-#   5. POC del Volume Profile
 
 sub new {
     my ($class, %args) = @_;
@@ -23,8 +14,6 @@ sub new {
         band_2_enabled     => exists $args{band_2_enabled} ? $args{band_2_enabled} : 1,
         band_3_enabled     => exists $args{band_3_enabled} ? $args{band_3_enabled} : 0,
         ghost_swing_enabled => $args{ghost_swing_enabled} ? 1 : 0,
-        # manual conserva la herramienta de dibujo. multipivot incorpora los
-        # cinco anclajes analíticos exigidos por la Fase 2.
         anchor_mode        => $args{anchor_mode} // 'manual',
         session_open_hour   => $args{session_open_hour}   // 0,
         session_open_minute => $args{session_open_minute} // 0,
@@ -33,12 +22,12 @@ sub new {
         market_timezone_offset_seconds => $args{market_timezone_offset_seconds} // 0,
 
         _manual_anchors    => [],
-        _vwap_lines        => [],     # [{anchor_idx, values => [vwap_i], std_dev => [std_i]}]
+        _vwap_lines        => [],
         _vwap_cache        => {},
         _candles           => undef,
         _smc_ref           => undef,
-        _vp_ref            => undef,  # VolumeProfile indicator
-        _pivot_ref         => undef,  # PivotMissedReversal para AVWAP automático
+        _vp_ref            => undef,
+        _pivot_ref         => undef,
         _auto_missed_result=> undef,
     }, $class;
 }
@@ -91,10 +80,6 @@ sub set_anchor_mode {
 
 sub get_anchor_mode { return $_[0]->{anchor_mode} }
 
-# Configuración equivalente a los multiplicadores de bandas de TradingView.
-# Puede llamarse desde un diálogo Tk sin recalcular la arquitectura del overlay:
-#   $vwap->set_band_configuration(1, enabled => 1, multiplier => 1.0);
-#   $vwap->set_band_configuration(2, enabled => 1, multiplier => 2.0);
 sub set_band_configuration {
     my ($self, $number, %args) = @_;
     return unless defined $number && $number =~ /^[123]$/;
@@ -139,12 +124,8 @@ sub _calculate_lines {
     my $n = scalar @$arr;
     return ([], undef) if $n < 2;
 
-    # 1. Recopilar anclajes. En manual sólo se usan clics del usuario; en
-    # multipivot se añaden Inicio de Sesión, Apertura, BOS, CHoCH y POC.
     my @anchors = $self->_collect_anchors($arr, %opts);
 
-    # 2. Ordenar por indice y fusionar anclajes coincidentes. Session Start y
-    # Market Open pueden caer en la misma vela cuando se usa el fallback.
     @anchors = sort { $a->{index} <=> $b->{index} } @anchors;
     my @merged;
     for my $anchor (@anchors) {
@@ -164,9 +145,6 @@ sub _calculate_lines {
     }
     @anchors = @merged;
 
-    # 3. Un VWAP manual continúa independiente hacia el final. En modo
-    # multipivot cada pivote reinicia estrictamente la acumulación, por lo que
-    # el tramo termina justo antes del siguiente pivote.
     my @vwap_lines;
     for my $ai (0 .. $#anchors) {
         my $anchor = $anchors[$ai];
@@ -176,9 +154,6 @@ sub _calculate_lines {
             : $n - 1;
         next if $start > $end || $start < 0;
 
-        # En multipivot los tramos son consecutivos y normalmente cortos. No
-        # reservar dos arreglos del tamaño total por cada BOS/CHoCH evita un
-        # crecimiento cuadrático de memoria en historiales largos.
         my $compact = $self->{anchor_mode} eq 'multipivot' ? 1 : 0;
         my @values  = $compact ? () : ((undef) x $n);
         my @std_dev = $compact ? () : ((undef) x $n);
@@ -222,9 +197,6 @@ sub _calculate_lines {
         };
     }
 
-    # El AVWAP de missed pivot es independiente del modo manual/multipivot:
-    # solo existe tras la confirmación del último evento y se recalcula desde
-    # su vela extrema. No añade ni conserva instancias históricas obsoletas.
     my $auto_result;
     if (my $pivot = $self->{_pivot_ref}) {
         my $events = $pivot->can('get_missed_pivots') ? $pivot->get_missed_pivots() : [];
@@ -235,10 +207,6 @@ sub _calculate_lines {
         push @vwap_lines, $auto->{line} if $auto->{visible} && $auto->{line};
     }
 
-    # Ghosts_in_swings.txt mantiene dos AVWAP dinámicos: uno desde el último
-    # pivote regular confirmado (penúltimo swing frente al fantasma vivo) y
-    # otro desde la vela donde está el fantasma provisional. Son analíticos e
-    # independientes del anclaje manual, que se conserva sin cambios.
     if ($self->{ghost_swing_enabled}) {
         push @vwap_lines, @{ $self->_ghost_swing_lines($arr) };
     }
@@ -331,10 +299,6 @@ sub _vwap_line_from_anchor {
     };
 }
 
-# Construye una única instancia desde el missed pivot confirmado más reciente.
-# El tramo comienza en la vela del extremo, pero no se expone hasta que su
-# confirmationIndex ya pertenece al cursor visible. Así se conserva la
-# geometría histórica sin adelantar una señal al Replay.
 sub compute_missed_pivot_auto {
     my ($class_or_self, %args) = @_;
     my $self = ref($class_or_self) ? $class_or_self : $class_or_self->new(%args);
@@ -370,8 +334,6 @@ sub _build_auto_missed_line {
     my ($self, $candles, $max_idx, $event) = @_;
     my $start = $event->{index};
     return undef unless defined($start) && $start >= 0 && $start <= $max_idx;
-    # La serie resultante no reserva índices posteriores al cursor: incluso
-    # valores undef revelarían la longitud futura a un consumidor de Replay.
     my $n = $max_idx + 1;
     my (@values, @std_dev);
     $#values = $#std_dev = $n - 1 if $n;
@@ -460,8 +422,6 @@ sub _collect_anchors {
     my $n = scalar @$arr;
     return @anchors unless $n;
 
-    # Session Start y Market Open son conceptos distintos. Los epochs se
-    # trasladan a la zona horaria configurada antes de separar cada dia.
     my $session_seconds = 3600 * $self->{session_open_hour}
                         + 60   * $self->{session_open_minute};
     my $market_open_seconds = 3600 * $self->{market_open_hour}
@@ -501,9 +461,6 @@ sub _collect_anchors {
             next;
         }
 
-        # Un dia anterior ya esta cerrado cuando aparece el siguiente. En el
-        # ultimo dia solo se usa fallback con el dataset completo; asi Replay
-        # antes de la apertura no crea un ancla que luego deba reemplazarse.
         my $day_is_closed = $position < $#day_order;
         next unless $day_is_closed || $opts{complete_dataset};
         push @anchors, {
@@ -517,7 +474,6 @@ sub _collect_anchors {
         };
     }
 
-    # Velas exactas de confirmación de estructura.
     my $smc = $self->{_smc_ref};
     if ($smc) {
         for my $method (qw(get_bos_events get_choch_events)) {
@@ -529,8 +485,6 @@ sub _collect_anchors {
         }
     }
 
-    # POC temporal calculado por VolumeProfile (vela con típico más cercano
-    # al nodo de máximo volumen).
     my $vp = $self->{_vp_ref};
     if ($vp && ($vp->can('get_profiles_at') || $vp->can('get_profiles'))) {
         my $profiles = $vp->can('get_profiles_at')
@@ -547,15 +501,9 @@ sub _collect_anchors {
 
 
 
-# ================================================================
-# Accessors
-# ================================================================
 sub get_vwap_lines { return $_[0]->{_vwap_lines} }
 sub get_auto_missed_result { return $_[0]->{_auto_missed_result} }
 
-# Reconstruye anclas y líneas con el prefijo disponible en Replay. Esto no se
-# limita a cortar coordenadas: también selecciona el último missed pivot y el
-# POC que realmente existían en ese cursor.
 sub get_vwap_lines_at {
     my ($self, $max_visible_index) = @_;
     my $candles = $self->{_candles} // [];

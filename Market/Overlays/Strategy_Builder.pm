@@ -3,18 +3,15 @@ package Market::Overlays::Strategy_Builder;
 use strict;
 use warnings;
 
-# Renderizado visual del Strategy Builder sobre el Canvas Tk.
-# Lee datos calculados de Market::Indicators::Strategy_Builder.
-# No realiza cálculos — separación estricta Indicador / Overlay.
 
-my $COLOR_ST_BULL  = '#26a69a';   # SuperTrend alcista
-my $COLOR_ST_BEAR  = '#ef5350';   # SuperTrend bajista
-my $COLOR_HT_BULL  = '#4caf50';   # HalfTrend up
-my $COLOR_HT_BEAR  = '#f44336';   # HalfTrend down
-my $COLOR_RF_UP    = '#66bb6a';   # Range Filter up
-my $COLOR_RF_DOWN  = '#ef5350';   # Range Filter down
-my $COLOR_SUPPLY   = '#ef5350';   # Supply zones
-my $COLOR_DEMAND   = '#26a69a';   # Demand zones
+my $COLOR_ST_BULL  = '#26a69a';
+my $COLOR_ST_BEAR  = '#ef5350';
+my $COLOR_HT_BULL  = '#4caf50';
+my $COLOR_HT_BEAR  = '#f44336';
+my $COLOR_RF_UP    = '#66bb6a';
+my $COLOR_RF_DOWN  = '#ef5350';
+my $COLOR_SUPPLY   = '#ef5350';
+my $COLOR_DEMAND   = '#26a69a';
 
 sub new {
     my ($class, %args) = @_;
@@ -55,9 +52,6 @@ sub render {
         if $self->_visible('show_halftrend', 1);
 }
 
-# ================================================================
-# SuperTrend — línea continua que sigue el valor ST
-# ================================================================
 sub _render_supertrend {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
     my $st = $self->{indicator}->get_supertrend() // [];
@@ -73,7 +67,6 @@ sub _render_supertrend {
         my $dir = $st->[$i]{direction};
 
         if (!defined $cur_dir || $dir != $cur_dir) {
-            # cerrar segmento anterior
             if (defined $seg_start) {
                 push @segments, { dir => $cur_dir, from => $seg_start, to => $i - 1 };
             }
@@ -81,7 +74,6 @@ sub _render_supertrend {
             $cur_dir   = $dir;
         }
     }
-    # último segmento
     my $last = $d_end < $current_bar ? $d_end : $current_bar;
     push @segments, { dir => $cur_dir, from => $seg_start, to => $last }
         if defined $seg_start;
@@ -106,15 +98,11 @@ sub _render_supertrend {
     }
 }
 
-# ================================================================
-# HalfTrend — flechas en puntos de cambio + canal ATR punteado
-# ================================================================
 sub _render_halftrend {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
     my $ht = $self->{indicator}->get_halftrend() // [];
     return unless @$ht;
 
-    # Dibujar línea de tendencia
     my @coords_line;
     for my $i ($d_start .. $d_end) {
         last if $i > $current_bar;
@@ -124,7 +112,6 @@ sub _render_halftrend {
         push @coords_line, $x, $y;
     }
     if (@coords_line >= 4) {
-        # Obtener el trend del último punto visible para el color
         my $last_vis = $d_end < $current_bar ? $d_end : $current_bar;
         my $clr = ($ht->[$last_vis]{trend} // 0) == 0 ? $COLOR_HT_BULL : $COLOR_HT_BEAR;
         $canvas->createLine(@coords_line,
@@ -134,7 +121,6 @@ sub _render_halftrend {
         );
     }
 
-    # Dibujar canales ATR como líneas punteadas
     my @coords_hi;
     my @coords_lo;
     for my $i ($d_start .. $d_end) {
@@ -157,7 +143,6 @@ sub _render_halftrend {
         );
     }
 
-    # Flechas en puntos de flip
     for my $i ($d_start .. $d_end) {
         last if $i > $current_bar;
         next unless defined $ht->[$i] && $ht->[$i]{flipped};
@@ -177,9 +162,6 @@ sub _render_halftrend {
     }
 }
 
-# ================================================================
-# Range Filter — banda sombreada + línea central
-# ================================================================
 sub _render_range_filter {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
     my $rf = $self->{indicator}->get_range_filter() // [];
@@ -188,7 +170,6 @@ sub _render_range_filter {
     my $bar_w    = $scale->{x_width} / ($scale->{visible_bars} || 1);
     my $half_bar = $bar_w * 0.5;
 
-    # Dibujar banda sombreada para cada barra visible
     for my $i ($d_start .. $d_end) {
         last if $i > $current_bar;
         next unless defined $rf->[$i];
@@ -207,7 +188,6 @@ sub _render_range_filter {
         );
     }
 
-    # Línea central del filtro
     my @coords;
     for my $i ($d_start .. $d_end) {
         last if $i > $current_bar;
@@ -224,13 +204,9 @@ sub _render_range_filter {
         );
     }
 
-    # Bajar bandas debajo de las velas
     $canvas->lower('rf_band', 'candles') if $canvas->find('withtag', 'candles');
 }
 
-# ================================================================
-# Supply / Demand Zones — rectángulos semitransparentes
-# ================================================================
 sub _render_supply_demand {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
     my $candles = $self->{indicator}->can('get_candles')
@@ -250,7 +226,6 @@ sub _render_supply_demand {
         my @cands = grep {
             defined $_->{confirmed_at} && $_->{confirmed_at} <= $current_bar
         } @$zones;
-        # Limitar a las 15 más recientes
         @cands = sort { ($b->{confirmed_at}//0) <=> ($a->{confirmed_at}//0) } @cands;
         @cands = @cands[0..14] if @cands > 15;
         @cands = sort { ($a->{index}//0) <=> ($b->{index}//0) } @cands;
@@ -260,7 +235,6 @@ sub _render_supply_demand {
             my $start = $zone->{index};
             next unless defined $start;
 
-            # Check if zone is mitigated (price passed through it)
             my $mitigated = 0;
             my $check_from = ($zone->{triggered_by} // $start) + 1;
             for my $j ($check_from .. ($current_bar < $#$candles ? $current_bar : $#$candles)) {
@@ -294,7 +268,6 @@ sub _render_supply_demand {
                 -tags    => ['strategy_overlay', "sd_${type}"],
             );
 
-            # Etiqueta
             $canvas->createText($x1 + 3, ($y1 + $y2) / 2,
                 -text   => $label,
                 -fill   => $color,
@@ -305,7 +278,6 @@ sub _render_supply_demand {
         }
     }
 
-    # Bajar zonas debajo de velas
     $canvas->lower('sd_supply', 'candles') if $canvas->find('withtag', 'candles');
     $canvas->lower('sd_demand', 'candles') if $canvas->find('withtag', 'candles');
 }

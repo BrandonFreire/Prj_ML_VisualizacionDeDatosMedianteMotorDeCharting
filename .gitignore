@@ -1,15 +1,12 @@
-# Editor / OS
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 .#*
-#*#
 .DS_Store
 Thumbs.db
 
-# Perl build / test artifacts
 blib/
 _build/
 build/
@@ -21,11 +18,9 @@ MYMETA.*
 MANIFEST.bak
 *.packlist
 
-# Compiled / binary
 *.bs
 *.so
 
-# Local dev / libraries / Virtual environments
 local/
 locallib/
 cpanfile.snapshot
@@ -34,7 +29,6 @@ venv/
 env/
 ENV/
 
-# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -43,18 +37,13 @@ __pycache__/
 .mypy_cache/
 .ipynb_checkpoints/
 
-# Test / coverage
 t/.cache/
 cover_db/
 cover.html
 
-# Logs / env
 *.log
 .env
 
-# Data files (no subir al repo)
-
-# Misc
 coverage/
 node_modules/
 dist/

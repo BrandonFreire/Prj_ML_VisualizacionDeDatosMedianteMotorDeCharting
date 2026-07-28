@@ -46,7 +46,6 @@ sub render {
         );
     }
 
-    # Obtener pivotes externos (necesarios para regresion y fibonacci aunque ZZ no se muestre)
     my $ext_pivots;
     if ( $ind->can('get_external_pivots') ) {
         $ext_pivots = $ind->can('get_external_pivots_until')
@@ -71,7 +70,6 @@ sub render {
         }
     }
 
-    # Canal de regresion automatico: funciona aunque ZZ externo no se muestre
     if ( $self->_visible('show_regression_auto', 0) && $ext_pivots ) {
         my $candles = $ind->can('get_candles') ? ($ind->get_candles() // []) : [];
         $self->_render_auto_regression(
@@ -80,7 +78,6 @@ sub render {
         );
     }
 
-    # Fibonacci automatico: requiere ZZ externo activo para que sea coherente
     if ( $self->_visible('show_zz_fibonacci', 0) && $ext_pivots && @$ext_pivots ) {
         $self->_render_fibonacci(
             $canvas, $d_start, $d_end, $scale, $current_bar,
@@ -230,7 +227,6 @@ sub _render_hldv_labels {
 sub _render_fibonacci {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar, $pivots) = @_;
 
-    # Toma el ultimo swing grande: busca el ultimo high y ultimo low confirmados
     my ($last_high, $last_low);
     for my $p (reverse @$pivots) {
         next if ($p->{confirmed_at} // $p->{index}) > $current_bar;
@@ -245,7 +241,6 @@ sub _render_fibonacci {
     }
     return unless defined $last_high && defined $last_low;
 
-    # El swing es del pivote mas antiguo al mas reciente
     my ($swing_start, $swing_end) =
         $last_high->{index} < $last_low->{index}
         ? ($last_high, $last_low)
@@ -256,7 +251,6 @@ sub _render_fibonacci {
     my $range      = $price_high - $price_low;
     return if $range == 0;
 
-    # Niveles Fibonacci (retroceso: 0 = extremo inicial, 1 = extremo opuesto)
     my @levels = (
         [ 0,     '#787b86', '0' ],
         [ 0.236, '#f7c948', '0.236' ],
@@ -267,7 +261,6 @@ sub _render_fibonacci {
         [ 1,     '#787b86', '1' ],
     );
 
-    # Precio actual (ultima vela visible)
     my $candles = $self->{indicator}->can('get_candles')
                 ? ($self->{indicator}->get_candles() // [])
                 : [];
@@ -282,14 +275,10 @@ sub _render_fibonacci {
 
     for my $lv (@levels) {
         my ($ratio, $color, $label_txt) = @$lv;
-        # Si swing sube (high > low y high es el final), retroceso desde high hacia low
-        # Si swing baja (low > high y low es el final), retroceso desde low hacia high
         my $price;
         if ( $last_high->{index} > $last_low->{index} ) {
-            # Swing bajista (high primero, low despues) => retroceso sube desde low
             $price = $price_low + $range * (1 - $ratio);
         } else {
-            # Swing alcista (low primero, high despues) => retroceso baja desde high
             $price = $price_high - $range * $ratio;
         }
 
@@ -302,11 +291,9 @@ sub _render_fibonacci {
             -tags  => ['zz_overlay', 'zz_fibonacci'],
         );
 
-        # Etiqueta con nivel y precio
         my $price_str = sprintf("%.5g", $price);
         my $lbl = "$label_txt  $price_str";
 
-        # Marca el nivel donde esta el precio actual
         if ( defined $cur_price ) {
             my $band = $range * 0.005;
             if ( abs($cur_price - $price) <= $band ) {

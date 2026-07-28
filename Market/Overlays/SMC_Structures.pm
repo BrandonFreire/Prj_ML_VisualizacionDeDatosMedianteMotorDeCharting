@@ -3,9 +3,6 @@ package Market::Overlays::SMC_Structures;
 use strict;
 use warnings;
 
-# Renderizado grafico de las estructuras SMC: BOS y FVG.
-# No hace calculos — lee del indicador Market::Indicators::SMC_Structures.
-# Cumple la separacion Calculo / Renderizado de la Tabla 1 de la especificacion.
 
 my $COLOR_BOS_BULL   = '#26a69a';
 my $COLOR_BOS_BEAR   = '#ef5350';
@@ -47,8 +44,6 @@ sub _visible {
     return $v->{$key} ? 1 : 0;
 }
 
-# Renderiza BOS y FVG sobre el canvas de precio.
-# $current_bar = d_end (ultima barra visible, barrera en modo Replay)
 sub render {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
     $current_bar //= $d_end;
@@ -59,7 +54,6 @@ sub render {
     $self->{_label_slots} = {};
     return unless $self->_visible('smc_enabled', 1);
 
-    # Construir lookup de sweeps recientes para marcar FVGs como Zona de Alta Reaccion
     my %recent_sweeps;
     if ( $self->{indicator}->can('get_choch_events') ) {
         my $lq_ref = $self->{indicator}{_lq_ref};
@@ -100,9 +94,6 @@ sub render {
     }
 }
 
-# ----------------------------------------------------------------
-# FVG — rectángulos con desvanecimiento progresivo usando stipple
-# ----------------------------------------------------------------
 sub _render_swing_labels {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
     return unless $self->{indicator}->can('get_swing_highs')
@@ -342,9 +333,6 @@ sub _render_fibonacci {
         defined $_->{index} && defined $_->{from} && defined $_->{level}
             && $self->_event_visible_at($_, $current_bar)
     } @events;
-    # El impulso externo es la fuente preferida. Durante su warm-up se usa la
-    # estructura interna ya confirmada para no dejar el control Fibonacci sin
-    # salida visual; nunca se mezclan ambos scopes en una misma geometria.
     my @external = grep { ($_->{scope}//'internal') eq 'external' } @events;
     @events = @external if @external;
     return unless @events;
@@ -397,9 +385,6 @@ sub _render_fibonacci {
 sub _render_market_regime {
     my ($self, $canvas, $current_bar) = @_;
 
-    # Cuando existe el motor de contexto, el badge expone su estado
-    # explicable. Cada estado fue calculado respetando su propio cursor, de
-    # modo que leer la fila actual no filtra informacion futura en Replay.
     my $regime = $self->{regime_indicator};
     if ($regime && $regime->can('get_states')) {
         my $state = $regime->get_states()->[$current_bar];
@@ -455,11 +440,7 @@ sub _render_fvg {
     $recent_sweeps //= {};
     my $fvgs = $self->{indicator}->get_fvg_zones() // [];
     my $bar_w = $scale->{x_width} / ( $scale->{visible_bars} || 1 );
-    # La vela usa 70 % del ancho de su columna (PricePanel::render_candle).
-    # Alinear el FVG a esos mismos bordes evita que el rectangulo sobresalga
-    # visualmente media columna a cada lado.
     my $half_body = $bar_w * 0.35;
-    # Viewport-aware FVG selection: prefer FVGs in the visible range first.
     my $all_active = _active_fvgs_at($fvgs, $current_bar, 0);
     my @fvg_in_view  = grep { ($_->{index} // 0) >= $d_start } @$all_active;
     my @fvg_pre_view = grep { ($_->{index} // 0) <  $d_start } @$all_active;
@@ -475,20 +456,18 @@ sub _render_fvg {
         my $idx = $fvg->{index};
         next unless defined $idx;
         my $formed_at = $fvg->{formed_at} // ($idx + 1);
-        # LuxAlgo inicia la caja en la vela central del patron (lastTime), no
-        # en la primera vela usada solamente para confirmar el gap.
         my $start_idx = $fvg->{mid_index} // $idx;
         next unless defined $formed_at;
         next unless defined $start_idx;
         next unless defined $fvg->{top} && defined $fvg->{bottom};
-        next if $formed_at > $current_bar;     # no mostrar FVGs aun no confirmados en Replay
+        next if $formed_at > $current_bar;
 
         my $end_idx = $current_bar;
         my ($visible_top, $visible_bottom) = _fvg_visible_bounds_at($fvg, $current_bar);
         next unless defined $visible_top && defined $visible_bottom;
 
-        next if $end_idx < $d_start;           # el bloque ya termino antes de la vista
-        next if $start_idx > $d_end;           # empieza despues de la vista
+        next if $end_idx < $d_start;
+        next if $start_idx > $d_end;
 
         my $draw_start = $start_idx < $d_start ? $d_start : $start_idx;
         my $draw_end   = $end_idx   > $d_end   ? $d_end   : $end_idx;
@@ -546,8 +525,6 @@ sub _active_fvgs_at {
         $formed <= $current_bar && (!defined($ended) || $ended > $current_bar)
     } @$fvgs;
 
-    # Seleccionar primero los mas recientes para aplicar el limite, y dibujar
-    # luego del mas antiguo al mas nuevo para que el ultimo conserve prioridad.
     @active = sort {
         ($b->{formed_at} // $b->{confirmed_at} // 0)
             <=> ($a->{formed_at} // $a->{confirmed_at} // 0)
@@ -614,9 +591,6 @@ sub _render_order_blocks {
             && $self->_show_ob_scope($_, $current_bar)
     } @$obs;
 
-    # Priorizar OBs que caen en o cerca del rango visible. Sin esta prioridad,
-    # en historiales largos el limite global solo devuelve bloques del extremo
-    # derecho y el viewport queda vacio al explorar barras mas antiguas.
     my @in_view  = sort { (($b->{confirmed_at}//0) <=> ($a->{confirmed_at}//0))
                            || (($b->{index}//0) <=> ($a->{index}//0)) }
                    grep { ($_->{index} // 0) >= $d_start } @eligible;
@@ -688,8 +662,6 @@ sub _render_trendlines {
             && $self->_show_structure_scope($_, $current_bar)
     } @$tls;
 
-    # Mantener una linea por direccion y por alcance. Mezclar ambos alcances
-    # hacia que una linea interna reciente ocultase una externa valida.
     my %latest;
     for my $tl (@candidates) {
         my $key = join('|', $self->_effective_scope($tl, $current_bar),
@@ -784,9 +756,6 @@ sub _structure_style {
     return ($scope, $color, $width, $dash);
 }
 
-# ----------------------------------------------------------------
-# BOS — linea horizontal + etiqueta "BOS" en la barra de ruptura
-# ----------------------------------------------------------------
 sub _render_bos {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
     $current_bar //= $d_end;
@@ -798,16 +767,15 @@ sub _render_bos {
         my $idx  = $bos->{index};
         my $from = $bos->{from};
         next unless defined $idx && defined $from && defined $bos->{level};
-        next if $idx > $current_bar;                    # evento futuro en Replay
+        next if $idx > $current_bar;
         my $line_end = $idx < $current_bar ? $idx : $current_bar;
-        next if $line_end < $d_start && $from < $d_start;  # completamente fuera
-        next if $from > $d_end;                            # aun no ocurrio
+        next if $line_end < $d_start && $from < $d_start;
+        next if $from > $d_end;
 
         my ($scope_name, $color, $width, $dash) =
             $self->_structure_style($bos, $current_bar, $COLOR_BOS_BULL, $COLOR_BOS_BEAR);
         my $y     = $scale->value_to_y( $bos->{level} );
 
-        # Linea horizontal desde el swing original hasta la barra de ruptura
         my $x1 = $scale->index_to_center_x( $from < $d_start ? $d_start : $from );
         my $x2 = $scale->index_to_center_x( $line_end > $d_end ? $d_end : $line_end );
 
@@ -820,7 +788,6 @@ sub _render_bos {
             -tags  => ['smc_overlay', 'bos'],
         );
 
-        # Etiqueta "BOS ▲" o "BOS ▼" en la barra de ruptura
         if ( $idx >= $d_start && $idx <= $d_end && $idx <= $current_bar ) {
             my $scope = $scope_name eq 'external' ? 'e' : 'i';
             my $arrow = $bos->{direction} eq 'bull' ? "BOS-$scope ^" : "BOS-$scope v";
@@ -839,9 +806,6 @@ sub _render_bos {
     }
 }
 
-# ----------------------------------------------------------------
-# CHoCH — misma estructura que BOS pero colores distintos
-# ----------------------------------------------------------------
 sub _render_choch {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
     $current_bar //= $d_end;

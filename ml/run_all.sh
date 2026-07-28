@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Pipeline oficial: abril-junio -> entrenamiento; 1-24 julio -> test externo.
-
 set -euo pipefail
 cd "$(dirname "$0")"
 

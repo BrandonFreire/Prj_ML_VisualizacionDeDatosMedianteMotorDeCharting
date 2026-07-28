@@ -1,12 +1,7 @@
-// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
-// © ChartPrime
 
 //@version=6
 indicator("ZigZag Volume Profile [ChartPrime]", overlay = true, max_lines_count = 500, max_labels_count = 245)
 
-// --------------------------------------------------------------------------------------------------------------------
-// 📌 USER INPUTS
-// --------------------------------------------------------------------------------------------------------------------
 
 volumeProfilesQty = input.int(15, "Amount of ZigZag Volume Profiles to display", maxval = 20, minval = 1)
 
@@ -24,9 +19,6 @@ showPOC              = input.bool(true, "Display", group = "PoC", inline = "poc"
 pocLineWidth         = input.int(2, "", group = "PoC", inline = "poc")
 pocLineColor         = input.color(color.red, "", group = "PoC", inline = "poc")
 
-// --------------------------------------------------------------------------------------------------------------------
-// 📌 INTERNAL VARIABLES
-// --------------------------------------------------------------------------------------------------------------------
 totalVolumeBins       = array.new_float(500)
 var pocLineArray      = array.new<line>()
 var pocLineArray1     = array.new<line>()
@@ -46,9 +38,6 @@ type swingProfile
 
 var SProfile = array.new<swingProfile>()
 
-// --------------------------------------------------------------------------------------------------------------------
-// 📌 DRAWING FUNCTIONS
-// --------------------------------------------------------------------------------------------------------------------
 drawBinLevel(offset, index, startBar, startPrice, endBar, endPrice) =>
     yStart = startPrice + offset
     yEnd   = endPrice + offset
@@ -82,9 +71,6 @@ drawVolumeBin(offset, vol, endBar, endPrice, slope, startBar, startPrice, trendD
         pocLineArray1.push(line.new(startBar, startPrice + offset, endBar, endPrice + offset, color = pocLineColor, width = pocLineWidth))
 
 
-// --------------------------------------------------------------------------------------------------------------------
-// 📌 ATR-BASED WIDTH AND SWING EXTREMES
-// --------------------------------------------------------------------------------------------------------------------
 atrRange        = ta.atr(200) * channelWidthFactor
 swingHigh       = ta.highest(swingLength)
 swingLow        = ta.lowest(swingLength)
@@ -96,9 +82,6 @@ var barIndexHigh = int(na)
 var priceHigh   = float(na)
 var isBullish   = bool(na)
 
-// --------------------------------------------------------------------------------------------------------------------
-// 📌 SWING DETECTION LOGIC
-// --------------------------------------------------------------------------------------------------------------------
 if swingHigh == high
     isBullish := true
 if swingLow == low
@@ -112,9 +95,6 @@ if low[1] == swingLow[1] and low > swingLow
     barIndexLow := bar_index[1]
     priceLow := low[1]
 
-// --------------------------------------------------------------------------------------------------------------------
-// 📌 PROFILE CREATION PER SWING
-// --------------------------------------------------------------------------------------------------------------------
 drawProfileSegment(startBar, startPrice, endBar, endPrice, direction) =>
     float binSlope = na
     for i = volumeBinCount to -volumeBinCount
@@ -127,9 +107,6 @@ drawProfileSegment(startBar, startPrice, endBar, endPrice, direction) =>
 
     SProfile.push(swingProfile.new(channelLineArray, profileLineArray, profileLabelArray, pocLineArray, pocLineArray1, ZigZagArray))
 
-// --------------------------------------------------------------------------------------------------------------------
-// 📌 DRAW ZIGZAG & PROFILES
-// --------------------------------------------------------------------------------------------------------------------
 if isBullish != isBullish[1] and isBullish
     zigzagLine := line.new(barIndexLow, priceLow, barIndexHigh, priceHigh, force_overlay = true, width = 2)
     ZigZagArray.push(zigzagLine)

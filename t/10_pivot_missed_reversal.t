@@ -20,12 +20,12 @@ is($reference_defaults->{length}, 50,
 
 my $trace_fixture = [
     c(0, 10, 5),
-    c(1, 11, 6),  # aparición inicial HIGH
-    c(2, 15, 7),  # nuevo extremo HIGH
-    c(3, 12, 8),  # PH(2) confirmado: nueva ancla, fantasma LOW
-    c(4, 11, 7),  # nuevo extremo LOW
-    c(5, 13, 7),  # empate: mueve icono, pero no sale del rango
-    c(6, 14, 6),  # nuevo extremo LOW
+    c(1, 11, 6),
+    c(2, 15, 7),
+    c(3, 12, 8),
+    c(4, 11, 7),
+    c(5, 13, 7),
+    c(6, 14, 6),
 ];
 my $trace_result = Market::Indicators::PivotMissedReversal->compute(
     candles => $trace_fixture, length => 1,

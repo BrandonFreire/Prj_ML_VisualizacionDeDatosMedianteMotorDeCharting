@@ -91,8 +91,6 @@ def main() -> int:
     split = int(len(rows) * (1.0 - args.validation_fraction))
     split = max(args.sequence_length, min(split, len(rows) - args.sequence_length))
     validation_start_time = int(float(rows[split]["event_timestamp"]))
-    # Purga de 15 minutos: ningun target de entrenamiento puede extenderse
-    # dentro del periodo usado como validacion.
     train_end = split
     while (
         train_end > args.sequence_length
@@ -170,8 +168,6 @@ def main() -> int:
         validation_actual, validation_prediction
     )
 
-    # Seleccionados los hiperparametros/numero de epocas sin mirar julio, se
-    # reajusta scaler y modelo final con TODO abril-junio.
     final_preprocessor = Preprocessor.fit(rows)
     final_features = final_preprocessor.transform(rows)
     final_target_mean, final_target_scale = target_scaler(targets)

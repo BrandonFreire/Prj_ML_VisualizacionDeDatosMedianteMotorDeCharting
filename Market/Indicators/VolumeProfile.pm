@@ -3,16 +3,9 @@ package Market::Indicators::VolumeProfile;
 use strict;
 use warnings;
 
-# Perfil de Volumen Avanzado — Motor de cálculo (Sección 7)
-#
-# Proyecta horizontalmente POC (Point of Control), VAH (Value Area High)
-# y VAL (Value Area Low) usando tres modos operativos de anclaje:
-#   1. Por Sesión — segmentado por apertura cronológica
-#   2. Por BOS/CHoCH — anclado a eventos confirmados en HTF
-#   3. Contingencia — pasado lejano sin datos recientes
 
-my $DEFAULT_BINS       = 50;    # resolución del histograma
-my $VALUE_AREA_PCT     = 0.70;  # 70% del volumen total para Value Area
+my $DEFAULT_BINS       = 50;
+my $VALUE_AREA_PCT     = 0.70;
 
 sub new {
     my ($class, %args) = @_;
@@ -23,8 +16,6 @@ sub new {
     die 'VolumeProfile::new: value_area_pct debe estar en (0, 1]'
         unless _finite($value_area_pct) && $value_area_pct > 0 && $value_area_pct <= 1;
     return bless {
-        # El perfil sólo existe cuando el usuario dibuja un anclaje.  No se
-        # generan perfiles de sesión/globales como efecto de compute_all().
         mode           => $args{mode} // 'manual',
         num_bins       => $num_bins + 0,
         value_area_pct => $value_area_pct + 0,
@@ -58,8 +49,6 @@ sub add_manual_anchor {
     return unless defined($start_idx) && !ref($start_idx) && $start_idx =~ /^\d+$/;
     return if defined($end_idx) && (ref($end_idx) || $end_idx !~ /^\d+$/);
 
-    # end_idx indefinido representa un perfil anclado "desde esta vela hasta
-    # la última vela disponible".  Un end_idx explícito representa Fixed Range.
     push @{ $self->{_manual_anchors} }, {
         start  => int($start_idx),
         end    => defined $end_idx ? int($end_idx) : undef,
@@ -93,10 +82,8 @@ sub compute_all {
     return if $n < 2;
 
     my @segments = $self->_segments_for_mode($arr);
-    # Estrictamente manual: sin un anclaje no hay nada que calcular/renderizar.
     return unless @segments;
 
-    # Calcular perfil para cada segmento
     my @profiles;
     for my $seg (@segments) {
         my $start = $seg->{start};
@@ -111,10 +98,6 @@ sub compute_all {
     @{ $self->{_profiles} } = @profiles;
 }
 
-# Selecciona segmentos sin mezclar los modos automáticos con la herramienta
-# manual. Los modos session/bos_choch/contingency sólo se activan si el caller
-# los selecciona con set_mode(), por lo que la UI no vuelve a dibujar perfiles
-# globales inesperados.
 sub _segments_for_mode {
     my ($self, $arr) = @_;
     my $mode = $self->{mode} // 'manual';
@@ -152,8 +135,6 @@ sub _segments_for_mode {
             push @events, @{ $smc->get_bos_events()   // [] } if $smc->can('get_bos_events');
             push @events, @{ $smc->get_choch_events() // [] } if $smc->can('get_choch_events');
         }
-        # Sólo estructura externa: representa los pivotes macro disponibles
-        # para la temporalidad activa.
         my %seen;
         my @starts = sort { $a <=> $b }
             grep { $_ >= 0 && $_ < $n && !$seen{$_}++ }
@@ -183,9 +164,6 @@ sub _contingency_segments {
     return ({ start => $start, end => $n - 1, source => 'contingency' });
 }
 
-# ================================================================
-# Cálculo del perfil de volumen para un segmento
-# ================================================================
 sub _compute_profile {
     my ($self, $arr, $start, $end) = @_;
     return undef if $start > $end;
@@ -194,7 +172,6 @@ sub _compute_profile {
     my $num_bins = $self->{num_bins};
     my $va_pct   = $self->{value_area_pct};
 
-    # Encontrar rango de precio del segmento
     my ($price_min, $price_max) = ($arr->[$start]{low}, $arr->[$start]{high});
     for my $i ($start .. $end) {
         my $c = $arr->[$i];
@@ -214,7 +191,6 @@ sub _compute_profile {
     my $bin_size = $range / $num_bins;
     return undef if $bin_size <= 0;
 
-    # Inicializar bins
     my @bins;
     for my $b (0 .. $num_bins - 1) {
         push @bins, {
@@ -222,12 +198,11 @@ sub _compute_profile {
             price_high  => $price_min + ($b + 1) * $bin_size,
             price       => $price_min + ($b + 0.5) * $bin_size,
             volume      => 0,
-            up_volume   => 0,   # volumen comprador (close >= open)
-            down_volume => 0,   # volumen vendedor  (close <  open)
+            up_volume   => 0,
+            down_volume => 0,
         };
     }
 
-    # Distribuir volumen de cada vela proporcionalmente a sus bins
     my $total_vol = 0;
     for my $i ($start .. $end) {
         my $c = $arr->[$i];
@@ -235,14 +210,11 @@ sub _compute_profile {
         my $vol = $c->{volume};
         next if $vol <= 0;
 
-        # Clasificar vela como compradora o vendedora
         my $is_up = (defined $c->{close} && defined $c->{open}
                      && $c->{close} >= $c->{open}) ? 1 : 0;
 
         my $c_range = $c->{high} - $c->{low};
 
-        # Una vela sin rango sigue aportando todo su volumen al nivel negociado;
-        # repartir por overlap asignaba cero y hacía inconsistente total_vol.
         if ($c_range <= 0) {
             my $bin = int(($c->{low} - $price_min) / $bin_size);
             $bin = 0 if $bin < 0;
@@ -254,14 +226,12 @@ sub _compute_profile {
             next;
         }
 
-        # Bins que cubre esta vela
         my $first_bin = int(($c->{low}  - $price_min) / $bin_size);
         my $last_bin  = int(($c->{high} - $price_min) / $bin_size);
         $first_bin = 0 if $first_bin < 0;
         $last_bin  = $num_bins - 1 if $last_bin >= $num_bins;
 
         for my $b ($first_bin .. $last_bin) {
-            # Fracción de overlap entre la vela y el bin
             my $overlap_low  = $bins[$b]{price_low}  > $c->{low}  ? $bins[$b]{price_low}  : $c->{low};
             my $overlap_high = $bins[$b]{price_high} < $c->{high} ? $bins[$b]{price_high} : $c->{high};
             my $overlap = $overlap_high - $overlap_low;
@@ -278,14 +248,12 @@ sub _compute_profile {
 
     return undef if $total_vol <= 0;
 
-    # POC = bin con mayor volumen
     my $poc_bin = 0;
     for my $b (1 .. $#bins) {
         $poc_bin = $b if $bins[$b]{volume} > $bins[$poc_bin]{volume};
     }
     my $poc = defined($flat_price) ? $flat_price : $bins[$poc_bin]{price};
 
-    # Value Area: expandir desde el POC hasta cubrir el 70% del volumen
     my $va_target = $total_vol * $va_pct;
     my $va_vol    = $bins[$poc_bin]{volume};
     my ($va_low_bin, $va_high_bin) = ($poc_bin, $poc_bin);
@@ -306,9 +274,6 @@ sub _compute_profile {
     my $vah = $bins[$va_high_bin]{price_high};
     my $val = $bins[$va_low_bin]{price_low};
 
-    # El POC es un precio, no un índice de bin. Para que AnchoredVWAP pueda
-    # usarlo como pivote temporal escogemos la vela del segmento cuyo precio
-    # típico está más cerca del nodo POC.
     my ($poc_index, $poc_distance);
     for my $i ($start .. $end) {
         my $c = $arr->[$i];
@@ -325,7 +290,7 @@ sub _compute_profile {
         end_idx   => $end,
         bins      => \@bins,
         poc       => $poc,
-        poc_index => $poc_index,           # vela temporal más próxima al nodo POC
+        poc_index => $poc_index,
         vah       => $vah,
         val       => $val,
         total_vol => $total_vol,
@@ -333,14 +298,8 @@ sub _compute_profile {
     };
 }
 
-# ================================================================
-# Accessors
-# ================================================================
 sub get_profiles   { return $_[0]->{_profiles} }
 
-# Devuelve perfiles recalculados únicamente con las velas disponibles hasta
-# max_visible_index. Recortar sólo el dibujo no es suficiente: POC/VAH/VAL y
-# los bins también deben ignorar el futuro durante Replay.
 sub get_profiles_at {
     my ($self, $max_visible_index) = @_;
     my $candles = $self->{_candles} // [];
@@ -381,7 +340,6 @@ sub get_profiles_at {
     return $self->{_profile_cache}{$max_visible_index};
 }
 
-# Devuelve el perfil más reciente (para anclaje VWAP)
 sub get_latest_profile {
     my ($self) = @_;
     my $profiles = $self->{_profiles} // [];
@@ -389,7 +347,6 @@ sub get_latest_profile {
     return $profiles->[-1];
 }
 
-# Devuelve el POC del perfil más reciente
 sub get_poc {
     my ($self) = @_;
     my $p = $self->get_latest_profile();

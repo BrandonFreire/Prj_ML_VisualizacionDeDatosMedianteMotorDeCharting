@@ -42,19 +42,15 @@ sub candles {
 }
 
 my $levels = [
-    # Se vuelve externa solo desde la vela 6: antes debe tratarse como interna.
     { index => 1, price => 101, type => 'BSL', confirmed_at => 1,
       scope => 'external', scope_confirmed_at => 6 },
     { index => 2, price => 100.4, type => 'SSL', confirmed_at => 2,
       scope => 'internal' },
-    # Grab interno en la vela 5, separado de los niveles que siguen activos.
     { index => 0, price => 98, type => 'SSL', confirmed_at => 0,
       scope => 'internal', resolved_at => 5, classification => 'GRAB' },
-    # Grab externo y CHoCH externo producen TRANSITION en la vela 3.
     { index => 3, price => 103, type => 'BSL', confirmed_at => 3,
       scope => 'external', scope_confirmed_at => 3,
       resolved_at => 3, classification => 'BIG_GRAB' },
-    # RUN externo junto con BOS externo valida la tendencia en la vela 4.
     { index => 4, price => 104, type => 'BSL', confirmed_at => 4,
       scope => 'external', scope_confirmed_at => 4,
       resolved_at => 4, classification => 'RUN' },
@@ -98,8 +94,6 @@ my $unknown = $regime->compute_from_inputs(
 );
 is($unknown->[0]{state}, 'UNKNOWN', 'sin ATR el contexto queda honestamente desconocido');
 
-# Integracion con los indicadores locales y equivalencia de snapshot: no debe
-# haber diferencia entre el prefijo historico y el resultado ya calculado.
 require Market::Indicators::Liquidity;
 require Market::Indicators::SMC_Structures;
 my $market = make_market(candles());

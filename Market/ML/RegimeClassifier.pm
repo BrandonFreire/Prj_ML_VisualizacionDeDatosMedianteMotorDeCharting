@@ -3,9 +3,6 @@ package Market::ML::RegimeClassifier;
 use strict;
 use warnings;
 
-# K-means determinista para clasificar contexto, no para predecir precio.
-# Se ajusta hasta train_end_index y sus predicciones solo se emiten despues de
-# ese corte. Esto permite una evaluacion walk-forward sin fuga temporal.
 
 sub new {
     my ($class, %args) = @_;
@@ -63,10 +60,6 @@ sub fit {
         my $row = $_;
         [ map { ($row->{features}[$_] - $means[$_]) / $scales[$_] } 0 .. $dim - 1 ]
     } @train;
-    # K-means no puede extraer tres regímenes de un conjunto plano (o con
-    # menos patrones distintos que clusters). Sin esta guarda los centroides
-    # quedan duplicados y el desempate por índice etiqueta artificialmente
-    # todo como VOLATILE. Es preferible no emitir un régimen que inventarlo.
     my $unique_points = _unique_point_count(\@points);
     if ($unique_points < $clusters) {
         return $self->{_model} = {
@@ -152,8 +145,6 @@ sub predict {
     return [] unless $model->{available};
     my $start = defined $args{start_index}
         ? $args{start_index} : $model->{training_max_index} + 1;
-    # Por defecto se prohíbe etiquetar el entrenamiento como si fuera una
-    # predicción. Puede habilitarse explícitamente solo para inspección.
     $start = $model->{training_max_index} + 1 unless $args{allow_in_sample};
 
     my @series;
@@ -217,9 +208,6 @@ sub _unique_point_count {
     my ($points) = @_;
     my %seen;
     for my $point (@$points) {
-        # Los puntos ya están estandarizados. Una representación estable evita
-        # que ruido binario irrelevante convierta copias del mismo patrón en
-        # clusters aparentes.
         my $key = join "\x1E", map { sprintf('%.15g', $_) } @$point;
         $seen{$key} = 1;
     }
@@ -239,7 +227,6 @@ sub _nearest_cluster {
 sub _semantic_states {
     my ($centroids) = @_;
     my @clusters = 0 .. $#$centroids;
-    # Indices del FeatureExtractor: trend_return=1, volatility=2.
     my ($volatile) = sort {
         ($centroids->[$b][2] // 0) <=> ($centroids->[$a][2] // 0)
     } @clusters;

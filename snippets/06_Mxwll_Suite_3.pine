@@ -1,5 +1,3 @@
-// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
-// Mxwll Capital
 //@version=5
 indicator("Mxwll Suite", overlay = true, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500, max_bars_back = 500)
 
@@ -27,7 +25,6 @@ fvgcol      = input.color(defval = #F2B807, title = "FVG Color", group = "FVG")
 fvgtra      = input.int(defval = 80, minval = 0, maxval = 100, title = "FVG Transparency", group = "FVG")
 
 showFibs    = input.bool(defval = true, title = "Show Auto Fibs", group = "Auto Fibs")
-// extSensFibs = input.int(25, "Fibs Sensitivity", options = [10, 25, 50], group = "Auto Fibs", inline = "22")
 show236     = input.bool(defval = true,  title = "", inline = "1", group = "Auto Fibs")
 show382     = input.bool(defval = true,  title = "", inline = "2", group = "Auto Fibs")
 show5       = input.bool(defval = true,    title = "", inline = "3", group = "Auto Fibs")

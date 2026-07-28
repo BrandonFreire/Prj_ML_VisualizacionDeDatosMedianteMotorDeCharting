@@ -3,8 +3,6 @@ package Market::Panels::PricePanel;
 use strict;
 use warnings;
 
-# Renders the main OHLC candlestick chart.
-# Responsibilities: candles, price Y-axis, time X-axis, crosshair.
 
 my $COLOR_UP   = '#26a69a';
 my $COLOR_DOWN = '#ef5350';
@@ -33,13 +31,11 @@ sub round {
     return int( $value >= 0 ? $value + 0.5 : $value - 0.5 );
 }
 
-# Store active scale (called before render)
 sub set_scale {
     my ($self, $scale) = @_;
     $self->{scale} = $scale;
 }
 
-# Returns [y_min, y_max] for the visible data slice with padding
 sub get_y_range {
     my ($self, $data) = @_;
     return ( 0, 1 ) unless @$data;
@@ -117,7 +113,6 @@ sub render_volume {
     $canvas->lower( 'volume', 'grid' ) if $canvas->find( 'withtag', 'grid' );
 }
 
-# Draw a single candle with per-index tags (used by render and incremental update)
 sub render_candle {
     my ($self, $canvas, $c, $ix, $scale) = @_;
     my $bar_w  = $scale->{x_width} / $scale->{visible_bars};
@@ -151,12 +146,10 @@ sub render_candle {
     }
 }
 
-# Main render: draw grid lines, then all visible candles
 sub render {
     my ($self, $canvas, $data, $scale, $volume_max) = @_;
     return unless @$data;
 
-    # Grid lines
     for my $v ( $scale->get_nice_levels() ) {
         my $y = $scale->value_to_y($v);
         next if $y < 0 || $y > $scale->{y_height};
@@ -164,9 +157,6 @@ sub render {
             -fill => $COLOR_GRID, -tags => ['grid'] );
     }
 
-    # Candles
-    # data_start_index es el indice real del primer elemento del slice;
-    # puede diferir de start_index (virtual) cuando hay espacio vacio a la izquierda.
     my $d_start = $scale->{data_start_index} // $scale->{start_index};
     for my $i ( 0 .. $#$data ) {
         my $c  = $data->[$i];
@@ -174,13 +164,11 @@ sub render {
         $self->render_candle( $canvas, $c, $ix, $scale );
     }
 
-    # Store last visible candle info for render_last_visible_price
     my $last = $data->[-1];
     $self->{_last_close} = $last->{close};
     $self->{_last_open}  = $last->{open};
 }
 
-# Draw last visible close price label on the right edge.
 sub render_last_visible_price {
     my ($self, $canvas) = @_;
     my $scale = $self->{scale};
@@ -195,8 +183,6 @@ sub render_last_visible_price {
 
     my $label = sprintf( "%.2f", $price );
 
-    # El marcador de precio pertenece solo al eje derecho. Dibujarlo tambien
-    # sobre el canvas principal duplica visualmente la etiqueta en el borde.
     my $sc = $self->{scale_canvas};
     if ($sc) {
         my $sw = $sc->width() || 75;
@@ -218,7 +204,6 @@ sub render_last_visible_price {
     }
 }
 
-# Alias for compatibility
 sub set_y_range {
     my ($self, $y_min, $y_max) = @_;
     if ( $self->{scale} ) {
@@ -227,8 +212,6 @@ sub set_y_range {
     }
 }
 
-# Draw synchronized crosshair (delete+redraw — no stale item IDs)
-# $y puede ser undef cuando el mouse esta sobre el panel ATR: solo se dibuja la linea vertical
 sub draw_crosshair {
     my ($self, $x, $y) = @_;
     my $c     = $self->{canvas};
@@ -239,7 +222,6 @@ sub draw_crosshair {
 
     $c->delete('ch_lines');
 
-    # Linea vertical — siempre
     $c->createLine( $x, 0, $x, $h,
         -fill  => '#ffffff',
         -width => 1.5,
@@ -247,7 +229,6 @@ sub draw_crosshair {
         -tags  => [ 'crosshair', 'ch_lines' ],
     );
 
-    # Linea horizontal + label de precio — solo cuando el mouse esta sobre este panel
     if ( defined $y ) {
         $c->createLine( 0, $y, $w, $y,
             -fill  => '#ffffff',
@@ -285,9 +266,6 @@ sub hide_crosshair {
     $self->{scale_canvas}->delete('crosshair') if $self->{scale_canvas};
 }
 
-# Muestra O/H/L/C + cambio en la esquina superior izquierda del canvas de precio.
-# $candle     = hashref con open/high/low/close
-# $prev_close = cierre de la vela anterior (para calcular cambio); undef → usa open
 sub draw_ohlc_legend {
     my ($self, $candle, $prev_close) = @_;
     my $c = $self->{canvas};
@@ -306,7 +284,7 @@ sub draw_ohlc_legend {
     my $font  = [ 'Helvetica', 10 ];
     my $y     = 14;
     my $x     = 8;
-    my $GAP   = 8;   # espacio entre el valor y la siguiente letra
+    my $GAP   = 8;
 
     for my $field ( ['O', $o], ['H', $h], ['L', $l], ['C', $cl] ) {
         my ($lbl, $val) = @$field;
@@ -317,7 +295,6 @@ sub draw_ohlc_legend {
         $x += 14;
         $c->createText( $x, $y, -text => $val_str, -fill => $bar_color,
             -font => $font, -anchor => 'w', -tags => ['ohlc_legend'] );
-        # Avanzar segun longitud del texto (7px por caracter aprox en Helvetica 10)
         $x += length($val_str) * 7 + $GAP;
     }
 
@@ -327,7 +304,6 @@ sub draw_ohlc_legend {
     $c->raise('ohlc_legend');
 }
 
-# Caja de fecha/hora en el time-axis (delete+redraw)
 sub draw_crosshair_time_label {
     my ($self, $x, $ts) = @_;
     my $scale = $self->{scale};
@@ -357,9 +333,6 @@ sub draw_crosshair_time_label {
     $c->raise('crosshair');
 }
 
-# Draw the time axis at the bottom of the price canvas.
-# Usa scale->y_height como posicion Y para evitar el bug donde canvas->height()
-# devuelve 1 antes de que el layout este resuelto.
 sub draw_time_axis {
     my ($self, $canvas, $timestamps) = @_;
     my $scale = $self->{scale};
@@ -370,7 +343,6 @@ sub draw_time_axis {
 
     $canvas->createLine( 0, $y, $w, $y, -fill => $COLOR_AXIS, -tags => ['timeaxis'] );
 
-    # Espaciado minimo entre labels: velas anchas = labels mas juntas, velas angostas = mas separadas
     my $min_px = 55;
     if ( ( $scale->{visible_bars} || 0 ) > 0 ) {
         my $bar_w = $scale->{x_width} / $scale->{visible_bars};

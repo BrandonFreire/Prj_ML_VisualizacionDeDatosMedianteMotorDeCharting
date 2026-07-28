@@ -3,16 +3,6 @@ package Market::Backtest;
 use strict;
 use warnings;
 
-# Simulador determinista de una sola posicion. Consume señales ya conocidas al
-# cierre de una vela y entra exclusivamente en la apertura de la siguiente;
-# por eso no puede usar el high/low de una vela futura para decidir una entrada.
-#
-# Supuestos explicitados en el resultado:
-#   * una posicion simultanea como maximo;
-#   * SL/TP se prueban con OHLC de la vela posterior a la entrada;
-#   * si SL y TP ocurren en la misma vela, el modo por defecto es stop_first
-#     (conservador). Puede cambiarse a target_first para estudiar sensibilidad;
-#   * no hay financiacion, margen ni liquidez parcial.
 
 sub new {
     my ($class, %args) = @_;
@@ -80,9 +70,6 @@ sub run {
     my $regime_series = $args{regime_series} // [];
     die 'Market::Backtest->run: regime_series debe ser un arrayref'
         unless ref($regime_series) eq 'ARRAY';
-    # El régimen se consulta en la vela de la señal, no en la entrada ni en
-    # el cierre de la operación. Así un resultado ML OOS conserva su barrera
-    # temporal cuando se analiza el rendimiento por contexto.
     my %regime_at_signal;
     for my $regime (@$regime_series) {
         next unless ref($regime) eq 'HASH' && defined($regime->{index});
@@ -99,8 +86,6 @@ sub run {
         _validate_candle($candle, $i);
         my $had_position = $position ? 1 : 0;
 
-        # Una posicion existente se procesa antes que una entrada programada
-        # para la misma apertura. No permitimos dos posiciones incompatibles.
         if ($position) {
             my ($exit_price, $exit_reason) = _bar_exit($position, $candle, $cfg);
             if (defined $exit_price) {
@@ -115,8 +100,6 @@ sub run {
         }
 
         if (!$position && !$had_position && $entries_at{$i}) {
-            # En caso de señales concurrentes se toma la primera en el orden
-            # recibido y se deja constancia de las restantes.
             my $signal = shift @{ $entries_at{$i} };
             for my $ignored (@{ $entries_at{$i} }) {
                 push @skipped, {
@@ -132,8 +115,6 @@ sub run {
             );
             $equity -= $position->{entry_commission} if $position;
 
-            # La apertura ocurre al inicio de la vela, por lo que su rango
-            # intrabar puede alcanzar SL/TP de manera legítima.
             if ($position) {
                 my ($exit_price, $exit_reason) = _bar_exit($position, $candle, $cfg);
                 if (defined $exit_price) {
@@ -154,8 +135,6 @@ sub run {
             } @{ $entries_at{$i} };
         }
 
-        # Cierre obligatorio al final de la muestra. Se calcula despues de
-        # SL/TP: si ambos no se tocaron, se usa el close realmente conocido.
         if ($position && $i == $n - 1) {
             $equity = _close_position(
                 position => $position, raw_exit => $candle->{close},

@@ -1,11 +1,6 @@
-// This work is licensed under a Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0) https://creativecommons.org/licenses/by-nc-sa/4.0/
-// © LuxAlgo
 
 //@version=5
 indicator('Smart Money Concepts [LuxAlgo]', 'LuxAlgo - Smart Money Concepts', overlay = true, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500)
-//---------------------------------------------------------------------------------------------------------------------}
-//CONSTANTS & STRINGS & INPUTS
-//---------------------------------------------------------------------------------------------------------------------{
 BULLISH_LEG                     = 1
 BEARISH_LEG                     = 0
 
@@ -133,26 +128,6 @@ premiumZoneColorInput           = input.color(  RED,        'Premium Zone',     
 equilibriumZoneColorInput       = input.color(  GRAY,       'Equilibrium Zone',         group = ZONES_GROUP)
 discountZoneColorInput          = input.color(  GREEN,      'Discount Zone',            group = ZONES_GROUP)
 
-//---------------------------------------------------------------------------------------------------------------------}
-//DATA STRUCTURES & VARIABLES
-//---------------------------------------------------------------------------------------------------------------------{
-// @type                            UDT representing alerts as bool fields
-// @field internalBullishBOS        internal structure custom alert
-// @field internalBearishBOS        internal structure custom alert
-// @field internalBullishCHoCH      internal structure custom alert
-// @field internalBearishCHoCH      internal structure custom alert
-// @field swingBullishBOS           swing structure custom alert
-// @field swingBearishBOS           swing structure custom alert
-// @field swingBullishCHoCH         swing structure custom alert
-// @field swingBearishCHoCH         swing structure custom alert
-// @field internalBullishOrderBlock internal order block custom alert
-// @field internalBearishOrderBlock internal order block custom alert
-// @field swingBullishOrderBlock    swing order block custom alert
-// @field swingBearishOrderBlock    swing order block custom alert
-// @field equalHighs                equal high low custom alert
-// @field equalLows                 equal high low custom alert
-// @field bullishFairValueGap       fair value gap custom alert
-// @field bearishFairValueGap       fair value gap custom alert
 type alerts
     bool internalBullishBOS         = false
     bool internalBearishBOS         = false
@@ -171,13 +146,6 @@ type alerts
     bool bullishFairValueGap        = false
     bool bearishFairValueGap        = false
 
-// @type                            UDT representing last swing extremes (top & bottom)
-// @field top                       last top swing price
-// @field bottom                    last bottom swing price
-// @field barTime                   last swing bar time
-// @field barIndex                  last swing bar index
-// @field lastTopTime               last top swing time
-// @field lastBottomTime            last bottom swing time
 type trailingExtremes
     float top
     float bottom
@@ -186,12 +154,6 @@ type trailingExtremes
     int lastTopTime
     int lastBottomTime
 
-// @type                            UDT representing Fair Value Gaps
-// @field top                       top price
-// @field bottom                    bottom price
-// @field bias                      bias (BULLISH or BEARISH)
-// @field topBox                    top box
-// @field bottomBox                 bottom box
 type fairValueGap
     float top
     float bottom
@@ -199,24 +161,13 @@ type fairValueGap
     box topBox
     box bottomBox
 
-// @type                            UDT representing trend bias
-// @field bias                      BULLISH or BEARISH
 type trend
     int bias    
 
-// @type                            UDT representing Equal Highs Lows display
-// @field l_ine                     displayed line
-// @field l_abel                    displayed label
 type equalDisplay
     line l_ine      = na
     label l_abel    = na
 
-// @type                            UDT representing a pivot point (swing point) 
-// @field currentLevel              current price level
-// @field lastLevel                 last price level
-// @field crossed                   true if price level is crossed
-// @field barTime                   bar time
-// @field barIndex                  bar index    
 type pivot
     float currentLevel
     float lastLevel
@@ -224,81 +175,44 @@ type pivot
     int barTime     = time
     int barIndex    = bar_index
 
-// @type                            UDT representing an order block
-// @field barHigh                   bar high
-// @field barLow                    bar low
-// @field barTime                   bar time
-// @field bias                      BULLISH or BEARISH
 type orderBlock
     float barHigh
     float barLow
     int barTime    
     int bias
 
-// @variable                        current swing pivot high    
 var pivot swingHigh                 = pivot.new(na,na,false)
-// @variable                        current swing pivot low
 var pivot swingLow                  = pivot.new(na,na,false)
-// @variable                        current internal pivot high
 var pivot internalHigh              = pivot.new(na,na,false)
-// @variable                        current internal pivot low
 var pivot internalLow               = pivot.new(na,na,false)
-// @variable                        current equal high pivot
 var pivot equalHigh                 = pivot.new(na,na,false)
-// @variable                        current equal low pivot
 var pivot equalLow                  = pivot.new(na,na,false)
-// @variable                        swing trend bias
 var trend swingTrend                = trend.new(0)
-// @variable                        internal trend bias
 var trend internalTrend             = trend.new(0)
-// @variable                        equal high display
 var equalDisplay equalHighDisplay   = equalDisplay.new()
-// @variable                        equal low display
 var equalDisplay equalLowDisplay    = equalDisplay.new()
-// @variable                        storage for fairValueGap UDTs
 var array<fairValueGap> fairValueGaps = array.new<fairValueGap>()
-// @variable                        storage for parsed highs
 var array<float> parsedHighs        = array.new<float>()
-// @variable                        storage for parsed lows
 var array<float> parsedLows         = array.new<float>()
-// @variable                        storage for raw highs
 var array<float> highs              = array.new<float>()
-// @variable                        storage for raw lows
 var array<float> lows               = array.new<float>()
-// @variable                        storage for bar time values
 var array<int> times                = array.new<int>()
-// @variable                        last trailing swing high and low
 var trailingExtremes trailing       = trailingExtremes.new()
-// @variable                                storage for orderBlock UDTs (swing order blocks)
 var array<orderBlock> swingOrderBlocks      = array.new<orderBlock>()
-// @variable                                storage for orderBlock UDTs (internal order blocks)
 var array<orderBlock> internalOrderBlocks   = array.new<orderBlock>()
-// @variable                                storage for swing order blocks boxes
 var array<box> swingOrderBlocksBoxes        = array.new<box>()
-// @variable                                storage for internal order blocks boxes
 var array<box> internalOrderBlocksBoxes     = array.new<box>()
-// @variable                        color for swing bullish structures
 var swingBullishColor               = styleInput == MONOCHROME ? MONO_BULLISH : swingBullColorInput
-// @variable                        color for swing bearish structures
 var swingBearishColor               = styleInput == MONOCHROME ? MONO_BEARISH : swingBearColorInput
-// @variable                        color for bullish fair value gaps
 var fairValueGapBullishColor        = styleInput == MONOCHROME ? color.new(MONO_BULLISH,70) : fairValueGapsBullColorInput
-// @variable                        color for bearish fair value gaps
 var fairValueGapBearishColor        = styleInput == MONOCHROME ? color.new(MONO_BEARISH,70) : fairValueGapsBearColorInput
-// @variable                        color for premium zone
 var premiumZoneColor                = styleInput == MONOCHROME ? MONO_BEARISH : premiumZoneColorInput
-// @variable                        color for discount zone
 var discountZoneColor               = styleInput == MONOCHROME ? MONO_BULLISH : discountZoneColorInput 
-// @variable                        bar index on current script iteration
 varip int currentBarIndex           = bar_index
-// @variable                        bar index on last script iteration
 varip int lastBarIndex              = bar_index
-// @variable                        alerts in current bar
 alerts currentAlerts                = alerts.new()
-// @variable                        time at start of chart
 var initialTime                     = time
 
-// we create the needed boxes for displaying order blocks at the first execution
 if barstate.isfirst
     if showSwingOrderBlocksInput
         for index = 1 to swingOrderBlocksSizeInput
@@ -307,33 +221,20 @@ if barstate.isfirst
         for index = 1 to internalOrderBlocksSizeInput
             internalOrderBlocksBoxes.push(box.new(na,na,na,na,xloc = xloc.bar_time,extend = extend.right))
 
-// @variable                        source to use in bearish order blocks mitigation
 bearishOrderBlockMitigationSource   = orderBlockMitigationInput == CLOSE ? close : high
-// @variable                        source to use in bullish order blocks mitigation
 bullishOrderBlockMitigationSource   = orderBlockMitigationInput == CLOSE ? close : low
-// @variable                        default volatility measure
 atrMeasure                          = ta.atr(200)
-// @variable                        parsed volatility measure by user settings
 volatilityMeasure                   = orderBlockFilterInput == ATR ? atrMeasure : ta.cum(ta.tr)/bar_index
-// @variable                        true if current bar is a high volatility bar
 highVolatilityBar                   = (high - low) >= (2 * volatilityMeasure)
-// @variable                        parsed high
 parsedHigh                          = highVolatilityBar ? low : high
-// @variable                        parsed low
 parsedLow                           = highVolatilityBar ? high : low
 
-// we store current values into the arrays at each bar
 parsedHighs.push(parsedHigh)
 parsedLows.push(parsedLow)
 highs.push(high)
 lows.push(low)
 times.push(time)
 
-//---------------------------------------------------------------------------------------------------------------------}
-//USER-DEFINED FUNCTIONS
-//---------------------------------------------------------------------------------------------------------------------{
-// @function            Get the value of the current leg, it can be 0 (bearish) or 1 (bullish)
-// @returns             int
 leg(int size) =>
     var leg     = 0    
     newLegHigh  = high[size] > ta.highest( size)
@@ -345,28 +246,12 @@ leg(int size) =>
         leg := BULLISH_LEG
     leg
 
-// @function            Identify whether the current value is the start of a new leg (swing)
-// @param leg           (int) Current leg value
-// @returns             bool
 startOfNewLeg(int leg)      => ta.change(leg) != 0
 
-// @function            Identify whether the current level is the start of a new bearish leg (swing)
-// @param leg           (int) Current leg value
-// @returns             bool
 startOfBearishLeg(int leg)  => ta.change(leg) == -1
 
-// @function            Identify whether the current level is the start of a new bullish leg (swing)
-// @param leg           (int) Current leg value
-// @returns             bool
 startOfBullishLeg(int leg)  => ta.change(leg) == +1
 
-// @function            create a new label
-// @param labelTime     bar time coordinate
-// @param labelPrice    price coordinate
-// @param tag           text to display
-// @param labelColor    text color
-// @param labelStyle    label style
-// @returns             label ID
 drawLabel(int labelTime, float labelPrice, string tag, color labelColor, string labelStyle) =>    
     var label l_abel = na
 
@@ -375,12 +260,6 @@ drawLabel(int labelTime, float labelPrice, string tag, color labelColor, string 
 
     l_abel := label.new(chart.point.new(labelTime,na,labelPrice),tag,xloc.bar_time,color=color(na),textcolor=labelColor,style = labelStyle,size = size.small)
 
-// @function            create a new line and label representing an EQH or EQL
-// @param p_ivot        starting pivot
-// @param level         price level of current pivot
-// @param size          how many bars ago was the current pivot detected
-// @param equalHigh     true for EQH, false for EQL
-// @returns             label ID
 drawEqualHighLow(pivot p_ivot, float level, int size, bool equalHigh) =>
     equalDisplay e_qualDisplay = equalHigh ? equalHighDisplay : equalLowDisplay
     
@@ -401,11 +280,6 @@ drawEqualHighLow(pivot p_ivot, float level, int size, bool equalHigh) =>
     labelPosition           = math.round(0.5*(p_ivot.barIndex + bar_index - size))
     e_qualDisplay.l_abel    := label.new(chart.point.new(na,labelPosition,level), tag, xloc.bar_index, color = color(na), textcolor = equalColor, style = labelStyle, size = equalHighsLowsSizeInput)
 
-// @function            store current structure and trailing swing points, and also display swing points and equal highs/lows
-// @param size          (int) structure size
-// @param equalHighLow  (bool) true for displaying current highs/lows
-// @param internal      (bool) true for getting internal structures
-// @returns             label ID
 getCurrentStructure(int size,bool equalHighLow = false, bool internal = false) =>        
     currentLeg              = leg(size)
     newPivot                = startOfNewLeg(currentLeg)
@@ -456,14 +330,6 @@ getCurrentStructure(int size,bool equalHighLow = false, bool internal = false) =
             if showSwingsInput and not internal and not equalHighLow
                 drawLabel(time[size], p_ivot.currentLevel, p_ivot.currentLevel > p_ivot.lastLevel ? 'HH' : 'LH', swingBearishColor, label.style_label_down)
                 
-// @function                draw line and label representing a structure
-// @param p_ivot            base pivot point
-// @param tag               test to display
-// @param structureColor    base color
-// @param lineStyle         line style
-// @param labelStyle        label style
-// @param labelSize         text size
-// @returns                 label ID
 drawStructure(pivot p_ivot, string tag, color structureColor, string lineStyle, string labelStyle, string labelSize) =>    
     var line l_ine      = line.new(na,na,na,na,xloc = xloc.bar_time)
     var label l_abel    = label.new(na,na)
@@ -475,9 +341,6 @@ drawStructure(pivot p_ivot, string tag, color structureColor, string lineStyle, 
     l_ine   := line.new(chart.point.new(p_ivot.barTime,na,p_ivot.currentLevel), chart.point.new(time,na,p_ivot.currentLevel), xloc.bar_time, color=structureColor, style=lineStyle)
     l_abel  := label.new(chart.point.new(na,math.round(0.5*(p_ivot.barIndex+bar_index)),p_ivot.currentLevel), tag, xloc.bar_index, color=color(na), textcolor=structureColor, style=labelStyle, size = labelSize)
 
-// @function            delete order blocks
-// @param internal      true for internal order blocks
-// @returns             orderBlock ID
 deleteOrderBlocks(bool internal = false) =>
     array<orderBlock> orderBlocks = internal ? internalOrderBlocks : swingOrderBlocks
 
@@ -499,11 +362,6 @@ deleteOrderBlocks(bool internal = false) =>
         if crossedOderBlock                    
             orderBlocks.remove(index)            
 
-// @function            fetch and store order blocks
-// @param p_ivot        base pivot point
-// @param internal      true for internal order blocks
-// @param bias          BULLISH or BEARISH
-// @returns             void
 storeOrdeBlock(pivot p_ivot,bool internal = false,int bias) =>
     if (not internal and showSwingOrderBlocksInput) or (internal and showInternalOrderBlocksInput)
 
@@ -524,9 +382,6 @@ storeOrdeBlock(pivot p_ivot,bool internal = false,int bias) =>
             orderBlocks.pop()
         orderBlocks.unshift(o_rderBlock)
 
-// @function            draw order blocks as boxes
-// @param internal      true for internal order blocks
-// @returns             void
 drawOrderBlocks(bool internal = false) =>        
     array<orderBlock> orderBlocks = internal ? internalOrderBlocks : swingOrderBlocks
     orderBlocksSize = orderBlocks.size()
@@ -545,9 +400,6 @@ drawOrderBlocks(bool internal = false) =>
             b_ox.set_border_color(      internal ? na : orderBlockColor)
             b_ox.set_bgcolor(           orderBlockColor)
 
-// @function            detect and draw structures, also detect and store order blocks
-// @param internal      true for internal structures or order blocks
-// @returns             void
 displayStructure(bool internal = false) =>
     var bullishBar = true
     var bearishBar = true
@@ -611,17 +463,8 @@ displayStructure(bool internal = false) =>
         if (internal and showInternalOrderBlocksInput) or (not internal and showSwingOrderBlocksInput)
             storeOrdeBlock(p_ivot,internal,BEARISH)
 
-// @function            draw one fair value gap box (each fair value gap has two boxes)
-// @param leftTime      left time coordinate
-// @param rightTime     right time coordinate
-// @param topPrice      top price level
-// @param bottomPrice   bottom price level
-// @param boxColor      box color
-// @returns             box ID
 fairValueGapBox(leftTime,rightTime,topPrice,bottomPrice,boxColor) => box.new(chart.point.new(leftTime,na,topPrice),chart.point.new(rightTime + fairValueGapsExtendInput * (time-time[1]),na,bottomPrice), xloc=xloc.bar_time, border_color = boxColor, bgcolor = boxColor)
 
-// @function            delete fair value gaps
-// @returns             fairValueGap ID
 deleteFairValueGaps() =>
     for [index,eachFairValueGap] in fairValueGaps
         if (low < eachFairValueGap.bottom and eachFairValueGap.bias == BULLISH) or (high > eachFairValueGap.top and eachFairValueGap.bias == BEARISH)
@@ -629,8 +472,6 @@ deleteFairValueGaps() =>
             eachFairValueGap.bottomBox.delete()
             fairValueGaps.remove(index)
     
-// @function            draw fair value gaps
-// @returns             fairValueGap ID
 drawFairValueGaps() => 
     [lastClose, lastOpen, lastTime, currentHigh, currentLow, currentTime, last2High, last2Low] = request.security(syminfo.tickerid, fairValueGapsTimeframeInput, [close[1], open[1], time[1], high[0], low[0], time[0], high[2], low[2]],lookahead = barmerge.lookahead_on)
 
@@ -648,21 +489,12 @@ drawFairValueGaps() =>
         currentAlerts.bearishFairValueGap := true
         fairValueGaps.unshift(fairValueGap.new(currentHigh,last2Low,BEARISH,fairValueGapBox(lastTime,currentTime,currentHigh,math.avg(currentHigh,last2Low),fairValueGapBearishColor),fairValueGapBox(lastTime,currentTime,math.avg(currentHigh,last2Low),last2Low,fairValueGapBearishColor)))
 
-// @function            get line style from string
-// @param style         line style
-// @returns             string
 getStyle(string style) =>
     switch style
         SOLID => line.style_solid
         DASHED => line.style_dashed
         DOTTED => line.style_dotted
 
-// @function            draw MultiTimeFrame levels
-// @param timeframe     base timeframe
-// @param sameTimeframe true if chart timeframe is same as base timeframe
-// @param style         line style
-// @param levelColor    line and text color
-// @returns             void
 drawLevels(string timeframe, bool sameTimeframe, string style, color levelColor) =>
     [topLevel, bottomLevel, leftTime, rightTime] = request.security(syminfo.tickerid, timeframe, [high[1], low[1], time[1], time],lookahead = barmerge.lookahead_on)
 
@@ -699,21 +531,14 @@ drawLevels(string timeframe, bool sameTimeframe, string style, color levelColor)
     bottomLine.set_second_point(chart.point.new(last_bar_time + 20 * (time-time[1]),na,parsedBottom))
     bottomLabel.set_point(      chart.point.new(last_bar_time + 20 * (time-time[1]),na,parsedBottom))
 
-// @function            true if chart timeframe is higher than provided timeframe
-// @param timeframe     timeframe to check
-// @returns             bool
 higherTimeframe(string timeframe) => timeframe.in_seconds() > timeframe.in_seconds(timeframe)
 
-// @function            update trailing swing points
-// @returns             int
 updateTrailingExtremes() =>
     trailing.top            := math.max(high,trailing.top)
     trailing.lastTopTime    := trailing.top == high ? time : trailing.lastTopTime
     trailing.bottom         := math.min(low,trailing.bottom)
     trailing.lastBottomTime := trailing.bottom == low ? time : trailing.lastBottomTime
 
-// @function            draw trailing swing points
-// @returns             void
 drawHighLowSwings() =>
     var line topLine        = line.new(na, na, na, na, color = swingBearishColor, xloc = xloc.bar_time)
     var line bottomLine     = line.new(na, na, na, na, color = swingBullishColor, xloc = xloc.bar_time)
@@ -732,15 +557,6 @@ drawHighLowSwings() =>
     bottomLabel.set_point(      chart.point.new(rightTimeBar, na, trailing.bottom))
     bottomLabel.set_text(       swingTrend.bias == BULLISH ? 'Strong Low' : 'Weak Low')
 
-// @function            draw a zone with a label and a box
-// @param labelLevel    price level for label
-// @param labelIndex    bar index for label
-// @param top           top price level for box
-// @param bottom        bottom price level for box
-// @param tag           text to display
-// @param zoneColor     base color
-// @param style         label style
-// @returns             void
 drawZone(float labelLevel, int labelIndex, float top, float bottom, string tag, color zoneColor, string style) =>
     var label l_abel    = label.new(na,na,text = tag, color=color(na),textcolor = zoneColor, style = style, size = size.small)
     var box b_ox        = box.new(na,na,na,na,bgcolor = color.new(zoneColor,80),border_color = color(na), xloc = xloc.bar_time)
@@ -750,8 +566,6 @@ drawZone(float labelLevel, int labelIndex, float top, float bottom, string tag, 
 
     l_abel.set_point(           chart.point.new(na,labelIndex,labelLevel))
 
-// @function            draw premium/discount zones
-// @returns             void
 drawPremiumDiscountZones() =>
     drawZone(trailing.top, math.round(0.5*(trailing.barIndex + last_bar_index)), trailing.top, 0.95*trailing.top + 0.05*trailing.bottom, 'Premium', premiumZoneColor, label.style_label_down)
 
@@ -760,9 +574,6 @@ drawPremiumDiscountZones() =>
 
     drawZone(trailing.bottom, math.round(0.5*(trailing.barIndex + last_bar_index)), 0.95*trailing.bottom + 0.05*trailing.top, trailing.bottom, 'Discount', discountZoneColor, label.style_label_up)
 
-//---------------------------------------------------------------------------------------------------------------------}
-//MUTABLE VARIABLES & EXECUTION
-//---------------------------------------------------------------------------------------------------------------------{
 parsedOpen  = showTrendInput ? open : na
 candleColor = internalTrend.bias == BULLISH ? swingBullishColor : swingBearishColor
 plotcandle(parsedOpen,high,low,close,color = candleColor, wickcolor = candleColor, bordercolor = candleColor)
@@ -821,9 +632,6 @@ if barstate.islastconfirmedhistory or (barstate.isrealtime and newBar)
     if showMonthlyLevelsInput and not higherTimeframe('M')
         drawLevels('M',timeframe.ismonthly,monthlyLevelsStyleInput,monthlyLevelsColorInput)
 
-//---------------------------------------------------------------------------------------------------------------------}
-//ALERTS
-//---------------------------------------------------------------------------------------------------------------------{
 alertcondition(currentAlerts.internalBullishBOS,        'Internal Bullish BOS',         'Internal Bullish BOS formed')
 alertcondition(currentAlerts.internalBullishCHoCH,      'Internal Bullish CHoCH',       'Internal Bullish CHoCH formed')
 alertcondition(currentAlerts.internalBearishBOS,        'Internal Bearish BOS',         'Internal Bearish BOS formed')
@@ -844,5 +652,3 @@ alertcondition(currentAlerts.equalLows,                 'Equal Lows',           
 
 alertcondition(currentAlerts.bullishFairValueGap,       'Bullish FVG',                  'Bullish FVG formed')
 alertcondition(currentAlerts.bearishFairValueGap,       'Bearish FVG',                  'Bearish FVG formed')
-
-//---------------------------------------------------------------------------------------------------------------------}

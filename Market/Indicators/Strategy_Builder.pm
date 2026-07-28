@@ -5,37 +5,21 @@ use warnings;
 use Market::Backtest;
 use Market::Indicators::TrendChannels;
 
-# DIY Custom Strategy Builder — Motor de cálculo (Sección 6)
-#
-# Procesa en tiempo real las reglas de entrada/salida combinando
-# indicadores técnicos y volumen.  Estricta separación de Overlays.
-#
-# Componentes:
-#   SuperTrend   — bandas ATR con flip dinámico
-#   HalfTrend    — dirección de tendencia con filtros de reversión
-#   Range Filter — suavizado dinámico del precio
-#   Supply/Demand Zones — OBs validados por volumen
 
 sub new {
     my ($class, %args) = @_;
     return bless {
-        # SuperTrend params
         st_multiplier  => $args{st_multiplier}  // 3.0,
         st_period      => $args{st_period}      // 10,
 
-        # HalfTrend params
         ht_amplitude   => $args{ht_amplitude}   // 2,
         ht_channel_dev => $args{ht_channel_dev} // 2,
 
-        # Range Filter params
         rf_period      => $args{rf_period}      // 100,
         rf_multiplier  => $args{rf_multiplier}  // 3.0,
 
-        # Supply/Demand volume threshold (percentil)
         sd_vol_pct     => $args{sd_vol_pct}     // 0.70,
 
-        # Motor de señales: el indicador principal debe cambiar de dirección;
-        # las confirmaciones pueden aprobar en la misma vela o antes de expirar.
         signal_main_indicator     => $args{signal_main_indicator} // 'supertrend',
         signal_confirmations      => $args{signal_confirmations}  // [],
         signal_confirmation_mode  => uc($args{signal_confirmation_mode} // 'AND'),
@@ -43,7 +27,6 @@ sub new {
         signal_alternating_only   => exists $args{signal_alternating_only}
             ? ($args{signal_alternating_only} ? 1 : 0) : 1,
 
-        # Results
         _supertrend    => [],
         _halftrend     => [],
         _range_filter  => [],
@@ -53,7 +36,7 @@ sub new {
         _signals       => [],
         _trend_channels=> [],
         _candles       => undef,
-        _smc_ref       => undef,   # ref a SMC_Structures para OBs
+        _smc_ref       => undef,
     }, $class;
 }
 
@@ -77,26 +60,19 @@ sub compute_all {
     my $n = scalar @$arr;
     return if $n < 2;
 
-    # Pre-compute ATR for SuperTrend
     my @atr = _simple_atr($arr, $self->{st_period});
     $self->{_atr} = \@atr;
 
-    # 1. SuperTrend
     $self->{_supertrend} = $self->_compute_supertrend($arr, \@atr);
 
-    # 2. HalfTrend
     $self->{_halftrend} = $self->_compute_halftrend($arr, \@atr);
 
-    # 3. Range Filter
     $self->{_range_filter} = $self->_compute_range_filter($arr);
 
-    # 4. Señales configurables sobre series ya calculadas.
     $self->compute_signals($arr);
 
-    # 5 & 6. Supply / Demand Zones (basados en OBs de SMC)
     $self->_compute_supply_demand($arr, $market);
 
-    # 7. Canales paralelos basados exclusivamente en pivotes confirmados.
     my @pivots;
     if (my $smc = $self->{_smc_ref}) {
         push @pivots, @{ $smc->get_swing_highs() // [] } if $smc->can('get_swing_highs');
@@ -108,9 +84,6 @@ sub compute_all {
     );
 }
 
-# ================================================================
-# Señales LONG/SHORT configurables
-# ================================================================
 sub set_signal_configuration {
     my ($self, %args) = @_;
     for my $key (qw(signal_main_indicator signal_confirmations signal_expiry_bars signal_alternating_only)) {
@@ -229,9 +202,6 @@ sub _signal_direction_at {
     return undef;
 }
 
-# Ejecuta las señales ya calculadas con entrada en la apertura siguiente.
-# Mantenerlo aquí evita que cualquier consumidor tenga que reconstruir ATR o
-# accidentalmente use una señal antes de que la vela que la confirma cierre.
 sub run_backtest {
     my ($self, %args) = @_;
     my $engine = delete $args{engine};
@@ -261,9 +231,6 @@ sub run_backtest {
 
 sub backtest { return $_[0]->run_backtest(@_[1 .. $#_]) }
 
-# ================================================================
-# SuperTrend — Cálculo por vela cerrada basado en multiplicador ATR
-# ================================================================
 sub _compute_supertrend {
     my ($self, $arr, $atr) = @_;
     my $n    = scalar @$arr;
@@ -276,11 +243,9 @@ sub _compute_supertrend {
         my $atr_val = $atr->[$i] // 0;
         my $hl2     = ($arr->[$i]{high} + $arr->[$i]{low}) / 2;
 
-        # Bandas básicas
         my $basic_upper = $hl2 + $mult * $atr_val;
         my $basic_lower = $hl2 - $mult * $atr_val;
 
-        # Bandas finales: mantener si el precio anterior no las rompió
         my $final_upper = $basic_upper;
         my $final_lower = $basic_lower;
 
@@ -292,7 +257,6 @@ sub _compute_supertrend {
                 ? $basic_lower : $prev_lower;
         }
 
-        # Dirección: flip cuando el cierre cruza la banda
         my $dir = $prev_dir;
         my $close = $arr->[$i]{close};
         if ($i > 0) {
@@ -307,7 +271,7 @@ sub _compute_supertrend {
 
         push @st, {
             value     => $value,
-            direction => $dir,     # 1 = bull, -1 = bear
+            direction => $dir,
             upper     => $final_upper,
             lower     => $final_lower,
         };
@@ -320,9 +284,6 @@ sub _compute_supertrend {
     return \@st;
 }
 
-# ================================================================
-# HalfTrend — Determinación de dirección y filtros de reversión
-# ================================================================
 sub _compute_halftrend {
     my ($self, $arr, $atr) = @_;
     my $n         = scalar @$arr;
@@ -330,7 +291,7 @@ sub _compute_halftrend {
     my $dev       = $self->{ht_channel_dev};
     my @ht;
 
-    my $trend        = 0;     # 0=up, 1=down
+    my $trend        = 0;
     my $next_trend   = 0;
     my $max_low_price  = $arr->[0]{low};
     my $min_high_price = $arr->[0]{high};
@@ -388,7 +349,7 @@ sub _compute_halftrend {
         my $deviation = $dev * $atr_half;
 
         push @ht, {
-            trend     => $trend,      # 0=up, 1=down
+            trend     => $trend,
             value     => $value,
             atr_high  => $value + $deviation,
             atr_low   => $value - $deviation,
@@ -399,9 +360,6 @@ sub _compute_halftrend {
     return \@ht;
 }
 
-# ================================================================
-# Range Filter — Suavizado dinámico del precio
-# ================================================================
 sub _compute_range_filter {
     my ($self, $arr) = @_;
     my $n      = scalar @$arr;
@@ -409,13 +367,11 @@ sub _compute_range_filter {
     my $mult   = $self->{rf_multiplier};
     my @rf;
 
-    # Compute smoothed range using EMA of absolute bar range
     my @abs_range;
     for my $i (0 .. $n - 1) {
         push @abs_range, abs($arr->[$i]{high} - $arr->[$i]{low});
     }
 
-    # EMA of range
     my @ema_range = (0) x $n;
     my $k = 2.0 / ($period + 1);
     $ema_range[0] = $abs_range[0];
@@ -425,7 +381,7 @@ sub _compute_range_filter {
 
     my $filter = $arr->[0]{close};
     my $prev_filter = $filter;
-    my $direction   = 0;  # 1=up, -1=down
+    my $direction   = 0;
 
     for my $i (0 .. $n - 1) {
         my $smooth_range = $ema_range[$i] * $mult;
@@ -461,9 +417,6 @@ sub _compute_range_filter {
     return \@rf;
 }
 
-# ================================================================
-# Supply / Demand Zones — OBs validados por volumen
-# ================================================================
 sub _compute_supply_demand {
     my ($self, $arr, $market) = @_;
     my $n   = scalar @$arr;
@@ -472,7 +425,6 @@ sub _compute_supply_demand {
 
     my $obs = $smc->get_ob_zones() // [];
 
-    # Calcular percentil de volumen para umbral
     my @vols = sort { $a <=> $b }
                grep { defined $_ && $_ > 0 }
                map  { $arr->[$_]{volume} }
@@ -494,7 +446,7 @@ sub _compute_supply_demand {
         my $idx = $ob->{index};
         next unless defined $idx && $idx >= 0 && $idx < $n;
         my $vol = $arr->[$idx]{volume} // 0;
-        next if $vol < $threshold;   # filtrar por volumen
+        next if $vol < $threshold;
 
         my $zone = {
             index        => $idx,
@@ -519,9 +471,6 @@ sub _compute_supply_demand {
     $self->{_demand_zones} = \@demand;
 }
 
-# ================================================================
-# ATR helper (Wilder's method, standalone for Strategy Builder)
-# ================================================================
 sub _simple_atr {
     my ($arr, $period) = @_;
     my $n  = scalar @$arr;
@@ -540,7 +489,6 @@ sub _simple_atr {
         for my $i ($period+1 .. $n-1) {
             $atr[$i] = ($atr[$i-1] * ($period-1) + $tr[$i]) / $period;
         }
-        # backfill warmup
         for my $i (0 .. $period - 1) {
             $atr[$i] = $atr[$period] if !defined $atr[$i] && defined $atr[$period];
         }
@@ -548,9 +496,6 @@ sub _simple_atr {
     return @atr;
 }
 
-# ================================================================
-# Accessors
-# ================================================================
 sub get_supertrend   { return $_[0]->{_supertrend}   }
 sub get_halftrend    { return $_[0]->{_halftrend}     }
 sub get_range_filter { return $_[0]->{_range_filter}  }

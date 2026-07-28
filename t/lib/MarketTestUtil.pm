@@ -19,8 +19,6 @@ sub make_market {
     return $market;
 }
 
-# Diez velas de un minuto alineadas a un límite de cinco minutos.  Los datos
-# son artificiales para que cada resultado esperado sea fácil de auditar.
 sub sample_candles {
     my $base = 1_800_000_000;
     return [ map {

@@ -1,5 +1,3 @@
-// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
-// © mickes
 
 //@version=6
 indicator("Liquidity & inducements", overlay = true, max_labels_count = 500, max_lines_count = 500)
@@ -107,8 +105,8 @@ method SetBarIndex(PriceAction.Pivot pivot, int barTime) =>
     barIndex = 0
     i = 0
     while true
-        if time[i] < barTime // before creation of zone 
-            barIndex := bar_index - (i - 1) // set the creation bar to the first bar inside the zone
+        if time[i] < barTime
+            barIndex := bar_index - (i - 1)
             break
         i += 1
     pivot.BarIndex := barIndex
@@ -119,12 +117,12 @@ method SetBarIndices(PriceAction.Pivot pivotHigh, PriceAction.Pivot pivotLow) =>
         pivotLow.SetBarIndex(pivotLow.Time)
 EqualPivotsInducementTrigger(EqualPivots equalPivots, EqualPivotSettings settings, int trend) =>
     for inducement in equalPivots.BearishInducements
-        if trend == -1 and not inducement.LiquidityTaken and high >= inducement.StopLosses // only sweep the liquidity if the trend is bearish
+        if trend == -1 and not inducement.LiquidityTaken and high >= inducement.StopLosses
             inducement.LiquidityTaken := true
             line.new(inducement.FirstPivot.BarIndex, inducement.StopLosses, inducement.SecondPivot.BarIndex, inducement.StopLosses, color = settings.LiquidityColor, style = settings.LineStyle)
             label.new(inducement.SecondPivot.BarIndex - ((inducement.SecondPivot.BarIndex - inducement.FirstPivot.BarIndex) / 2), inducement.StopLosses, "$$$", size = settings.FontSize, color = color(na), textcolor = settings.LiquidityColor)
     for inducement in equalPivots.BullishInducements
-        if trend == 1 and not inducement.LiquidityTaken and low <= inducement.StopLosses // only sweep the liquidity if the trend is bullish
+        if trend == 1 and not inducement.LiquidityTaken and low <= inducement.StopLosses
             inducement.LiquidityTaken := true
             line.new(inducement.FirstPivot.BarIndex, inducement.StopLosses, inducement.SecondPivot.BarIndex, inducement.StopLosses, color = settings.LiquidityColor, style = settings.LineStyle)
             label.new(inducement.SecondPivot.BarIndex - ((inducement.SecondPivot.BarIndex - inducement.FirstPivot.BarIndex) / 2), inducement.StopLosses, "$$$", size = settings.FontSize, color = color(na), textcolor = settings.LiquidityColor, style = label.style_label_up)
@@ -141,19 +139,19 @@ EqualPivotsInducementAndLiquidity(array<PriceAction.Pivot> pivots, array<EqualPi
                 equalPivotMinimumPrice = switch latestPivot.Type
                     1 => equalPivot.Price - (_atr * settings.AverageTrueRangeFactor)
                     -1 => equalPivot.Price
-                if latestPivot.Price > equalPivotMaximumPrice or latestPivot.Price < equalPivotMinimumPrice// not (latestPivot.Price >= equalPivotMinimumPrice and latestPivot.Price <= equalPivotMaximumPrice) //latestPivot.Price >= equalPivotMinimumPrice and latestPivot.Price <= equalPivotMaximumPrice
+                if latestPivot.Price > equalPivotMaximumPrice or latestPivot.Price < equalPivotMinimumPrice
                     continue
                 broken = false
                 step = switch latestPivot.Type
                     1 => (equalPivot.Price - latestPivot.Price) / (latestPivot.BarIndex - equalPivot.BarIndex)
                     -1 => (latestPivot.Price - equalPivot.Price) / (equalPivot.BarIndex - latestPivot.BarIndex)
                 for j = 2 to latestPivot.BarIndex - equalPivot.BarIndex
-                    barPrice = latestPivot.Price + (step * (j - 1)) // the line's (that's not drawn yet) price at the bar at 'j' bars back
+                    barPrice = latestPivot.Price + (step * (j - 1))
                     swept = switch latestPivot.Type
                         1 => high[j] > barPrice
                         -1 => low[j] < barPrice
                     if swept
-                        broken := true // the equal pivots have been broken by price wick
+                        broken := true
                         break
                 if not broken
                     trendInducement = (latestPivot.Type == 1 and trend == -1) or (latestPivot.Type == -1 and trend == 1)
@@ -293,13 +291,13 @@ method VisualizeLiquidityGrabs(array<Liquidity> grabs, LiquidityGrabsSettings se
             else
                 switch grab.Pivot.Type
                     -1 =>
-                        if close < grab.Pivot.Price // closed below pivot, invalid liquidation grab
+                        if close < grab.Pivot.Price
                             grab.Invalidated := true
                     1 =>
-                        if close > grab.Pivot.Price // closed above pivot, invalid liquidation grab
+                        if close > grab.Pivot.Price
                             grab.Invalidated := true
 LiquidityGrabs(LiquidityGrabs grabs, LiquidityGrabsSettings settings) =>
-    if barstate.isconfirmed // only if the bar is closed
+    if barstate.isconfirmed
         grabs.Highs.VisualizeLiquidityGrabs(settings)
         grabs.Lows.VisualizeLiquidityGrabs(settings)
 GetLiquidityGrabs(LiquidityGrabsSettings settings) =>
@@ -335,7 +333,7 @@ method VisualizeLiquiditySweeps(array<Liquidity> sweeps, PriceAction.Pivot previ
         if not sweep.Taken and not sweep.Invalidated
             if sweep.Pivot.LiquidationSwept()
                 if not na(previousStructureBreakPivot) and sweep.Pivot.BarIndex == previousStructureBreakPivot.BarIndex
-                    sweep.Invalidated := true // invalidated by a structure pivot that caused a BOS
+                    sweep.Invalidated := true
                 if sweep.Invalidated
                     continue
                 sweepBarIndex = bar_index - 1

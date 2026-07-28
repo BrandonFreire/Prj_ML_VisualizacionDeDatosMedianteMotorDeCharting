@@ -3,10 +3,6 @@ package Market::ML::HMM;
 use strict;
 use warnings;
 
-# Discrete transition HMM with externally supplied continuous log-emissions.
-# `forward_filter` is the production decoder: every state at t is conditioned
-# only on observations through t.  Viterbi remains available for retrospective
-# diagnostics but must not be used to label historical backtests.
 
 sub new {
     my ($class, %args) = @_;

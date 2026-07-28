@@ -3,9 +3,6 @@ package Market::Indicators::ATR;
 use strict;
 use warnings;
 
-# Average True Range - Wilder's smoothing method.
-# Pure Perl implementation kept deliberately simple and deterministic.
-# Earlier MXNet ndarray paths were fragile in this project environment.
 
 sub new {
     my ($class, $period) = @_;
@@ -14,7 +11,6 @@ sub new {
         period      => $period,
         values      => [],
         _nd_atr     => undef,
-        # Incremental fallback state
         _prev_close => undef,
         _prev_atr   => undef,
         _tr_sum     => 0,
@@ -24,9 +20,6 @@ sub new {
     return $self;
 }
 
-# -----------------------------------------------------------------------
-# Batch computation - Wilder ATR over the active timeframe.
-# -----------------------------------------------------------------------
 sub compute_all {
     my ($self, $market_data) = @_;
     $self->reset();
@@ -51,8 +44,6 @@ sub compute_all {
             $tr_sum   += $tr;
             $tr_count += 1;
 
-            # TradingView/Wilder: no hay ATR valido hasta completar la semilla
-            # SMA de los primeros period TR.
             if ($tr_count >= $p) {
                 $atr = $tr_sum / $tr_count;
                 $prev_atr = $atr;
@@ -77,9 +68,6 @@ sub compute_all {
     $self->{_tr_count}   = $tr_count;
 }
 
-# -----------------------------------------------------------------------
-# Incremental fallback (pure Perl, kept for compatibility).
-# -----------------------------------------------------------------------
 sub update_last {
     my ($self, $market_data) = @_;
     my $candle = $market_data->last_candle();

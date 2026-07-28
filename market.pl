@@ -4,11 +4,10 @@ use strict;
 use warnings;
 use FindBin qw($Bin);
 use
-  lib $Bin; # siempre apunta al directorio del script sin importar desde donde se ejecute
+  lib $Bin;
 
 use Tk;
 
-# Use Time::Moment if available, otherwise fall back to pure-Perl parser
 my $HAS_MOMENT;
 
 BEGIN {
@@ -60,10 +59,6 @@ use Market::Overlays::AnchoredVWAP;
 use Market::Overlays::PivotMissedReversal;
 use Market::ChartEngine;
 
-# ---- Configuration ----
-# La interfaz visualiza/evalúa datos operativos; no carga automáticamente el
-# conjunto de entrenamiento. Se puede escoger otro CSV con:
-#   perl market.pl ruta/al/archivo.csv
 my $CSV_FILE               = @ARGV ? shift @ARGV : "$Bin/2026_07_24.csv";
 die "Uso: perl market.pl [DATOS_PARA_GRAFICA.csv]\n" if @ARGV;
 my $ATR_PERIOD             = 14;
@@ -78,12 +73,11 @@ my $ZZ_EXTERNAL_LENGTH     = 150;
 my $ZZ_INTERNAL_RESOLUTION = 15;
 my $ZZ_INTERNAL_PERIOD     = 2;
 
-# ---- 1. Load CSV data ----
 print "Loading $CSV_FILE...\n";
 my $market = Market::MarketData->new();
 
 open my $fh, '<', $CSV_FILE or die "Cannot open $CSV_FILE: $!";
-<$fh>;    # skip header
+<$fh>;
 while ( my $line = <$fh> ) {
     chomp $line;
     my ( $time_str, $open, $high, $low, $close, $volume ) = split /,/, $line;
@@ -103,9 +97,8 @@ while ( my $line = <$fh> ) {
 }
 close $fh;
 
-# ---- 2. Build higher timeframes (5m, 15m, 1h, 2h, 4h, D, W) ----
 $market->build_timeframes();
-$market->build_volume_index();  # Indice de volumen multi-temporal (Seccion 4.4)
+$market->build_volume_index();
 my $d = $market->get_data();
 printf
   "Loaded: 1m=%d  5m=%d  15m=%d  1h=%d  2h=%d  4h=%d  D=%d  W=%d candles\n",
@@ -118,7 +111,6 @@ printf
   scalar @{ $d->{'1440'}  // [] },
   scalar @{ $d->{'10080'} // [] };
 
-# ---- 3. Compute indicators for 1m timeframe ----
 my $indicators = Market::IndicatorManager->new();
 $indicators->register( 'ATR', Market::Indicators::ATR->new($ATR_PERIOD) );
 my $zz_ind = Market::Indicators::ZigZagDirection->new(
@@ -138,9 +130,6 @@ printf
   scalar @{ $zz_ind->get_internal_segments() };
 print "Done.\n";
 
-# ---- 3a. ZigZag interno confirmado y ZonaInterna Fibonacci ----
-# Estos cálculos son independientes de cualquier overlay: consumen ATR y
-# pivotes confirmados, por lo que pueden emplearse también en Replay/backtest.
 print "Computing confirmed Internal ZigZag and ZonaInterna...\n";
 my $internal_zz_ind = Market::Indicators::InternalZigZag->new(
     pivot_length   => 5,
@@ -161,8 +150,6 @@ printf
   scalar @{ $zona_interna_ind->get_levels() };
 print "Done.\n";
 
-# ---- 3b. Computar indicador SMC (Swing Points, BOS, FVG) ----
-# ---- 3b. Maquina de estados de Liquidez (SWEEP / GRAB / RUN) ----
 print "Computing Liquidity state machine (SWEEP/GRAB/RUN)...\n";
 my $lq_ind = Market::Indicators::Liquidity->new(
     depth          => 3,
@@ -179,11 +166,10 @@ printf "  Niveles detectados: %d  Resueltos: %d  (SWEEP=%d GRAB=%d RUN=%d)\n",
   scalar( grep { ( $_->{classification} // '' ) eq 'RUN' } @$lq_res );
 print "Done.\n";
 
-# ---- 3c. SMC Structures vinculado con Liquidity ----
 print "Computing SMC Structures (BOS, CHoCH, FVG)...\n";
 my $smc_ind =
   Market::Indicators::SMC_Structures->new( depth => 5, external_depth => 25 );
-$smc_ind->set_liquidity_indicator($lq_ind);    # vincula para boosted CHoCH
+$smc_ind->set_liquidity_indicator($lq_ind);
 $smc_ind->compute_all($market);
 printf "  SH: %d  SL: %d  BOS: %d  CHoCH: %d  FVG: %d\n",
   scalar @{ $smc_ind->get_swing_highs() },
@@ -193,7 +179,6 @@ printf "  SH: %d  SL: %d  BOS: %d  CHoCH: %d  FVG: %d\n",
   scalar @{ $smc_ind->get_fvg_zones() };
 print "Done.\n";
 
-# ---- 3d. Contexto de regimen (Liquidity + SMC + ATR) ----
 print "Computing Market Regime...\n";
 my $regime_ind = Market::Indicators::MarketRegime->new(
     liquidity_indicator => $lq_ind,
@@ -206,7 +191,6 @@ printf "  Regimen actual: %s (confianza %.2f)\n",
   $last_regime->{confidence_score} // 0;
 print "Done.\n";
 
-# ---- 3e. Strategy Builder (SuperTrend, HalfTrend, RangeFilter, Supply/Demand) ----
 print "Computing Strategy Builder...\n";
 my $strategy_ind = Market::Indicators::Strategy_Builder->new(
     st_multiplier => 3.0,
@@ -226,7 +210,6 @@ printf
   scalar @{ $strategy_ind->get_demand_zones() };
 print "Done.\n";
 
-# ---- 3f. Volume Profile (POC, VAH, VAL) ----
 print "Computing Volume Profile...\n";
 my $vp_ind = Market::Indicators::VolumeProfile->new(
     mode     => 'manual',
@@ -237,7 +220,6 @@ $vp_ind->compute_all($market);
 printf "  Perfiles generados: %d\n", scalar @{ $vp_ind->get_profiles() };
 print "Done.\n";
 
-# ---- 3g. Anchored VWAP Multipivot (5 anchors) ----
 print "Computing Pivot Missed Reversal...\n";
 my $pivot_missed_ind =
   Market::Indicators::PivotMissedReversal->new( length => 50 );
@@ -247,25 +229,18 @@ printf "  Regular: %d  Missed: %d\n",
   scalar @{ $pivot_missed_ind->get_missed_pivots() };
 print "Done.\n";
 
-# ---- 3h. Anchored VWAP Multipivot + último missed pivot confirmado ----
 print "Computing Anchored VWAP...\n";
 my $vwap_ind = Market::Indicators::AnchoredVWAP->new(
 
-    # Multiplicadores editables con
-    # $engine->set_vwap_band_configuration(N, enabled => ..., multiplier => ...)
     std_mult_1     => 1.0,
     std_mult_2     => 2.0,
     std_mult_3     => 3.0,
     band_1_enabled => 1,
     band_2_enabled => 1,
 
-   # La visibilidad inicial sigue apagada; habilitar el cálculo permite que
-   # el interruptor "Banda 3x" del menú haga efecto cuando el usuario lo marque.
     band_3_enabled => 1,
     ghost_swing_enabled => 1,
 
-    # El CSV usa -05:00. Market Open queda separado de Session Start y toma
-    # la apertura oficial de las 09:30 en la zona horaria de los datos.
     market_open_hour               => 9,
     market_open_minute             => 30,
     market_timezone_offset_seconds => -5 * 3600,
@@ -277,15 +252,13 @@ $vwap_ind->compute_all($market);
 printf "  Lineas VWAP: %d\n", scalar @{ $vwap_ind->get_vwap_lines() };
 print "Done.\n";
 
-# ---- 4. Build Tk window ----
 my $mw = MainWindow->new();
 $mw->title("Market Chart  |  1m");
 $mw->configure( -bg => $BG );
 $mw->resizable( 1, 1 );
 $mw->geometry("1200x800")
-  ;    # ventana normal redimensionable; F11 activa pantalla completa
+  ;
 
-# Declarar antes de usarse en los subs/bindings de teclado
 my $fs_btn;
 my $engine;
 
@@ -299,13 +272,9 @@ sub _toggle_fullscreen {
         $fs_btn->configure( -text => '[  ]', -fg => '#b2b5be' );
     }
 
-    # Esperar 50ms a que el gestor de ventanas termine el resize,
-    # luego mantener la ultima vela con el margen derecho obligatorio.
-    # Sin esto el canvas crece pero el offset queda donde estaba.
     $mw->after( 50, sub { $engine->goto_last() if defined $engine } );
 }
 
-# F11 y Escape sincronizan el mismo boton del toolbar
 $mw->bind(
     '<Escape>',
     sub {
@@ -317,16 +286,13 @@ $mw->bind(
 );
 $mw->bind( '<F11>', sub { _toggle_fullscreen() } );
 
-# Cerrar ventana o Ctrl+Q mata el proceso
 $mw->protocol( 'WM_DELETE_WINDOW', sub { exit 0 } );
 $mw->bind( '<Control-q>', sub { exit 0 } );
 $mw->bind( '<Control-Q>', sub { exit 0 } );
 
-# Toolbar (timeframe buttons + reset)
 my $toolbar =
   $mw->Frame( -bg => '#1e222d' )->pack( -fill => 'x', -side => 'top' );
 
-# Price chart row
 my $price_row = $mw->Frame( -bg => $BG )->pack( -fill => 'both', -expand => 1 );
 
 my $price_canvas = $price_row->Canvas(
@@ -341,7 +307,6 @@ my $price_scale_canvas = $price_row->Canvas(
     -highlightthickness => 0,
 )->pack( -side => 'right', -fill => 'y' );
 
-# Volume chart row
 my $volume_row = $mw->Frame( -bg => $BG )->pack( -fill => 'x' );
 
 my $volume_canvas = $volume_row->Canvas(
@@ -357,7 +322,6 @@ my $volume_scale_canvas = $volume_row->Canvas(
     -highlightthickness => 0,
 )->pack( -side => 'right', -fill => 'y' );
 
-# ATR chart row
 my $atr_row = $mw->Frame( -bg => $BG )->pack( -fill => 'x' );
 
 my $atr_canvas = $atr_row->Canvas(
@@ -373,7 +337,6 @@ my $atr_scale_canvas = $atr_row->Canvas(
     -highlightthickness => 0,
 )->pack( -side => 'right', -fill => 'y' );
 
-# ---- 5. Chart engine ----
 $engine = Market::ChartEngine->new(
     market              => $market,
     indicators          => $indicators,
@@ -386,7 +349,6 @@ $engine = Market::ChartEngine->new(
     visible_bars        => $INITIAL_BARS,
 );
 
-# ---- Timeframe buttons (1m → W) ----
 my %overlay_visibility = (
     smc_enabled             => 0,
     show_hh                 => 0,
@@ -425,7 +387,6 @@ my %overlay_visibility = (
     show_regression_auto => 0,
     show_zz_fibonacci    => 0,
 
-    # Pivot High/Low y Missed Reversal
     pmr_enabled          => 0,
     show_pmr_regular     => 0,
     show_pmr_missed      => 0,
@@ -434,20 +395,17 @@ my %overlay_visibility = (
     show_pmr_provisional => 0,
     show_pmr_segments    => 0,
 
-    # Strategy Builder
     strategy_enabled   => 0,
     show_supertrend    => 0,
     show_halftrend     => 0,
     show_range_filter  => 0,
     show_supply_demand => 0,
 
-    # Volume Profile
     vp_enabled  => 0,
     show_vp_poc => 0,
     show_vp_vah => 0,
     show_vp_val => 0,
 
-    # Anchored VWAP
     vwap_enabled    => 0,
     show_vwap_band1 => 0,
     show_vwap_band2 => 0,
@@ -500,8 +458,6 @@ $toolbar->Button(
     -command          => sub { $engine->reset_view(); },
 )->pack( -side => 'left', -padx => 8, -pady => 2 );
 
-# Boton modo escala Y: Auto (verde) / Manual (amarillo)
-# Cambia cuando el usuario arrastra el eje Y o hace click aqui
 my $mode_btn;
 
 sub _update_mode_btn {
@@ -975,7 +931,6 @@ $overlay_btn = $toolbar->Button(
     -command          => sub { $toggle_overlay_menu->(); },
 )->pack( -side => 'left', -padx => 8, -pady => 2 );
 
-# ---- Boton ML ----
 my $ml_win;
 
 sub _open_ml_window {
@@ -991,7 +946,6 @@ sub _open_ml_window {
     $ml_win->resizable( 1, 1 );
     $ml_win->protocol( 'WM_DELETE_WINDOW', sub { $ml_win->destroy(); $ml_win = undef; } );
 
-    # Header
     my $hdr = $ml_win->Frame( -bg => '#1e222d' )->pack( -fill => 'x' );
     $hdr->Label(
         -text => 'Modelo: Predicci\x{f3}n de Rastros de Fantasmas',
@@ -1005,10 +959,8 @@ sub _open_ml_window {
         -font => [ 'Helvetica', 8 ], -justify => 'right',
     )->pack( -side => 'right', -padx => 10 );
 
-    # Botones
     my $btn_frame = $ml_win->Frame( -bg => '#1e222d' )->pack( -fill => 'x', -pady => 2 );
 
-    # Text + scrollbar
     my $txt_frame = $ml_win->Frame( -bg => '#131722' )
         ->pack( -fill => 'both', -expand => 1, -padx => 6, -pady => 4 );
     my $sb = $txt_frame->Scrollbar( -bg => '#2a2d3e', -troughcolor => '#1e222d' );
@@ -1139,7 +1091,6 @@ sub _open_ml_window {
             if defined $status_lbl;
     } )->pack( -side => 'right', -padx => 6, -pady => 4 );
 
-    # Status bar
     my $sf = $ml_win->Frame( -bg => '#1e222d' )->pack( -fill => 'x' );
     $status_lbl = $sf->Label(
         -text => 'Listo', -bg => '#1e222d', -fg => '#8b929e',
@@ -1287,12 +1238,9 @@ $toggle_overlay_menu = sub {
 
 $show_overlay_group->('smc');
 
-# ---- Separador visual ----
 $toolbar->Label( -text => '|', -bg => '#1e222d', -fg => '#3a3d4e' )
   ->pack( -side => 'left', -padx => 4 );
 
-# ---- Controles de Replay (Seccion 3) ----
-# Boton para entrar/salir de modo Replay
 my $replay_btn;
 my $play_btn;
 
@@ -1345,7 +1293,6 @@ $replay_btn = $toolbar->Button(
     },
 )->pack( -side => 'left', -padx => 1, -pady => 2 );
 
-# Retroceder una barra
 $toolbar->Button(
     -text             => '|<',
     -bg               => '#2a2d3e',
@@ -1357,7 +1304,6 @@ $toolbar->Button(
     -command          => sub { $engine->step_backward() },
 )->pack( -side => 'left', -padx => 1, -pady => 2 );
 
-# Play / Pause (toggle)
 $play_btn = $toolbar->Button(
     -text             => '>',
     -bg               => '#2a2d3e',
@@ -1369,7 +1315,6 @@ $play_btn = $toolbar->Button(
     -command          => sub { $engine->toggle_play_replay() },
 )->pack( -side => 'left', -padx => 1, -pady => 2 );
 
-# Avanzar una barra
 $toolbar->Button(
     -text             => '>|',
     -bg               => '#2a2d3e',
@@ -1381,7 +1326,6 @@ $toolbar->Button(
     -command          => sub { $engine->step_forward() },
 )->pack( -side => 'left', -padx => 1, -pady => 2 );
 
-# Fast Forward
 $toolbar->Button(
     -text             => '>>',
     -bg               => '#2a2d3e',
@@ -1393,7 +1337,6 @@ $toolbar->Button(
     -command          => sub { $engine->fast_forward_replay() },
 )->pack( -side => 'left', -padx => 1, -pady => 2 );
 
-# Boton cerrar (siempre visible en pantalla completa)
 $toolbar->Button(
     -text             => '  X  ',
     -bg               => '#2a2d3e',
@@ -1407,10 +1350,6 @@ $toolbar->Button(
     -command          => sub { exit 0 },
 )->pack( -side => 'right', -padx => 4, -pady => 2 );
 
-# Boton pantalla completa — muestra el estado actual y lo alterna al hacer click.
-# El texto cambia entre "[  ]" (ventana normal) y "[ # ]" (pantalla completa).
-# Los canvas se adaptan solos porque <Configure> llama a request_render() al
-# cambiar el tamanio de la ventana.
 $fs_btn = $toolbar->Button(
     -text             => '[  ]',
     -bg               => '#2a2d3e',
@@ -1424,8 +1363,6 @@ $fs_btn = $toolbar->Button(
     -command          => \&_toggle_fullscreen,
 )->pack( -side => 'right', -padx => 2, -pady => 2 );
 
-# ---- 6. Bind events and first render ----
-# Registrar overlays SMC y Liquidez
 $engine->set_lq_indicator($lq_ind);
 $engine->set_smc_indicator($smc_ind);
 $engine->set_market_regime_indicator($regime_ind);
@@ -1480,8 +1417,6 @@ $engine->set_scale_mode_callback( \&_update_mode_btn );
 $engine->set_replay_callback( \&_update_replay_ui );
 $engine->bind_events();
 
-# Pan horizontal + vertical (Ev('X','Y') = coords globales de pantalla)
-# El pan vertical solo actua en modo manual (ChartEngine lo verifica internamente)
 $mw->bind( '<ButtonPress-1>',
     [ sub { $engine->drag_start( $_[1], $_[2] ) }, Ev('X'), Ev('Y') ] );
 $mw->bind( '<ButtonRelease-1>',
@@ -1489,23 +1424,20 @@ $mw->bind( '<ButtonRelease-1>',
 $mw->bind( '<B1-Motion>',
     [ sub { $engine->drag_move( $_[1], $_[2] ) }, Ev('X'), Ev('Y') ] );
 
-# Zoom: rueda del mouse
 $mw->bind( '<Button-4>', sub { $engine->zoom(-1) } );
 $mw->bind( '<Button-5>', sub { $engine->zoom(1) } );
 $mw->bind( '<MouseWheel>',
     [ sub { $engine->zoom( $_[1] > 0 ? -1 : 1 ) }, Ev('D') ] );
 
-# Teclado: + zoom in,  - zoom out,  0 reset vista
 $mw->bind( '<plus>',        sub { $engine->zoom(-1) } );
-$mw->bind( '<equal>',       sub { $engine->zoom(-1) } );      # = sin shift
+$mw->bind( '<equal>',       sub { $engine->zoom(-1) } );
 $mw->bind( '<minus>',       sub { $engine->zoom(1) } );
-$mw->bind( '<KP_Add>',      sub { $engine->zoom(-1) } );      # teclado numerico
+$mw->bind( '<KP_Add>',      sub { $engine->zoom(-1) } );
 $mw->bind( '<KP_Subtract>', sub { $engine->zoom(1) } );
 $mw->bind( '<0>',           sub { $engine->reset_view() } );
 $mw->bind( '<End>',         sub { $engine->goto_last() } )
-  ;    # ultima vela con margen derecho
+  ;
 
-# Re-render on window resize / layout resolution
 my $on_canvas_configure = sub {
     return unless defined $engine;
     $engine->{_render_state} = undef;
@@ -1519,8 +1451,6 @@ $atr_canvas->bind( '<Configure>', $on_canvas_configure );
 $mw->update();
 $engine->reset_view();
 
-# Esperar 50ms a que el gestor de ventanas resolucion la geometria final
-# y ajustar la auto-escala Y conservando el margen derecho obligatorio.
 $mw->after(
     50,
     sub {

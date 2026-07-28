@@ -3,11 +3,6 @@ package Market::Indicators::PivotMissedReversal;
 use strict;
 use warnings;
 
-# Detector secuencial de pivotes regulares y de extremos de reversión que el
-# zigzag convencional omitió. También reproduce, vela a vela, el fantasma vivo
-# y los rastros "1" de Ghosts_in_swings.txt. Un pivote en i existe solo al
-# cerrar i+length; los "missed" se crean al confirmarse el siguiente pivote,
-# nunca antes.
 
 sub new {
     my ($class, %args) = @_;
@@ -77,8 +72,6 @@ sub compute {
     my ($follow_max, $follow_min, $follow_max_i, $follow_min_i);
     my ($last_type, $last_index, $last_price);
 
-    # n es la vela de confirmación; center es el posible pivot situado
-    # exactamente length velas atrás.
     for my $n (0 .. $max_idx) {
         my $center = $n - $length;
         next if $center < 0;
@@ -103,11 +96,6 @@ sub compute {
 
         my $pivot_high = _is_pivot($self->{_candles}, $center, $length, 'high');
         my $pivot_low  = _is_pivot($self->{_candles}, $center, $length, 'low');
-        # Una vela exterior puede ser a la vez máximo y mínimo local. Emitir
-        # ambos pivotes crearía un tramo de longitud cero; elegir siempre LOW
-        # (la regla anterior) sesgaba la serie. Se conserva la alternancia
-        # frente al último pivote confirmado y, si aún no hay contexto, se
-        # deja la vela como ambigua sin inventar dirección.
         if ($pivot_high && $pivot_low) {
             my $resolution = !defined($last_type) ? 'skipped_without_context'
                 : $last_type eq 'high' ? 'low_after_high'
@@ -142,9 +130,6 @@ sub compute {
                 }
             }
             elsif ($self->{show_missed} && defined($tracked_max) && $high < $tracked_max) {
-                # Fidelidad con el estado inicial de Pine (os=0): antes del
-                # primer pivote regular también puede existir un extremo que
-                # el zigzag omitió.
                 $self->_add_missed('high', $tracked_max_i, $tracked_max, $n,
                     'initial_higher_extreme_before_first_high');
                 $self->_add_missed('low', $follow_min_i, $follow_min, $n,
@@ -169,9 +154,6 @@ sub compute {
                 }
             }
             elsif ($self->{show_missed} && defined $tracked_max) {
-                # El indicador de referencia parte en estado LOW. Si el primer
-                # pivote confirmado también es LOW, el máximo previo es el
-                # primer missed pivot visible.
                 $self->_add_missed('high', $tracked_max_i, $tracked_max, $n,
                     'initial_high_before_first_low');
             }
@@ -344,8 +326,6 @@ sub get_provisional_pivot {
     return $self->{_provisional} ? { %{ $self->{_provisional} } } : undef;
 }
 
-# Provisional causal para un cursor arbitrario. Se calcula sólo con pivotes
-# cuya confirmación ya ocurrió y con velas hasta current_bar.
 sub get_provisional_pivot_at {
     my ($self, $current_bar) = @_;
     my $candles = $self->{_candles} // [];
@@ -383,11 +363,6 @@ sub get_provisional_pivot_at {
     return \%result;
 }
 
-# Traducción causal del bloque "Live Floating Ghost Pivot" del Pine adjunto.
-# El código recibido imprimía dos "1" en cada cierre aunque x_last/y_last no
-# cambiasen. La intención documentada y el objetivo del proyecto son contar
-# movimientos hacia afuera del rango: se emite una aparición al cambiar el
-# ancla y un movimiento sólo ante un extremo de precio estrictamente nuevo.
 sub _reference_trace_replay {
     my ($candles, $length, $max_idx) = @_;
     my @anchors = ({
@@ -409,8 +384,6 @@ sub _reference_trace_replay {
             ($anchor_index, $anchor_price, $os) =
                 ($center, $candles->[$center]{high} + 0, 1);
         }
-        # En el Pine ambos if son independientes. Si una vela exterior es PH
-        # y PL simultáneamente, el bloque PL se ejecuta de último y prevalece.
         if ($pivot_low) {
             ($anchor_index, $anchor_price, $os) =
                 ($center, $candles->[$center]{low} + 0, 0);
@@ -452,8 +425,6 @@ sub _reference_trace_replay {
             );
         }
         elsif ($price == $active->{price}) {
-            # array.indexof() busca desde i=0 (vela más reciente); un empate
-            # mueve el icono vivo, pero no amplía el rango ni deja un rastro.
             $active->{index} = $event_index;
         }
     }

@@ -12,9 +12,6 @@ use Market::Indicators::Liquidity;
 use Market::Indicators::PivotMissedReversal;
 use Market::Indicators::SMC_Structures;
 
-# Extractor analitico para el modelo de rastros del fantasma. No depende de
-# Tk, Canvas ni de ningun overlay. Todos los cursores que recibe snapshot()
-# apuntan a la ultima vela cerrada ANTERIOR a la vela del evento.
 
 my @TARGET_WINDOWS = (3, 5, 10, 15);
 my @TIMEFRAMES     = (1, 10, 60);
@@ -228,8 +225,6 @@ sub label_future_relocations {
     my ($self, $events, $last_timestamp) = @_;
     for my $i (0 .. $#$events) {
         my $timestamp = $events->[$i]{event_timestamp};
-        # detect_ghost_relocations trabaja con indices; extract completa los
-        # timestamps inmediatamente despues. Para uso publico se aceptan ambos.
         $timestamp = $events->[$i]{_event_time} unless defined $timestamp;
         next unless defined $timestamp;
         for my $window (@TARGET_WINDOWS) {
@@ -420,8 +415,6 @@ sub _snapshot {
         $out{"tf${tf}_fib_dist_pips"} =
             _signed_pips($fib, $reference_price, $self->{pip_size});
 
-        # El ancla es el penultimo pivote confirmado y la acumulacion termina
-        # en la ultima vela cerrada anterior al evento.
         my ($vwap, $std_dev) = _anchored_vwap(
             $context->{prefix}, $previous->{index}, $cursor,
         );
@@ -937,8 +930,6 @@ sub _nearest_zone {
 sub _nearest_event_price {
     my ($events, $cursor, $reference, $price_field, $confirmed_field) = @_;
     my (@prices, $recent_floor);
-    # Conservar etiquetas recientes. El limite de 500 velas evita que un BOS
-    # obsoleto sustituya indefinidamente a la estructura actual.
     $recent_floor = max(0, $cursor - 500);
     for my $event (@$events) {
         my $confirmed = $event->{$confirmed_field} // $event->{index};

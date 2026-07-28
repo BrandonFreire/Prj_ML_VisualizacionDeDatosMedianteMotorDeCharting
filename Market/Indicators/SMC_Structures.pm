@@ -3,8 +3,6 @@ package Market::Indicators::SMC_Structures;
 use strict;
 use warnings;
 
-# Motor analitico de SMC: detecta Swing Points, BOS y Fair Value Gaps.
-# Separacion estricta calculo / renderizado (ver Market::Overlays::SMC_Structures).
 
 sub new {
     my ($class, %args) = @_;
@@ -12,23 +10,22 @@ sub new {
         depth        => $args{depth} // 3,
         external_depth => $args{external_depth},
         fvg_auto_threshold => exists $args{fvg_auto_threshold} ? $args{fvg_auto_threshold} : 1,
-        _sh          => [],   # swing highs
-        _sl          => [],   # swing lows
-        _bos         => [],   # BOS events  [{index,level,from,direction}]
-        _choch       => [],   # CHoCH events [{index,level,from,direction}]
-        _fvg         => [],   # FVG zones
-        _ob          => [],   # Order Blocks [{index,direction,top,bottom,triggered_by,scope}]
-        _major_highs => [],   # external swing highs used as major structure
-        _major_lows  => [],   # external swing lows used as major structure
+        _sh          => [],
+        _sl          => [],
+        _bos         => [],
+        _choch       => [],
+        _fvg         => [],
+        _ob          => [],
+        _major_highs => [],
+        _major_lows  => [],
         _external_highs => [],
         _external_lows  => [],
-        _trailing_extremes => undef, # par Strong/Weak vigente
-        _candles     => undef, # referencia al arreglo activo para mitigacion visual de FVG
-        _lq_ref      => undef, # referencia opcional al indicador Liquidity
+        _trailing_extremes => undef,
+        _candles     => undef,
+        _lq_ref      => undef,
     }, $class;
 }
 
-# Permite vincular el indicador Liquidity para ajustar probabilidades BOS/CHoCH
 sub set_liquidity_indicator {
     my ($self, $lq) = @_;
     $self->{_lq_ref} = $lq;
@@ -50,8 +47,6 @@ sub compute_all {
     my $n   = scalar @$arr;
     my $k   = $self->{depth};
     if ($n < 2 * $k + 2) {
-        # Un FVG confirmado necesita tres velas, no una estructura de pivotes
-        # completa. No se debe ocultar durante el warm-up de SMC.
         _detect_fvgs($arr, $self->{_fvg}, {}, $self->{fvg_auto_threshold});
         _annotate_fvg_lifecycle($arr, $self->{_fvg});
         return;
@@ -62,9 +57,6 @@ sub compute_all {
         $k,
     );
 
-    # ----------------------------------------------------------------
-    # 1. Swing Highs y Swing Lows INTERNOS (depth k)
-    # ----------------------------------------------------------------
     my (@sh_int, @sl_int);
     for my $i ( $k .. $n - $k - 1 ) {
         my ($is_sh, $is_sl) = (1, 1);
@@ -80,9 +72,6 @@ sub compute_all {
             undef, 'low', $arr->[$i]{time}) if $is_sl;
     }
 
-    # ----------------------------------------------------------------
-    # 2. Swing Highs y Swing Lows EXTERNOS (depth external_k) — independientes
-    # ----------------------------------------------------------------
     my (@sh_ext, @sl_ext);
     if ( $n >= 2 * $external_k + 2 ) {
         for my $i ( $external_k .. $n - $external_k - 1 ) {
@@ -100,9 +89,6 @@ sub compute_all {
         }
     }
 
-    # Un pivote interno y uno externo pueden coincidir fisicamente, pero siguen
-    # siendo estados distintos.  Promover el objeto interno a external mezclaba
-    # las secuencias HH/LH y HL/LL y adelantaba su confirmacion de scope.
     $_->{scope} = 'external' for @sh_ext, @sl_ext;
 
     $self->{_sh}          = \@sh_int;
@@ -112,16 +98,6 @@ sub compute_all {
     $self->{_major_highs} = [ @sh_ext ];
     $self->{_major_lows}  = [ @sl_ext ];
 
-    # ----------------------------------------------------------------
-    # 3. BOS y CHoCH — DOS PASADAS INDEPENDIENTES
-    #
-    # Pasada interna : pivotes de depth k  → scope 'internal'
-    # Pasada externa : pivotes de depth external_k → scope 'external'
-    #
-    # Cada pasada tiene su propio estado de tendencia y sus propios
-    # flags swept, eliminando la contaminacion cruzada del enfoque
-    # anterior de pasada unica.
-    # ----------------------------------------------------------------
     my %liquidity_at_index;
     if ( $self->{_lq_ref} ) {
         for my $ev ( @{ $self->{_lq_ref}->get_resolved() } ) {
@@ -137,9 +113,6 @@ sub compute_all {
     $self->{_bos}   = [ sort { $a->{index} <=> $b->{index} } (@$int_bos,   @$ext_bos)   ];
     $self->{_choch} = [ sort { $a->{index} <=> $b->{index} } (@$int_choch, @$ext_choch) ];
 
-    # ----------------------------------------------------------------
-    # 4. Order Blocks — ultima vela opuesta antes de cada BOS/CHoCH
-    # ----------------------------------------------------------------
     {
         my @all_events = (
             map { { %$_, type => 'BOS' } } @{ $self->{_bos} },
@@ -148,16 +121,11 @@ sub compute_all {
         $self->{_ob} = _detect_order_blocks($arr, \@all_events);
     }
 
-    # ----------------------------------------------------------------
-    # 5. Trend Lines — conectan highs LH o lows HL consecutivos
-    # ----------------------------------------------------------------
     $self->{_trendlines} = [
         @{ _detect_trendlines($arr, \@sh_int, \@sl_int, 'internal') },
         @{ _detect_trendlines($arr, \@sh_ext, \@sl_ext, 'external') },
     ];
 
-    # 6. Fair Value Gaps (FVG) — patrón de tres velas, independiente de que
-    # ya haya pivotes suficientes para construir BOS/CHoCH.
     _detect_fvgs($arr, $self->{_fvg}, \%liquidity_at_index, $self->{fvg_auto_threshold});
 
     _annotate_fvg_lifecycle($arr, $self->{_fvg});
@@ -181,8 +149,6 @@ sub _detect_fvgs {
 
     my ($delta_sum, $delta_count) = (0, 0);
 
-    # Regla LuxAlgo: gap de tres velas, desplazamiento del cuerpo central mas
-    # alla del borde y filtro automatico de magnitud (media causal x 2).
     for my $i (1 .. $n - 2) {
         my $left  = $i - 1;
         my $right = $i + 1;
@@ -237,7 +203,6 @@ sub _detect_fvgs {
     }
 }
 
-# Crea un pivote con campos estandar
 sub _make_pivot {
     my ($index, $price, $confirmed_at, $scope_confirmed_at, $kind, $time) = @_;
     return {
@@ -253,8 +218,6 @@ sub _make_pivot {
     };
 }
 
-# Detecta BOS y CHoCH en UNA sola coleccion de pivotes independiente.
-# Cada llamada mantiene su propio estado de tendencia y flags swept.
 sub _detect_bos_choch {
     my ($arr, $sh, $sl, $scope, $k, $liquidity_lookup) = @_;
     $liquidity_lookup //= {};
@@ -276,7 +239,6 @@ sub _detect_bos_choch {
             $sli++;
         }
 
-        # Ruptura alcista
         if ($last_sh && !$last_sh->{swept}
                 && _close_cross_over($arr, $i, $last_sh->{price})) {
             $last_sh->{swept} = 1;
@@ -309,7 +271,6 @@ sub _detect_bos_choch {
             $last_sh = undef;
         }
 
-        # Ruptura bajista
         if ($last_sl && !$last_sl->{swept}
                 && _close_cross_under($arr, $i, $last_sl->{price})) {
             $last_sl->{swept} = 1;
@@ -373,9 +334,6 @@ sub get_major_lows   { return $_[0]->{_major_lows}  }
 sub get_trailing_extremes { return $_[0]->{_trailing_extremes} }
 sub get_candles           { return $_[0]->{_candles} // [] }
 
-# Calcula únicamente el par de extremos vigente. A diferencia de etiquetar
-# cada pivote histórico, Strong/Weak es una propiedad del contexto estructural
-# actual y por eso se reinicia con cada swing externo confirmado.
 sub _build_trailing_extremes {
     my ($candles, $pivots, $structures, $max_idx) = @_;
     return undef unless $candles && @$candles && $pivots && @$pivots;
@@ -440,10 +398,6 @@ sub _build_trailing_extremes {
     };
 }
 
-# Resultado SMC reconstruido hasta un cursor de Replay. Los getters
-# históricos siguen exponiendo el cálculo completo para el render normal;
-# los consumidores analíticos pueden pedir este snapshot para no observar
-# eventos, zonas u Order Blocks que todavía no existían en esa vela.
 sub snapshot_at {
     my ($self, $last_index) = @_;
     my $market = $self->{_market} or return {
@@ -491,9 +445,6 @@ sub _detect_order_blocks {
         my $break = $ev->{break_index} // $ev->{index};
         next unless defined $break && $break >= $from;
 
-        # LuxAlgo storeOrdeBlock toma el extremo parsedLow/parsedHigh entre el
-        # pivote estructural y la ruptura. No busca una vela opuesta dentro de
-        # una ventana arbitraria anterior al pivote.
         my $ob_idx;
         for my $i ($from .. $break) {
             my $c = $arr->[$i] // next;
@@ -585,10 +536,6 @@ sub _order_block_relevance {
     };
 }
 
-# El estado de FVG y Order Block pertenece al motor analítico. El overlay
-# sigue decidiendo cómo dibujarlo, pero ya no necesita deducir si la zona fue
-# mitigada usando datos propios. Las zonas históricas se conservan con su
-# estado para auditoría y Replay.
 sub _annotate_fvg_lifecycle {
     my ($arr, $fvgs) = @_;
     return unless $arr && $fvgs;
@@ -764,8 +711,6 @@ sub _adaptive_external_depth {
     return $cap;
 }
 
-# Convierte la resolución de liquidez en un peso explícito para SMC. Sweep
-# eleva drásticamente CHoCH opuesto; Run valida BOS en la misma dirección.
 sub _recent_liquidity_signal {
     my ($lookup, $bar_i, $side_filter, $intent, $window) = @_;
     my $best;
@@ -780,7 +725,7 @@ sub _recent_liquidity_signal {
             my $base = $class eq 'SWEEP' ? 0.90
                      : $class eq 'BIG_GRAB' ? 0.88
                      : $class eq 'GRAB'  ? 0.82
-                     :                    0.85; # RUN
+                     :                    0.85;
             my $w = $ev->{volume_weight} // {};
             my $has_multi_tf_volume = (($w->{v1m}//0) + ($w->{v5m}//0) + ($w->{v15m}//0)) > 0;
             my $weight = $base + ($has_multi_tf_volume ? 0.05 : 0);

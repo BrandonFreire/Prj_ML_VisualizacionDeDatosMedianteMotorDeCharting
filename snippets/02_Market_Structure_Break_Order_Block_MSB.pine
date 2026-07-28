@@ -1,5 +1,3 @@
-// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
-// © EmreKb
 
 //@version=5
 indicator("Market Structure Break & Order Block", "MSB-OB", overlay=true, max_lines_count=500, max_bars_back=4900, max_boxes_count=500)
@@ -103,7 +101,6 @@ if ta.change(trend) != 0 and show_zigzag
 
 market = 1
 market := nz(market[1], 1)
-// market := market == 1 and close < l0 and low < l0 - math.abs(h0 - l0) * fib_factor ? -1 : market == -1 and close > h0 and high > h0 + math.abs(h0 - l0) * fib_factor ? 1 : market
 last_l0 = ta.valuewhen(ta.change(market) != 0, l0, 0)
 last_h0 = ta.valuewhen(ta.change(market) != 0, h0, 0)
 market := last_l0 == l0 or last_h0 == h0 ? market : market == 1 and l0 < l1 and l0 < l1 - math.abs(h0 - l1) * fib_factor ? -1 : market == -1 and h0 > h1 and h0 > h1 + math.abs(h1 - l0) * fib_factor ? 1 : market

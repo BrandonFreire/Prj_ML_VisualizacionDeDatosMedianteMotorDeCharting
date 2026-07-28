@@ -3,8 +3,6 @@ package Market::Indicators::InternalZigZag;
 use strict;
 use warnings;
 
-# Causal internal ZigZag.  A pivot centred on bar N is only made available
-# after its right-hand confirmation window has closed at N + pivot_length.
 
 sub new {
     my ($class, %args) = @_;

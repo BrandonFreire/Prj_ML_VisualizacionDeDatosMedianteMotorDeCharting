@@ -13,15 +13,12 @@ sub epoch {
 }
 
 my @candles = (
-    # Lunes 6 de julio (09:00--11:00 hora -05:00)
     { time => epoch(6, 14, 0), high => 100, low => 90, close => 95 },
     { time => epoch(6, 15, 0), high => 110, low => 95, close => 106 },
     { time => epoch(6, 16, 0), high => 105, low => 92, close => 100 },
-    # Martes 7 de julio
     { time => epoch(7, 14, 0), high => 115, low => 88, close => 110 },
     { time => epoch(7, 15, 0), high => 120, low => 85, close => 100 },
     { time => epoch(7, 16, 0), high => 118, low => 90, close => 105 },
-    # Lunes siguiente: abre una nueva semana
     { time => epoch(13, 14, 0), high => 130, low => 80, close => 120 },
     { time => epoch(13, 15, 0), high => 125, low => 82, close => 110 },
 );

@@ -11,7 +11,6 @@ miss_ph_css = input.color(#ef5350,'High',inline='inline2')
 miss_pl_css = input.color(#26a69a,'Low',inline='inline2')
 
 label_css = input.color(color.white,'Text Label Color')
-//------------------------------------------------------------------------------
 var line zigzag = na
 var line ghost_level = na
 var max = 0.,var min = 0.
@@ -19,7 +18,6 @@ var max_x1 = 0,var min_x1 = 0
 var follow_max = 0.,var follow_max_x1 = 0
 var follow_min = 0.,var follow_min_x1 = 0
 var os = 0,var py1 = 0.,var px1 = 0
-//------------------------------------------------------------------------------
 
 n = bar_index
 ph = ta.pivothigh(length,length)
@@ -42,7 +40,6 @@ if follow_min < follow_min[1]
 if follow_max > follow_max[1]
     follow_max_x1 := n-length
 
-//------------------------------------------------------------------------------
 line.set_x2(ghost_level[1],n)
 
 if ph
@@ -79,7 +76,6 @@ if ph
     
     
     py1 := ph,px1 := n-length,os := 1,max := ph,min := ph
-//------------------------------------------------------------------------------
 if pl
     if show_miss  
         if os[1] == 0
@@ -114,7 +110,6 @@ if pl
     
     
     py1 := pl,px1 := n-length,os := 0,max := pl,min := pl
-//------------------------------------------------------------------------------
 var label lbl = na
 if barstate.islast
     x = 0,y = 0.

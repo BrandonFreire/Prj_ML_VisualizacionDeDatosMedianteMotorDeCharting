@@ -3,15 +3,12 @@ package Market::Overlays::VolumeProfile;
 use strict;
 use warnings;
 
-# Renderizado del Perfil de Volumen sobre el Canvas de Perl/Tk.
-# Dibuja barras horizontales del histograma + líneas POC/VAH/VAL.
-# Lee datos de Market::Indicators::VolumeProfile — sin cálculos aquí.
 
-my $COLOR_POC   = '#f6c90e';   # amarillo — Point of Control
-my $COLOR_VAH   = '#26a69a';   # verde — Value Area High
-my $COLOR_VAL   = '#ef5350';   # rojo — Value Area Low
-my $COLOR_HIST  = '#4a5568';   # gris — barras de histograma
-my $MAX_BAR_PX  = 80;         # ancho máximo en pixels de una barra del histograma
+my $COLOR_POC   = '#f6c90e';
+my $COLOR_VAH   = '#26a69a';
+my $COLOR_VAL   = '#ef5350';
+my $COLOR_HIST  = '#4a5568';
+my $MAX_BAR_PX  = 80;
 
 sub new {
     my ($class, %args) = @_;
@@ -43,9 +40,6 @@ sub render {
     $canvas->delete('vp_overlay');
     return unless $self->_visible('vp_enabled', 1);
 
-    # Bloqueo absoluto: el Perfil de Volumen sólo se renderiza si el usuario ha hecho
-    # clic directo para definir un anclaje manual explícito (anchor_index validado).
-    # Se aborta inmediatamente (return;) ignorando cualquier cálculo histórico por defecto o contingencia.
     my $manual_anchors = $ind->{_manual_anchors} // [];
     return unless @$manual_anchors && defined $manual_anchors->[0]{start};
 
@@ -57,7 +51,6 @@ sub render {
 
     for my $profile (@$profiles) {
         next unless $profile;
-        # Solo dibujar perfiles cuyo segmento sea visible
         my $p_start = $profile->{start_idx} // next;
         my $p_end   = $profile->{end_idx}   // next;
         next if $p_start > $d_end || $p_end < $d_start;
@@ -67,20 +60,15 @@ sub render {
         $self->_render_levels($canvas, $d_start, $d_end, $scale, $current_bar, $profile);
     }
 
-    # Las barras del histograma deben estar debajo de las velas
     $canvas->lower('vp_hist', 'candles') if $canvas->find('withtag', 'candles');
 }
 
-# ================================================================
-# Histograma horizontal de volumen — renderizado dual Up/Down
-# ================================================================
 
-# Colores estilo TradingView institucional
-my $COLOR_UP_IN_VA   = '#26a69a';   # teal — comprador dentro del Value Area
-my $COLOR_DOWN_IN_VA = '#ef5350';   # rojo  — vendedor  dentro del Value Area
-my $COLOR_UP_OUT     = '#1a6b63';   # teal oscuro  — comprador fuera del VA
-my $COLOR_DOWN_OUT   = '#8b2d2d';   # rojo  oscuro — vendedor  fuera del VA
-my $COLOR_POC_FILL   = '#f6c90e';   # amarillo — bin del POC resaltado
+my $COLOR_UP_IN_VA   = '#26a69a';
+my $COLOR_DOWN_IN_VA = '#ef5350';
+my $COLOR_UP_OUT     = '#1a6b63';
+my $COLOR_DOWN_OUT   = '#8b2d2d';
+my $COLOR_POC_FILL   = '#f6c90e';
 
 sub _render_histogram {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar, $profile) = @_;
@@ -106,24 +94,20 @@ sub _render_histogram {
         my $y2 = $scale->value_to_y($bin->{price_low});
         ($y1, $y2) = ($y2, $y1) if $y2 < $y1;
 
-        # Saltar si fuera del viewport vertical
         next if defined $scale->{y_height} && ($y2 < 0 || $y1 > $scale->{y_height});
 
         my $bar_w = ($bin->{volume} / $max_vol) * $max_bar;
         $bar_w = 2 if $bar_w < 2;
 
-        # Detectar si es el bin del POC
         my $is_poc = abs($bin->{price} - $poc_price) <
                      abs(($bin->{price_high} - $bin->{price_low}) / 2 + 0.001);
 
-        # Detectar si está dentro del Value Area
         my $in_va = ($bin->{price} >= $val_price && $bin->{price} <= $vah_price) ? 1 : 0;
 
-        # Proporciones Up/Down dentro del bin
         my $up_vol   = $bin->{up_volume}   // 0;
         my $down_vol = $bin->{down_volume} // 0;
         my $bin_total = $up_vol + $down_vol;
-        $bin_total = $bin->{volume} if $bin_total <= 0;   # fallback
+        $bin_total = $bin->{volume} if $bin_total <= 0;
 
         my $down_frac = $bin_total > 0 ? ($down_vol / $bin_total) : 0.5;
         my $up_frac   = 1 - $down_frac;
@@ -131,7 +115,6 @@ sub _render_histogram {
         my $down_w = $bar_w * $down_frac;
         my $up_w   = $bar_w * $up_frac;
 
-        # Colores según posición en el Value Area
         my ($color_down, $color_up);
         if ($is_poc) {
             $color_down = $COLOR_POC_FILL;
@@ -144,11 +127,8 @@ sub _render_histogram {
             $color_up   = $COLOR_UP_OUT;
         }
 
-        # Histograma dibujado a la izquierda del ancla:
-        # [down_volume | up_volume] <-- x_anchor
         my $x_start = $x_anchor - $bar_w;
 
-        # Rectángulo Down Volume (izquierda)
         if ($down_w >= 1) {
             $canvas->createRectangle($x_start, $y1, $x_start + $down_w, $y2,
                 -fill    => $color_down,
@@ -157,7 +137,6 @@ sub _render_histogram {
             );
         }
 
-        # Rectángulo Up Volume (derecha)
         if ($up_w >= 1) {
             $canvas->createRectangle($x_start + $down_w, $y1, $x_anchor, $y2,
                 -fill    => $color_up,
@@ -168,9 +147,6 @@ sub _render_histogram {
     }
 }
 
-# ================================================================
-# Líneas POC, VAH, VAL
-# ================================================================
 sub _render_levels {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar, $profile) = @_;
     my $p_start = $profile->{start_idx};
@@ -185,7 +161,6 @@ sub _render_levels {
     my $x2 = $scale->index_to_center_x($draw_end);
     return if $x1 > $scale->{x_width} || $x2 < 0 || $x1 >= $x2;
 
-    # POC
     if (defined $profile->{poc} && $self->_visible('show_vp_poc', 1)) {
         my $y = $scale->value_to_y($profile->{poc});
         if (!defined $scale->{y_height} || ($y >= -20 && $y <= $scale->{y_height} + 20)) {
@@ -205,7 +180,6 @@ sub _render_levels {
         }
     }
 
-    # VAH
     if (defined $profile->{vah} && $self->_visible('show_vp_vah', 1)) {
         my $y = $scale->value_to_y($profile->{vah});
         if (!defined $scale->{y_height} || ($y >= -20 && $y <= $scale->{y_height} + 20)) {
@@ -225,7 +199,6 @@ sub _render_levels {
         }
     }
 
-    # VAL
     if (defined $profile->{val} && $self->_visible('show_vp_val', 1)) {
         my $y = $scale->value_to_y($profile->{val});
         if (!defined $scale->{y_height} || ($y >= -20 && $y <= $scale->{y_height} + 20)) {

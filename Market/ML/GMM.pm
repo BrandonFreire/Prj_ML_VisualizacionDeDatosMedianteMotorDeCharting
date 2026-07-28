@@ -3,10 +3,6 @@ package Market::ML::GMM;
 use strict;
 use warnings;
 
-# Deterministic Gaussian mixture with diagonal covariance.  It is purposely
-# small and dependency-free; callers must fit it only on the historical
-# training partition.  Diagonal covariance keeps the EM fit stable for the
-# modest sample counts available to the charting workflow.
 
 use constant LOG_2PI => 1.8378770664093453;
 

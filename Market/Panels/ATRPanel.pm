@@ -3,7 +3,6 @@ package Market::Panels::ATRPanel;
 use strict;
 use warnings;
 
-# Renders the ATR indicator in a separate panel with its own independent scale.
 
 my $COLOR_ATR  = '#f6c90e';
 my $COLOR_GRID = '#1e2130';
@@ -26,7 +25,6 @@ sub set_scale {
     $self->{scale} = $scale;
 }
 
-# Returns [y_min, y_max] for visible ATR values with padding
 sub get_y_range {
     my ($self, $values) = @_;
     my @valid = grep { defined $_ } @$values;
@@ -48,7 +46,6 @@ sub set_scale_range {
     $self->{scale} = $scale;
 }
 
-# Draw a single ATR segment between two consecutive defined points
 sub render_atr_segment {
     my ($self, $canvas, $x1, $y1, $x2, $y2, $ix1) = @_;
     $canvas->createLine( $x1, $y1, $x2, $y2,
@@ -58,13 +55,11 @@ sub render_atr_segment {
     );
 }
 
-# Draw ATR line for visible slice
 sub render {
     my ($self, $canvas, $values, $scale) = @_;
     my @valid = grep { defined $_ } @$values;
     return unless @valid;
 
-    # Grid lines
     for my $v ( $scale->get_nice_levels() ) {
         my $y = $scale->value_to_y($v);
         next if $y < 0 || $y > $scale->{y_height};
@@ -72,7 +67,6 @@ sub render {
             -fill => $COLOR_GRID, -tags => ['grid'] );
     }
 
-    # ATR line: draw individual segments with per-index tags
     my $d_start  = $scale->{data_start_index} // $scale->{start_index};
     my ($prev_x, $prev_y, $prev_ix);
     for my $i ( 0 .. $#$values ) {
@@ -89,7 +83,6 @@ sub render {
         $prev_ix = $ix;
     }
 
-    # Store last defined ATR value
     for my $i ( reverse 0 .. $#$values ) {
         if ( defined $values->[$i] ) {
             $self->{_last_atr} = $values->[$i];
@@ -98,7 +91,6 @@ sub render {
     }
 }
 
-# Draw last visible ATR value: dashed line + colored label on the right edge
 sub render_last_visible_value {
     my ($self, $canvas) = @_;
     my $scale = $self->{scale};
@@ -108,14 +100,12 @@ sub render_last_visible_value {
     my $y   = int( $scale->value_to_y($val) + 0.5 );
     return if $y < 0 || $y > $scale->{y_height};
 
-    # Dashed horizontal line
     $canvas->createLine( 0, $y, $scale->{x_width}, $y,
         -fill  => $COLOR_ATR,
         -dash  => [ 4, 3 ],
         -tags  => ['lastatr'],
     );
 
-    # Label box on the right edge
     my $label = sprintf( "%.4f", $val );
     my $lx    = $scale->{x_width} - 4;
 
@@ -134,7 +124,6 @@ sub render_last_visible_value {
         -tags   => ['lastatr'],
     );
 
-    # Also draw on scale canvas
     my $sc = $self->{scale_canvas};
     if ($sc) {
         my $sw = $sc->width() || 75;
@@ -155,9 +144,6 @@ sub render_last_visible_value {
     }
 }
 
-# Draw crosshair on ATR panel.
-# $y definido = mouse sobre ATR → dibuja linea horizontal + label en scale canvas.
-# $y undef    = mouse sobre precio → solo linea vertical sincronizada.
 sub draw_crosshair {
     my ($self, $x, $atr_val, $y) = @_;
     my $c     = $self->{canvas};
@@ -168,7 +154,6 @@ sub draw_crosshair {
 
     $c->delete('ch_atr_lines');
 
-    # Linea vertical — siempre
     $c->createLine( $x, 0, $x, $h,
         -fill  => '#ffffff',
         -width => 1.5,
@@ -176,7 +161,6 @@ sub draw_crosshair {
         -tags  => [ 'crosshair', 'ch_atr_lines' ],
     );
 
-    # Linea horizontal + caja de valor en scale canvas — solo cuando mouse sobre ATR
     $sc->delete('crosshair') if $sc;
     if ( defined $y ) {
         $c->createLine( 0, $y, $w, $y,
@@ -203,7 +187,6 @@ sub draw_crosshair {
         }
     }
 
-    # Label del valor ATR de la barra bajo el cursor
     $c->delete('ch_atr_label');
     if ( defined $atr_val ) {
         $c->createText( 5, 12,
@@ -225,7 +208,6 @@ sub hide_crosshair {
     $self->{scale_canvas}->delete('crosshair') if $self->{scale_canvas};
 }
 
-# Caja de fecha/hora en la parte inferior del panel ATR (sincronizada con el precio)
 sub draw_crosshair_time_label {
     my ($self, $x, $ts) = @_;
     my $c = $self->{canvas};

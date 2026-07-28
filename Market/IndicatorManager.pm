@@ -17,8 +17,6 @@ sub register {
     $self->{indicators}{$name} = $indicator;
 }
 
-# Batch computation: calls compute_all on every registered indicator.
-# Preferred over the update_last loop when all data is already loaded.
 sub compute_all {
     my ($self, $market_data) = @_;
     for my $ind ( values %{ $self->{indicators} } ) {
@@ -26,7 +24,6 @@ sub compute_all {
     }
 }
 
-# Incremental update (fallback, kept for compatibility)
 sub update_last {
     my ($self, $market_data) = @_;
     for my $ind ( values %{ $self->{indicators} } ) {

@@ -3,22 +3,11 @@ package Market::Indicators::MarketRegime;
 use strict;
 use warnings;
 
-# Contexto de mercado construido sobre los resultados ya calculados de
-# Liquidity y SMC_Structures. No crea pivotes propios y no es una senal de
-# entrada: resume en que contexto se produjo cada vela.
-#
-# Estados:
-#   UNKNOWN, ZONA_INTERNA, LIQUIDEZ_INTERNA, LIQUIDEZ_EXTERNA,
-#   ZM_MANIPULATION, TRANSITION, TR_BULLISH, TR_BEARISH.
-#
-# La disponibilidad temporal se valida por vela. Por ejemplo, un pivot que
-# mas tarde resulta externo sigue siendo interno hasta scope_confirmed_at;
-# asi el resultado sirve tambien para Replay sin mirar el futuro.
 
 sub new {
     my ($class, %args) = @_;
     return bless {
-        near_internal => $args{near_internal} // 0.50, # multiplo de ATR
+        near_internal => $args{near_internal} // 0.50,
         near_external => $args{near_external} // 0.75,
         _lq_ref       => $args{liquidity_indicator},
         _smc_ref      => $args{smc_indicator},
@@ -49,8 +38,6 @@ sub compute_all {
     return $self->{_states};
 }
 
-# API util para pruebas, backtests y procesos que ya tengan las series. No
-# muta el objeto salvo que se solicite compute_all() con MarketData.
 sub compute_from_inputs {
     my ($self, %args) = @_;
     return $self->_compute_states(%args);
@@ -72,8 +59,6 @@ sub _compute_states {
     my @bos    = @{ $args{bos_events}    // [] };
     my @choch  = @{ $args{choch_events}  // [] };
 
-    # Eventos indexados para lookup O(1). El type se normaliza porque SMC
-    # guarda BOS y CHoCH en colecciones separadas.
     my %structure_at;
     for my $event (@bos) {
         next unless defined $event->{index};
@@ -144,8 +129,6 @@ sub _nearest_levels {
     my ($dist_internal, $dist_external) = (9e99, 9e99);
     for my $level (@$levels) {
         next unless _level_available_at($level, $index);
-        # Un nivel que ya fue resuelto no puede ser liquidez activa en el
-        # futuro, aunque el arreglo batch lo siga conservando para auditoria.
         next if defined($level->{resolved_at}) && $level->{resolved_at} <= $index;
         my $scope = _scope_at($level, $index);
         my $dist  = abs($price - ($level->{price} // next));
@@ -277,9 +260,6 @@ sub _high_volume {
 
 sub get_states { return $_[0]->{_states} }
 
-# Calcula el mismo resultado que habria existido al cerrar $last_index. Las
-# reglas filtran confirmaciones, resoluciones y scopes futuros antes de usar
-# cada dato, por lo que no se necesita copiar ni mutar los indicadores padre.
 sub snapshot_at {
     my ($self, $last_index) = @_;
     my $market = $self->{_market} or return [];

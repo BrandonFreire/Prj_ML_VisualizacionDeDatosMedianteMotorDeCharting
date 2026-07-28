@@ -3,26 +3,6 @@ package Market::Indicators::Liquidity;
 use strict;
 use warnings;
 
-# Motor de deteccion de liquidez con maquina de estados determinista.
-#
-# Ciclo de vida de cada nivel (especificacion Seccion 4.3):
-#   [1 DETECTED]  nivel BSL/SSL o EQH/EQL identificado
-#       |
-#   [2 SWEPT]     High>BSL o Low<SSL (precio cruza el nivel)
-#       |
-#   +---+---+---+
-#   |           |           |
-# (N cierres  (cierre      (cierre
-#  fuera)      rapido <=3)  tardio >3)
-#   |           |           |
-# [3 ACCEPTANCE] [4 RECLAIMED] [4 RECLAIMED]
-#   |               |               |
-# [5 RUN]        [5 GRAB]       [5 SWEEP]
-#
-# SWEEP: High>BSL/Low<SSL + cierre de rechazo en la misma vela, o reclaim tardio
-# GRAB:  reclaim rapido despues de 1..3 cierres fuera del nivel interno
-# BIG_GRAB: mismo reclaim sobre un nivel externo
-# RUN:   N=3 cierres consecutivos fuera del nivel (aceptacion institucional)
 
 sub new {
     my ($class, %args) = @_;
@@ -32,15 +12,15 @@ sub new {
             && $eq_tolerance_atr =~ /^(?:\d+(?:\.\d*)?|\.\d+)$/
             && $eq_tolerance_atr > 0 && $eq_tolerance_atr <= 1;
     return bless {
-        depth      => $args{depth}      // 3,   # k: vecindad swing points
+        depth      => $args{depth}      // 3,
         external_depth => $args{external_depth},
-        n_accept   => $args{n_accept}   // 3,   # velas consecutivas para RUN
-        atr_period => $args{atr_period} // 14,  # para tolerancia EQH/EQL
+        n_accept   => $args{n_accept}   // 3,
+        atr_period => $args{atr_period} // 14,
         eq_tolerance_atr => $eq_tolerance_atr + 0,
         _levels    => [],
         _atr       => [],
         _candles   => undef,
-        _market    => undef,   # referencia a MarketData para volumen multi-temporal
+        _market    => undef,
     }, $class;
 }
 
@@ -64,15 +44,9 @@ sub compute_all {
         $k,
     );
 
-    # ----------------------------------------------------------------
-    # 1. ATR simple para tolerancia EQH/EQL (tolerancia = ATR * 0.10)
-    # ----------------------------------------------------------------
     my @atr = _simple_atr($arr, $self->{atr_period});
     $self->{_atr} = \@atr;
 
-    # ----------------------------------------------------------------
-    # 2. Swing Highs (BSL) y Swing Lows (SSL)
-    # ----------------------------------------------------------------
     my (@sh, @sl);
     for my $i ( $k .. $n - $k - 1 ) {
         my ($is_sh, $is_sl) = (1, 1);
@@ -90,8 +64,6 @@ sub compute_all {
         }
     }
 
-    # Estructura externa: pivotes con vecindad mas amplia. Se usa solo como
-    # metadato de prioridad visual/logica; no elimina niveles internos.
     my (%external_sh, %external_sl);
     if ( $n >= 2 * $external_k + 2 ) {
         for my $i ( $external_k .. $n - $external_k - 1 ) {
@@ -125,31 +97,20 @@ sub compute_all {
         }
     }
 
-    # ----------------------------------------------------------------
-    # 3. EQH / EQL — pivote compatible mas cercano, aun no consumido,
-    # con tolerancia simetrica basada en el ATR de ambos extremos.
-    # ----------------------------------------------------------------
     _mark_equal_levels(\@sh, \@atr, $arr, 'high', $self->{eq_tolerance_atr});
     _mark_equal_levels(\@sl, \@atr, $arr, 'low',  $self->{eq_tolerance_atr});
 
-    # ----------------------------------------------------------------
-    # 4. Maquina de estados — procesar cada nivel barra a barra
-    # ----------------------------------------------------------------
     my @all = sort { $a->{index} <=> $b->{index} } (@sh, @sl);
 
     for my $lvl (@all) {
         _run_state_machine($lvl, $arr, $n, $self->{n_accept});
     }
 
-    # Attach multi-temporal volume weights to each level
     $self->_attach_volume_weights(\@all, $arr);
 
     $self->{_levels} = \@all;
 }
 
-# Vincula volumen multi-temporal de 1m/5m/15m a cada nivel de liquidez.
-# Si MarketData tiene un volume_index construido, lo usa; si no, usa el
-# volumen de la vela directamente.
 sub _attach_volume_weights {
     my ($self, $levels, $arr) = @_;
     my $market = $self->{_market};
@@ -172,24 +133,17 @@ sub _attach_volume_weights {
             };
             $lvl->{volume_weight_source} = 'multi_timeframe_index';
         } else {
-            # No inventar los marcos 5m/15m: si el índice no está disponible,
-            # sólo se conserva el volumen nativo y los demás pesos quedan en 0.
             my $v = $arr->[$ref_idx]{volume} // 0;
             $lvl->{volume_weight} = { v1m => $v, v5m => 0, v15m => 0 };
             $lvl->{volume_weight_source} = 'native_fallback';
         }
         my $w = $lvl->{volume_weight};
-        # Peso persistente usado por los consumidores analíticos. Se guarda
-        # junto al vector por timeframe, no se recalcula al renderizar.
         $lvl->{volume_score} = ($w->{v1m} // 0)
                              + ($w->{v5m} // 0)
                              + ($w->{v15m} // 0);
     }
 }
 
-# ----------------------------------------------------------------
-# Maquina de estados determinista para un nivel
-# ----------------------------------------------------------------
 sub _run_state_machine {
     my ($lvl, $arr, $n, $n_accept) = @_;
     my $det_i = $lvl->{index};
@@ -197,7 +151,6 @@ sub _run_state_machine {
     my $price = $lvl->{price};
     my $side  = $lvl->{side};
 
-    # Estado 2: SWEPT — buscar primera barra que cruce el nivel
     my $swept_i = undef;
     for my $i ($confirmed_at + 1 .. $n - 1) {
         if ($side eq 'sh' && $arr->[$i]{high} > $price) { $swept_i = $i; last }
@@ -205,7 +158,6 @@ sub _run_state_machine {
     }
 
     unless (defined $swept_i) {
-        # Nivel activo no barrido — queda en DETECTED
         return;
     }
 
@@ -213,7 +165,6 @@ sub _run_state_machine {
     $lvl->{swept_at} = $swept_i;
     $lvl->{state_path} = ['DETECTED', 'SWEPT'];
 
-    # Estados 3/4: ACCEPTANCE vs RECLAIMED
     my $consec_out = 0;
     my $max_look   = _min($swept_i + 30, $n - 1);
 
@@ -225,7 +176,6 @@ sub _run_state_machine {
         if ($close_out) {
             $consec_out++;
             if ($consec_out >= $n_accept) {
-                # Estado 3: ACCEPTANCE → RUN
                 $lvl->{state}          = 'ACCEPTANCE';
                 $lvl->{resolved_at}    = $i;
                 $lvl->{classification} = 'RUN';
@@ -236,7 +186,6 @@ sub _run_state_machine {
                 return;
             }
         } else {
-            # Cierre dentro del rango: RECLAIMED
             my $bars_out = $i - $swept_i;
             my $class = $bars_out == 0 ? 'SWEEP'
                       : $bars_out <= 3
@@ -255,9 +204,6 @@ sub _run_state_machine {
         }
     }
 
-    # Si el cursor termina antes del reclaim o de N cierres de aceptación, el
-    # nivel sigue pendiente. Resolverlo como SWEEP aquí adelantaba una señal
-    # que una vela posterior todavía podía convertir en GRAB o RUN.
     $lvl->{state}          = 'SWEPT';
     $lvl->{resolved_at}    = undef;
     $lvl->{classification} = undef;
@@ -265,16 +211,13 @@ sub _run_state_machine {
     $lvl->{max_consec_out} = $consec_out;
 }
 
-# ----------------------------------------------------------------
-# Helpers
-# ----------------------------------------------------------------
 sub _make_level {
     my ($index, $price, $type, $side, $confirmed_at) = @_;
     return {
         index          => $index,
         price          => $price,
-        type           => $type,   # BSL | SSL
-        side           => $side,   # sh  | sl
+        type           => $type,
+        side           => $side,
         confirmed_at   => $confirmed_at // $index,
         scope          => 'internal',
         scope_confirmed_at => $confirmed_at // $index,
@@ -290,8 +233,8 @@ sub _make_level {
         state_path     => ['DETECTED'],
         swept_at       => undef,
         resolved_at    => undef,
-        classification => undef,   # SWEEP | GRAB | BIG_GRAB | RUN (cuando RESOLVED)
-        volume_weight  => undef,   # {v1m, v5m, v15m} — pesado multi-temporal
+        classification => undef,
+        volume_weight  => undef,
         volume_weight_source => undef,
         volume_score   => 0,
     };
@@ -309,8 +252,6 @@ sub _mark_equal_levels {
         my $new_idx = $new->{index};
         next unless defined $new_idx;
 
-        # El primer pivote valido mas cercano evita enlazar el nivel nuevo con
-        # varios extremos antiguos o con liquidez que ya fue tomada.
         for (my $a = $b - 1; $a >= 0; $a--) {
             my $prior = $levels->[$a];
             my $prior_idx = $prior->{index};
@@ -413,15 +354,9 @@ sub _adaptive_external_depth {
     return $cap;
 }
 
-# ----------------------------------------------------------------
-# Accessors
-# ----------------------------------------------------------------
 sub get_levels     { return $_[0]->{_levels} }
 sub get_atr        { return $_[0]->{_atr}    }
 
-# Snapshot replay-safe de los niveles al cierre de una vela. El cálculo batch
-# conserva el historial completo para el gráfico, pero un consumidor analítico
-# no debe observar la resolución de un nivel antes de que ocurra.
 sub get_levels_at {
     my ($self, $last_index) = @_;
     my $market = $self->{_market} or return [];
@@ -451,7 +386,6 @@ sub get_resolved_at {
     return [ grep { defined $_->{classification} } @{ $self->get_levels_at($last_index) } ];
 }
 
-# Niveles activos (aun no barridos) por tipo
 sub get_bsl_levels {
     return [ grep { $_->{side} eq 'sh' && $_->{state} eq 'DETECTED' }
              @{ $_[0]->{_levels} } ];
@@ -485,15 +419,11 @@ sub get_eql_pairs {
     return [ grep { $_->{is_eql} && defined $_->{eq_pair} } @{ $_[0]->{_levels} } ];
 }
 
-# Devuelve niveles filtrados por volumen multi-temporal.
-# Solo pasa niveles cuyo volumen combinado supera el percentil p del ATR de volumen.
-# Separa niveles institucionales reales del ruido.
 sub get_weighted_levels {
     my ($self, $min_percentile) = @_;
-    $min_percentile //= 0.5;   # percentil 50 por defecto
+    $min_percentile //= 0.5;
     my $levels = $self->{_levels} // [];
 
-    # Calcular umbral del peso combinado 1m/5m/15m entre los niveles.
     my @vols = sort { $a <=> $b }
                grep { $_ > 0 }
                map  { $_->{volume_score} // 0 } @$levels;

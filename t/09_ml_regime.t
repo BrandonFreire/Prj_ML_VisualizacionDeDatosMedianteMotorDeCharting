@@ -41,9 +41,9 @@ sub feature_row {
 
 my @rows;
 for my $i (0 .. 29) {
-    push @rows, feature_row($i,      [0,      0.000, 0.001, 0.001, 1.00]); # rango
-    push @rows, feature_row($i + 30, [0.002,  0.050, 0.002, 0.003, 1.10]); # tendencia alcista
-    push @rows, feature_row($i + 60, [0,      0.001, 0.040, 0.050, 1.80]); # volatilidad
+    push @rows, feature_row($i,      [0,      0.000, 0.001, 0.001, 1.00]);
+    push @rows, feature_row($i + 30, [0.002,  0.050, 0.002, 0.003, 1.10]);
+    push @rows, feature_row($i + 60, [0,      0.001, 0.040, 0.050, 1.80]);
 }
 push @rows,
     feature_row(90, [0.003, 0.060, 0.002, 0.003, 1.10]),

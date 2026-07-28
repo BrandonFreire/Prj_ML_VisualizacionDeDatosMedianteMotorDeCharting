@@ -8,10 +8,6 @@ use Market::ML::RegimeClassifier;
 use Market::ML::GMM;
 use Market::ML::HMM;
 
-# Fachada para una evaluacion temporal segura: extrae features, entrena en un
-# tramo anterior y devuelve solamente la prediccion posterior. El modelo es
-# no supervisado y clasifica contexto (rango/tendencia/volatilidad), no da una
-# recomendacion de compra o venta.
 
 sub new {
     my ($class, %args) = @_;
@@ -128,8 +124,6 @@ sub _gmm_hmm_walk_forward {
     my @series;
     my ($models_fitted, $last_unavailable);
     for my $target (@targets) {
-        # Se pasa un prefijo físico, no sólo un cursor: ni el ajuste ni el
-        # filtro pueden siquiera inspeccionar velas posteriores a la actual.
         my @prefix = grep { defined($_->{index}) && $_->{index} <= $target->{index} } @{$args{rows}};
         my $fit = _gmm_hmm_fit_predict(
             %args, rows => \@prefix, train_end_index => $target->{index} - 1,

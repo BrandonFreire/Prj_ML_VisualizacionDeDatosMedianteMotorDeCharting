@@ -3,9 +3,6 @@ package Market::ML::FeatureExtractor;
 use strict;
 use warnings;
 
-# Extrae variables numericas conocidas al cierre de cada vela. No centra ni
-# escala usando muestras futuras: el escalado pertenece al clasificador y se
-# ajusta exclusivamente con su tramo de entrenamiento.
 
 sub new {
     my ($class, %args) = @_;
@@ -143,7 +140,7 @@ sub _validate_candle {
 sub _finite {
     my ($value) = @_;
     return 0 unless defined $value && $value =~ /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
-    return 0 if $value != $value; # NaN
+    return 0 if $value != $value;
     return 0 if abs($value) > 1e300;
     return 1;
 }

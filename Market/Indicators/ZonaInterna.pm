@@ -3,9 +3,6 @@ package Market::Indicators::ZonaInterna;
 use strict;
 use warnings;
 
-# Fibonacci retracement/extension levels derived exclusively from the last
-# three confirmed internal ZigZag points.  This module deliberately returns
-# analytical levels only; rendering is left to callers.
 
 sub new {
     my ($class, %args) = @_;

@@ -1,4 +1,3 @@
-//@ZPayab
 
 //@version=6
 
@@ -17,7 +16,6 @@ alarm(_osc, _message) =>
     alert(syminfo.ticker + ' ' + _osc + ' : ' + _message + ', price (' + str.tostring(close, format.mintick) + ')')
 
 
-//Conditional Sampling EMA Function 
 Cond_EMA(x, cond, n) =>
     var val = array.new_float(0)
     var ema_val = array.new_float(1)
@@ -31,7 +29,6 @@ Cond_EMA(x, cond, n) =>
     EMA = array.get(ema_val, 0)
     EMA
 
-//Conditional Sampling SMA Function
 Cond_SMA(x, cond, n) =>
     var vals = array.new_float(0)
     if bool(cond)
@@ -41,11 +38,9 @@ Cond_SMA(x, cond, n) =>
     SMA = array.avg(vals)
     SMA
 
-//Standard Deviation Function
 Stdev(x, n) =>
     math.sqrt(Cond_SMA(math.pow(x, 2), 1, n) - math.pow(Cond_SMA(x, 1, n), 2))
 
-//Range Size Function
 rng_size(x, scale, qty, n) =>
     ATR = Cond_EMA(ta.tr(true), 1, n)
     AC = Cond_EMA(math.abs(x - x[1]), 1, n)
@@ -53,7 +48,6 @@ rng_size(x, scale, qty, n) =>
     rng_size = scale == 'Pips' ? qty * 0.0001 : scale == 'Points' ? qty * syminfo.pointvalue : scale == '% of Price' ? close * qty / 100 : scale == 'ATR' ? qty * ATR : scale == 'Average Change' ? qty * AC : scale == 'Standard Deviation' ? qty * SD : scale == 'Ticks' ? qty * syminfo.mintick : qty
     rng_size
 
-//Two Type Range Filter Function
 rng_filt(h, l, rng_, n, type, smooth, sn, av_rf, av_n) =>
     rng_smooth = Cond_EMA(rng_, 1, sn)
     r = smooth ? rng_smooth : rng_
@@ -99,7 +93,6 @@ ma_function(source, length, type) =>
     else 
         ta.vwma(source, length)
     
-// Get Table Size
 table_size(s) => 
     switch s
         "Auto"   => size.auto   
@@ -122,9 +115,6 @@ in_dashboardtab_size = input.string(title="Dashboard Size    ", defval="
      options=["Auto",  "Huge",  "Large", "Normal", "Small", "Tiny"], 
      group= setup_group , inline= "dashboard3")
 
-///////////////////////////////////////////////
-///// Signal filters
-/////////////////////////////////////////////
 leadingindicator = input.string(title="Leading Indicator", defval="Range Filter", 
  options=["Range Filter", "Rational Quadratic Kernel (RQK)","Supertrend","Half Trend","Ichimoku Cloud","SuperIchi","True Strength Indicator (TSI)","Trend Direction Force Index (TDFI)","Trendline Breakout","Range Detector","Heiken-Ashi Candlestick Oscillator","Donchian Trend Ribbon","Stochastic","RSI","Rate of Change (ROC)","VWAP","CCI","2 EMA Cross","3 EMA Cross","B-Xtrender","Bull Bear Power Trend","Detrended Price Oscillator (DPO)","BB Oscillator","Chandelier Exit","DMI (Adx)","Parabolic SAR (PSAR)","MACD","SSL Channel","Waddah Attar Explosion","Chaikin Money Flow","Vortex Index","Schaff Trend Cycle (STC)","Awesome Oscillator","Volatility Oscillator","Wolfpack Id","QQE Mod","Hull Suite"], group='████████ Main Indicator (signal) ████████', inline='li') 
 
@@ -212,8 +202,6 @@ respectbbosc = input.bool (false, "BB Oscillator", group=confirmation_group, inl
 bbtype = input.string(title="", defval="Entering Lower/Upper Band", options=["Entering Lower/Upper Band","Exiting Lower/Upper Band"], group=confirmation_group, inline='bbosc') 
 
 
-// respecttm = input.bool (false, "Trend Meter", group=confirmation_group, inline='tm')
-// tmtype = input.string(title="", defval="3 TM and 2 TB change to same color", options=["3 TM change to same color", "3 TM and 2 TB change to same color", "3 TM, 2 TB and Wavetrend change to same color"], group=confirmation_group, inline='tm') 
 
 
 respectce = input.bool (false, "Chandelier Exit", group=confirmation_group, inline='ce')
@@ -316,9 +304,6 @@ vitype = input.string(title="", defval="Simple", options=["Simple", "Advance"],g
 
 
 
-/////////////////////////////////////////////////////////////////////////
-// Switch Board
-////////////////////////////////////////////////////////////////////////
 
 switchboard_group = "████ Switch Board (Turn On/Off Overlay Indicators) ████"
 switch_ema = input.bool (false, "EMA", group=switchboard_group, inline='Switch1')
@@ -352,10 +337,8 @@ bool show_markets = input.bool(true, group=switchboard_group, title='Market Sess
 
 
 
-///////////////////////////////////////////////////////////////////////
 
 
-// Fibonacci settings
 fibgroup = "█████████ Fibonacci Display Settting █████████"
 devTooltip = "Deviation is a multiplier that affects how much the price should deviate from the previous pivot in order for the bar to become a new pivot."
 depthTooltip = "The minimum number of bars that will be taken into account when calculating the indicator."
@@ -559,7 +542,7 @@ var line lineId19 = na
 var line lineId20 = na
 var line lineId21 = na
 
-if (switch_fibonacci)  // Check the boolean here
+if (switch_fibonacci)
     lineId0 := processLevel(show_neg_0_65, value_neg_0_65, color_neg_0_65, line(na))
     lineId1 := processLevel(show_neg_0_618, value_neg_0_618, color_neg_0_618, lineId0)
     lineId2 := processLevel(show_neg_0_382, value_neg_0_382, color_neg_0_382, lineId1)
@@ -591,9 +574,6 @@ if (switch_fibonacci)  // Check the boolean here
 
 
 
-/////////////////////////////////////////////////////////////////////////
-// EMA Selection
-////////////////////////////////////////////////////////////////////////
 
 ma_group= "██████████ MAs Line ██████████"
 len1bool = input.bool(true,'',group=ma_group,inline='len1')
@@ -650,26 +630,17 @@ plot(len5bool and switch_ema? ema5:na, color=ma_5_colour, linewidth=2, title='MA
 
 
 
-////////////////////////////////////////////////////////////////////////////
-//////////// 2EMA cross
-////////////////////////////////////////////////////////////////////////////
 
 var float first_2ema = 0
 var float second_2ema = 0
 
 
-// if respect2ma or leadingindicator=='2 EMA Cross'
-//     first_2ema := ta.ema(close, respect2maperiod_1)
-//     second_2ema := ta.ema(close, respect2maperiod_2)
 
 
-// Calculate EMAs
 if respect2ma or leadingindicator=='2 EMA Cross'
-    // Calculate EMAs
     first_2ema := ta.ema(close, respect2maperiod_1)
     second_2ema := ta.ema(close, respect2maperiod_2)
 
-// Function to detect cross with lookback
 detectCrossWithLookback(fast_series, slow_series, lookback) =>
     crossUp = fast_series[lookback] > slow_series[lookback] and fast_series[lookback + 1] <= slow_series[lookback + 1]
     crossDown = fast_series[lookback] < slow_series[lookback] and fast_series[lookback + 1] >= slow_series[lookback + 1]
@@ -691,20 +662,16 @@ detectCrossWithLookback(fast_series, slow_series, lookback) =>
     else
         0
 
-// Detect signals based on selected method
 ema2_long = false
 ema2_short = false
 
 if signal_type == "Default"
     ema2_long := ta.crossover(first_2ema, second_2ema)
     ema2_short := ta.crossunder(first_2ema, second_2ema)
-else  // Lookback method
+else
     crossDetected = detectCrossWithLookback(first_2ema, second_2ema, lookback_period)
     ema2_long := crossDetected == 1 and first_2ema > second_2ema
     ema2_short := crossDetected == -1 and first_2ema < second_2ema
-////////////////////////////////////////////////////////////////////////////
-//////////// 3EMA cross
-////////////////////////////////////////////////////////////////////////////
 var float first_3ema = 0
 var float second_3ema = 0
 var float third_3ema = 0
@@ -718,9 +685,6 @@ if respect3ma  or leadingindicator=='3 EMA Cross'
 
 
 
-//////////////////////////////////////////////////////////////////////////
-// Pivots
-//////////////////////////////////////////////////////////////////////////
 
 pivot_group = '██████████ Pivot Levels ██████████'
 pivotTypeInput = input.string(title="Type", defval="Traditional", options=["Traditional", "Fibonacci", "Woodie", "Classic", "DM", "Camarilla"],group=pivot_group)
@@ -782,7 +746,6 @@ var pivotTimeframe = switch pivotAnchorInput
     "Quarterly" => "3M"
     => "12M"
 
-//@variable The number of years in the selected Pivot period
 var pivotYearMultiplier = switch pivotAnchorInput
     "Biyearly"       => 2
     "Triyearly"      => 3
@@ -790,7 +753,6 @@ var pivotYearMultiplier = switch pivotAnchorInput
     "Decennially"    => 10
     => 1
 
-//@variable The number of values in the pivots of the selected type
 numOfPivotLevels = switch pivotTypeInput
     "Traditional" => 11
     "Camarilla"   => 11
@@ -835,7 +797,6 @@ if switch_pivot
         localPivots = ta.pivot_point_levels(pivotTypeInput, localPivotTimeframeChange)
         pivotPointsArray := localPivots
 
-//@function Sets the ending points of the currently active pivots to `endTime`.
 affixOldPivots(endTime) =>
     if drawnGraphics.rows() > 0
         lastGraphics = drawnGraphics.row(drawnGraphics.rows() - 1)
@@ -845,7 +806,6 @@ affixOldPivots(endTime) =>
             if positionLabelsInput == "Right"
                 graphic.pivotLabel.set_x(endTime)
 
-//@function Draws pivot lines and labels from `startTime` to the approximate end of the period.
 drawNewPivots(startTime) =>
     
     newGraphics = array.new<pivotGraphic>()
@@ -885,7 +845,6 @@ if switch_pivot
         affixOldPivots(time)
         drawNewPivots(time)
 
-// If possible, draw pivots from the beginning of the chart if none were found
 var FIRST_BAR_TIME = time
 if (barstate.islastconfirmedhistory and drawnGraphics.columns() == 0 and switch_pivot)
 
@@ -900,19 +859,14 @@ if (barstate.islastconfirmedhistory and drawnGraphics.columns() == 0 and switch_
 
 
 
-//////////////////////////////////////////////////////////////////////////
-// William Fractals
-//////////////////////////////////////////////////////////////////////////
 
 
 
 
 
-// Define "n" as the number of periods and keep a minimum value of 2 for error handling.
 n = input.int(title="Periods", defval=2, minval=2,group="██████████ Fractal ██████████")
 
 
-// UpFractal
 bool upflagDownFrontier = true
 bool upflagUpFrontier0 = true
 bool upflagUpFrontier1 = true
@@ -933,7 +887,6 @@ flagUpFrontier = upflagUpFrontier0 or upflagUpFrontier1 or upflagUpFrontier2 or 
 upFractal = (upflagDownFrontier and flagUpFrontier)
 
 
-// downFractal
 bool downflagDownFrontier = true
 bool downflagUpFrontier0 = true
 bool downflagUpFrontier1 = true
@@ -960,28 +913,20 @@ plotshape(upFractal and switch_fractal ? true : false, style=shape.triangleup,  
 
 
 
-//////////////////////////////////////////////////////////////////////////
-// Range Filter
-//////////////////////////////////////////////////////////////////////////
 
 rf_group= "██████████ Range Filter ██████████"
 
-//switch_rangefilter  = input.bool (true, "Show Range Filter Signals", group='=============== Range Filter ================')
 showrfline = input.bool (true, "Show RF line", group=rf_group)
 
 
 src = input.source(defval=close, title='Source', group=rf_group,inline = 'rf')
 
-// Sampling Period
-// Settings for 5min chart, BTCUSDC. For Other coin, change the paremeters
 
 per = input.int(defval=100, minval=1, title='Period', group=rf_group,inline = 'rf')
 
-// Range Multiplier
 
 mult = input.float(defval=3.0, minval=0.1, title='Multiplier', group=rf_group,inline = 'rf')
 
-// Smooth Average Range
 
 smoothrng(x, t, m) =>
     wper = t * 2 - 1
@@ -990,7 +935,6 @@ smoothrng(x, t, m) =>
     smoothrng
 smrng = smoothrng(src, per, mult)
 
-// Range Filter
 
 rngfilt(x, r) =>
     rngfilt = x
@@ -1007,7 +951,6 @@ var rangeFilterCond = switch_rangefilter or ((respectrf or leadingindicator == '
 if rangeFilterCond
     filt := rngfilt(src, smrng)
 
-    // Filter Direction
     upward := filt > filt[1] ? nz(upward[1]) + 1 : filt < filt[1] ? 0 : nz(upward[1])
     downward := filt < filt[1] ? nz(downward[1]) + 1 : filt > filt[1] ? 0 : nz(downward[1])
 
@@ -1015,61 +958,42 @@ if rangeFilterCond
     rfdownward := src < filt and src < src[1] and downward > 0 or src < filt and src > src[1] and downward > 0
 
 
-///////////////////////////////
-////// RF2
-///////////////////////////////
 
-//Filter Type
 f_type = input.string(defval='Type 1', options=['Type 1', 'Type 2'], title='Filter Type')
 
-//Movement Source
 mov_src = input.string(defval='Close', options=['Wicks', 'Close'], title='Movement Source')
 
-//Range Size Inputs
 rng_qty = input.float(defval=2.618, minval=0.0000001, title='Range Size')
 rng_scale = input.string(defval='Average Change', options=['Points', 'Pips', 'Ticks', '% of Price', 'ATR', 'Average Change', 'Standard Deviation', 'Absolute'], title='Range Scale')
 
-//Range Period
 rng_per = input.int(defval=14, minval=1, title='Range Period (for ATR, Average Change, and Standard Deviation)')
 
-//Range Smoothing Inputs
 smooth_range = input(defval=true, title='Smooth Range')
 smooth_per = input.int(defval=27, minval=1, title='Smoothing Period')
 
-//Filter Value Averaging Inputs
 av_vals = input(defval=false, title='Average Filter Changes')
 av_samples = input.int(defval=2, minval=1, title='Number Of Changes To Average')
 
 
-//-----------------------------------------------------------------------------------------------------------------------------------------------------------------
-//Definitions
-//-----------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 rf2upward = false
 rf2downward = false
 var rangeFilterCond1 = (respectrf or leadingindicator == 'Range Filter') and rftype == 'DW'
 if rangeFilterCond1
-    //High And Low Values
     h_val = mov_src == 'Wicks' ? high : close
     l_val = mov_src == 'Wicks' ? low : close
 
-    //Range Filter Values
     [_, _, filt2] = rng_filt(h_val, l_val, rng_size((h_val + l_val) / 2, rng_scale, rng_qty, rng_per), rng_per, f_type, smooth_range, smooth_per, av_vals, av_samples)
 
-    //Direction Conditions
     var fdir2 = 0.0
     fdir2 := filt2 > filt2[1] ? 1 : filt2 < filt2[1] ? -1 : fdir2
     rf2upward := fdir2 == 1
     rf2downward := fdir2 == -1
 
 
-//-----------------------------------------------------------------------------------------------------------------------------------------------------------------
-//color and switchboard rf
-//-----------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 
 filtcolor = upward > 0 ? color.lime : downward > 0 ? color.red : color.orange
-// filt2_color = rfupward ? #05ff9b : rfdownward ? #ff0583 : #cccccc
 
 filttype = string(na)
 if rftype == "Default"
@@ -1079,7 +1003,6 @@ else if rftype == "DW"
 
 
 filtplot = plot(switch_rangefilter  and showrfline?filt:na, color=filtcolor, linewidth=2, title='Range Filter')
-// filtplot2 = plot(switch_rangefilter2 ?filt2:na, color=filt2_color, linewidth=2, title='Range Filter')
 
 
 uprf = false
@@ -1094,9 +1017,6 @@ else if rftype == 'DW'
 
 
 
-////////////////////////////////
-/// RQK
-////////////////////////////////
 
 rqkgroupname = '████████ Rational Quadratic Kernel (RQK) ████████'
 rqksrc = input.source(close, 'Source', group=rqkgroupname)
@@ -1105,7 +1025,7 @@ r = input.float(8., 'Relative Weighting', step=0.25, group=rqkgroupname, tooltip
 x_0 = input.int(25, "Start Regression at Bar", group=rqkgroupname, tooltip='Bar index on which to start regression. The first bars of a chart are often highly volatile, and omission of these initial bars often leads to a better overall fit. Recommended range: 5-25')
 smoothColors = input.bool(false, "Smooth Colors", group=rqkgroupname, tooltip="Uses a crossover based mechanism to determine colors. This often results in less color transitions overall.", inline='1')
 lag = input.int(2, "Lag", group=rqkgroupname, tooltip="Lag for crossover detection. Lower values result in earlier crossovers. Recommended range: 1-2", inline='1')
-size = array.size(array.from(rqksrc)) // size of the data series
+size = array.size(array.from(rqksrc))
 
 kernel_regression(_rqksrc, _size, _h2) =>
     float _currentWeight = 0.
@@ -1125,11 +1045,9 @@ var bool rqkdowntrend = false
 
 
 if respectrqk or leadingindicator=="Rational Quadratic Kernel (RQK)"
-// Estimations
     yhat1 = kernel_regression(rqksrc, size, h2)
     yhat2 = kernel_regression(rqksrc, size, h2-lag)
 
-    // Rates of Change
     bool wasBearish = yhat1[2] > yhat1[1]
     bool wasBullish = yhat1[2] < yhat1[1]
     bool isBearish = yhat1[1] > yhat1
@@ -1137,7 +1055,6 @@ if respectrqk or leadingindicator=="Rational Quadratic Kernel (RQK)"
     bool isBearishChange = isBearish and wasBullish
     bool isBullishChange = isBullish and wasBearish
 
-    // Crossovers
     bool isBullishCross = ta.crossover(yhat2, yhat1)
     bool isBearishCross = ta.crossunder(yhat2, yhat1) 
     bool isBullishSmooth = yhat2 > yhat1
@@ -1151,9 +1068,6 @@ if respectrqk or leadingindicator=="Rational Quadratic Kernel (RQK)"
 
 
 
-/////////////////////////////
-////////// TSI
-/////////////////////////////
 tsi_group = "██████████ True Strength Indicator (TSI) ██████████"
 
 tsi_long_length = input(title="Long Length", defval=25,group=tsi_group)
@@ -1184,9 +1098,6 @@ if respecttsi or leadingindicator == 'True Strength Indicator (TSI)'
         tsi_short := tsi_value < tsi_signal and tsi_value<0
 
 
-////////////////////////////////
-///// Super Trend
-//////////////////////////////
 
 sp_group = "██████████ SuperTrend ██████████"
 
@@ -1232,9 +1143,6 @@ plotshape(stsellSignal  and switch_supertrend  ? dn : na, title='DownTrend Begin
 
 
 
-/////////////////////////////////////////////
-/////////// Half Trend
-////////////////////////////////////////////
 
 ht_group = "██████████ HalfTrend ██████████"
 amplitude = input(title='Amplitude', defval=2,group=ht_group)
@@ -1325,16 +1233,9 @@ if respectht or leadingindicator=="Half Trend" or switch_halftrend
 
 htPlot = plot(switch_halftrend ? ht:na, title='HalfTrend', linewidth=2, color=htColor)
 
-//////////////////////////////////////
 
  
 
-/////////////////////////////////////////////
-///////// Trend Line Breakout
-/////////////////////////////////////////////
-//------------------------------------------------------------------------------
-//Settings
-//-----------------------------------------------------------------------------{
 
 tbgroup= "██████████ Trendline Breakout ██████████"
 length_tb = input.int(14, 'Swing Detection Lookback',group=tbgroup)
@@ -1351,9 +1252,6 @@ tb_sellsignal = false
 
 if respecttrendline_breakout or leadingindicator=="Trendline Breakout"
         
-    //-----------------------------------------------------------------------------}
-    //Calculations
-    //-----------------------------------------------------------------------------{
     var upper_tb = 0.
     var lower_tb = 0.
     var slope_ph = 0.
@@ -1367,13 +1265,11 @@ if respecttrendline_breakout or leadingindicator=="Trendline Breakout"
     ph = ta.pivothigh(length_tb, length_tb)
     pl = ta.pivotlow(length_tb, length_tb)
 
-    //Slope Calculation Method
     slope_tb = switch calcMethod
         'Atr'    => ta.atr(length_tb) / length_tb * mult_tb
         'Stdev'  => ta.stdev(src_tb,length_tb) / length_tb * mult_tb
         'Linreg' => math.abs(ta.sma(src_tb * n_tb, length_tb) - ta.sma(src_tb, length_tb) * ta.sma(n_tb, length_tb)) / ta.variance(n_tb, length_tb) / 2 * mult_tb
 
-    //Get slopes and calculate trendlines
     slope_ph := bool(ph) ? slope_tb : slope_ph
     slope_pl := bool(pl) ? slope_tb : slope_pl
 
@@ -1396,9 +1292,6 @@ if respecttrendline_breakout or leadingindicator=="Trendline Breakout"
 
 
 
-//////////////////////////////////////////////
-////// Ichimoku
-/////////////////////////////////////////////
 
 ichigroup = "██████████ Ichimoku  ██████████"
 conversionPeriods = input.int(9, minval=1, title="Conversion Line Length",group=ichigroup)
@@ -1436,9 +1329,6 @@ p2 = plot(switch_ichi?leadLine2:na, offset = displacement - 1, color=#EF9A9A,
 
 fill(p1, p2, color = leadLine1 > leadLine2 and switch_ichi ? color.rgb(67, 160, 71, 70) : color.rgb(244, 67, 54, 70))
 
-//////////////////////////////
-///////// SuperIchi
-/////////////////////////////
 superichigroup = "██████████ SuperIchi  ██████████"
 
 tenkan_len  = input(9,'Tenkan          ',inline='tenkan',group=superichigroup)
@@ -1451,7 +1341,6 @@ spanB_len   = input(52,'Senkou Span B ',inline='span',group=superichigroup)
 spanB_mult  = input(6.,'',inline='span',group=superichigroup)
 
 offset      = input(26,'Displacement',group=superichigroup)
-//------------------------------------------------------------------------------
 avg(src,length,mult)=>
     atr = ta.atr(length)*mult
     up = hl2 + atr
@@ -1466,7 +1355,6 @@ avg(src,length,mult)=>
     max := ta.cross(src,spt) ? math.max(src,max[1]) : os == 1 ? math.max(src,max[1]) : spt
     min := ta.cross(src,spt) ? math.min(src,min[1]) : os == 0 ? math.min(src,min[1]) : spt
     math.avg(max,min)
-//------------------------------------------------------------------------------
 
 superichi_long = false
 superichi_short = false
@@ -1477,13 +1365,9 @@ if respectsuperichi or leadingindicator == 'SuperIchi'
     senkouA = math.avg(kijun,tenkan)
     senkouB = avg(close,spanB_len,spanB_mult)
     ChikouSpan = close[25] + (close - close[25])
-//------------------------------------------------------------------------------
     superichi_long := tenkan > kijun    and  senkouA> senkouB and close >senkouA[displacement -1] and close >senkouB[displacement -1] and (ChikouSpan > senkouA[50] and ChikouSpan > senkouB[50])
     superichi_short := tenkan < kijun and senkouA < senkouB and close < senkouA[displacement -1] and close < senkouB[displacement -1] and (ChikouSpan < senkouB[50] and ChikouSpan < senkouA[50])
 
-//////////////////////////////////
-///////////Donchian Channel Ribbon
-///////////////////////////////////
 donchiangroup = "██████████ Donchian Channel Ribbon ██████████"
 dlen = input.int(defval=15, title='Donchian Channel Period', group=donchiangroup)
 
@@ -1511,9 +1395,6 @@ if respectdonchian or leadingindicator == 'Donchian Trend Ribbon'
     donchian_short := maintrend == -1
 
 
-////////////////////////////////
-// DMI code
-////////////////////////////////
 
 dmi_group = "████████ Directional Movement Index (DMI) ████████"
 adxlen = input(5, title="ADX", group=dmi_group, inline='dmi')
@@ -1560,10 +1441,6 @@ if respectadx or leadingindicator == 'DMI (Adx)'
             adxupcondition := diplus > diminus and adx>=keyLevel and adx<55 and (adx>adx[1] or (diplus > diplus[1] and diminus < diminus[1])) and diplus - diminus > 1
             adxdowncondition := diplus < diminus and adx>=keyLevel and adx<55 and (adx>adx[1] or (diplus < diplus[1] and diminus > diminus[1]))  and diminus - diplus > 1
 
-////////////////////////////////////////////////
-//Parabolic SAR
-///////////////////////////////////////////////
-//showsar = input.bool (false, "Show SAR", group='-------------------------Parabolic SAR-------------------------')
 psar_group = "██████████ Parabolic SAR (PSAR) ██████████"
 start = input.float(0.02, group=psar_group, inline ='sar')
 increment = input.float(0.02, group=psar_group, inline ='sar')
@@ -1585,9 +1462,6 @@ plot(switch_sar  ? out : na, 'ParabolicSAR', style=plot.style_cross, color=sarco
 
 
 
-//////////////////////////////////////////////////
-///////// TDFI
-/////////////////////////////////////////////////
 rdfi_group = "█████ Trend Direction Force Index (TDFI) █████ "
 
 lookback = input(13, title='Lookback',group=rdfi_group)
@@ -1632,9 +1506,6 @@ if respecttdfi or leadingindicator == 'Trend Direction Force Index (TDFI)'
 
 
 
-//////////////////////////////////////////////////
-///////// McGinley Dynamic
-/////////////////////////////////////////////////
 md_group = "████████████████████ McGinley Dynamic ████████████████████"
 
 
@@ -1650,9 +1521,6 @@ if respectmd
     md_short := close<mg
 
 
-//////////////////////////////////////////////////
-///////// CCI
-/////////////////////////////////////////////////
 cci_group = "████████████████████ CCI ████████████████████"
 ccilength = input.int(20,title="CCI Length", minval=1,inline="cci", group=cci_group)
 ccisrc = input(hlc3, title="Source",inline="cci", group=cci_group)
@@ -1678,9 +1546,6 @@ ccishort = cci < ccilowerband
 
 
 
-///////////////////////////////////////////////
-/////// B-Xtrender
-/////////////////////////////////////////////
 
 bxgroup= "██████████ B-Xtrender ██████████"
 short_l1 = input(5, title='Short - L1',group=bxgroup)
@@ -1723,9 +1588,6 @@ if respectbx or leadingindicator == 'B-Xtrender'
 
 
 
-////////////////////////////////////////////////
-////// Bull Bear Power Trend (BBPT)
-///////////////////////////////////////////////
 
 bbpt_long = false
 bbpt_short = false
@@ -1755,9 +1617,6 @@ if respectbbpt or leadingindicator == 'Bull Bear Power Trend'
         bbpt_short := BullTrend_hist < 0
 
 
-///////////////////////////////////////////////
-//////////// VWAP
-/////////////////////////////////////////////
 
 vwap_group = "██████████ VWAP Settings ██████████"
 hideonDWM = input(false, title="Hide VWAP on 1D or Above", group=vwap_group)
@@ -1822,9 +1681,6 @@ short_vwap = close < vwapValue
 
 
 
-////////////////////////////////////////////////
-////// Chandelier Exit
-///////////////////////////////////////////////
 
 
 ChandelierE = "██████████ Chandelier Exit ██████████"
@@ -1861,9 +1717,6 @@ if respectce or leadingindicator == 'Chandelier Exit'
 
 
 
-////////////////////////////////////////////////
-////// ROC
-///////////////////////////////////////////////
 
 roc_group = "██████████ Rate of Change (ROC) ██████████"
 
@@ -1876,9 +1729,6 @@ roc_short = roc<0
 
 
 
-////////////////////////////////////////////////
-////// SSL Channel
-///////////////////////////////////////////////
 
 
 group_ssl = "██████████ SSL Channel ██████████"
@@ -1893,9 +1743,6 @@ sslUp = Hlv < 0 ? smaLow : smaHigh
 
 ssl_long = sslUp>sslDown
 ssl_short = sslUp<sslDown
-////////////////////////////////////////////////
-////// Chaikin Money Flow
-///////////////////////////////////////////////
 
 group_chaikin = "██████████ Chaiken Money Flow ██████████"
 chaiking_length = input.int(20, minval=1, group = group_chaikin )
@@ -1908,9 +1755,6 @@ if respectchaikin or leadingindicator == 'Chaikin Money Flow'
     chaikin_long := mf>0
     chaikin_short := mf<0
 
-////////////////////////////////////////////////
-////// Vortex INdex
-///////////////////////////////////////////////
 vortex_group = "██████████ Vortex Index ██████████"
 
 period_ = input.int(14, title="Length", minval=2, group=vortex_group, inline = 'vi')
@@ -1935,11 +1779,7 @@ if respectvi or leadingindicator == 'Vortex Index'
 
     vipcondition2 = vip > vim
     vimcondition2 = vip < vim
-// stoped here
 
-/////////////////////////////////////////////////
-////////Waddar Atar explosion (WAR)
-//////////////////////////////////////////////////
 group_wae = "██████████ Waddah Attar Explosion ██████████"
 
 
@@ -1983,32 +1823,20 @@ if respectwae or leadingindicator == 'Waddah Attar Explosion'
 
 
 
-//////////////////////////////////////////////
-////////// Range Detector
-//////////////////////////////////////////////
 
 rdgroup= "██████████ Range Detector ██████████"
 
 
-//------------------------------------------------------------------------------
-//Settings
-//-----------------------------------------------------------------------------{
 rd_length = input.int(20, 'Minimum Range Length', minval = 2,group=rdgroup)
 rd_mult   = input.float(1., 'Range Width', minval = 0, step = 0.1,group=rdgroup)
 rd_atrLen = input.int(500, 'ATR Length', minval = 1,group=rdgroup)
-//Style
 rd_upCss = input(#089981, 'Broken Upward',group=rdgroup)
 rd_dnCss = input(#f23645, 'Broken Downward', group=rdgroup)
 unbrokenCss = input(#2157f3, 'Unbroken', group=rdgroup)
 
-//-----------------------------------------------------------------------------}
-//Detect and highlight ranges
-//-----------------------------------------------------------------------------{
-//Ranges drawings
 var box bx = na
 var line lvl = na
 
-//Extensions
 var float rd_max = na
 var float rd_min = na
 
@@ -2024,20 +1852,16 @@ if switch_rd or leadingindicator == 'Range Detector' or respectrd
     for i = 0 to rd_length - 1 by 1
         count += math.abs(close[i] - rd_ma) > rd_atr ? 1 : 0
 
-    // if  switch_rd
     if count == 0 and count[1] != count
-        //Test for overlap and change coordinates
         if rd_n[rd_length] <= bx.get_right()
             rd_max := math.max(rd_ma + rd_atr, bx.get_top())
             rd_min := math.min(rd_ma - rd_atr, bx.get_bottom())
 
             if switch_rd
-                //Box new coordinates
                 bx.set_top(rd_max)
                 bx.set_rightbottom(rd_n, rd_min)
                 bx.set_bgcolor(color.new(unbrokenCss, 80))
 
-                //Line new coordinates
                 avg = math.avg(rd_max, rd_min)
                 lvl.set_y1(avg)
                 lvl.set_xy2(rd_n, avg)
@@ -2046,7 +1870,6 @@ if switch_rd or leadingindicator == 'Range Detector' or respectrd
             rd_max := rd_ma + rd_atr
             rd_min := rd_ma - rd_atr
 
-            //Set new box and level
             if switch_rd
                 bx := box.new(rd_n[rd_length], rd_ma + rd_atr, rd_n, rd_ma - rd_atr, na, bgcolor = color.new(unbrokenCss, 80))
 
@@ -2059,7 +1882,6 @@ if switch_rd or leadingindicator == 'Range Detector' or respectrd
         bx.set_right(rd_n)
         lvl.set_x2(rd_n)
 
-    //Set color
     if close > bx.get_top()
         bx.set_bgcolor(color.new(rd_upCss, 80))
         lvl.set_color(rd_upCss)
@@ -2069,18 +1891,12 @@ if switch_rd or leadingindicator == 'Range Detector' or respectrd
         lvl.set_color(rd_dnCss)
         rd_os := -1
 
-// for leading indicator
 rd_long = close > rd_max
 rd_short = close < rd_min
 
 
-//for confirmation indicator
 rd_signal = close > rd_max or close < rd_min
 
-//-----------------------------------------------------------------------------}
-//Plots
-//-----------------------------------------------------------------------------{
-//Range detection bgcolor
 bgcolor(detect_css)
 
 plot(switch_rd? rd_max:na, 'Range Top'
@@ -2089,13 +1905,9 @@ plot(switch_rd? rd_max:na, 'Range Top'
 plot(switch_rd ? rd_min:na, 'Range Bottom'
   , rd_min != rd_min[1] ? na : rd_os == 0 ? unbrokenCss : rd_os == 1 ? rd_upCss : rd_dnCss)
 
-//-----------------------------------------------------------------------------}
 
 
 
-/////////////////////////////////////////////////
-////////Volatility Oscillator
-//////////////////////////////////////////////////
 group_vo = "██████████ Volatility Oscillator ██████████"
 volength = input(100, group = group_vo)
 
@@ -2110,9 +1922,6 @@ if respectvo or leadingindicator == 'Volatility Oscillator'
     vo_short := spike < voy
 
 
-/////////////////////////////////////////////////
-////////Detrended Price Oscillator (DPO)
-//////////////////////////////////////////////////
 group_dpo = "██████████ Detrended Price Oscillator (DPO) ██████████"
 
 dpo_period_ = input.int(10, title="Length", minval=1,group=group_dpo)
@@ -2128,9 +1937,6 @@ if respectdpo or leadingindicator == 'Detrended Price Oscillator (DPO)'
     dpo_long := dpo > 0
     dpo_short := dpo < 0
 
-/////////////////////////////////////////////////
-////////HACOLT
-//////////////////////////////////////////////////
 hacolt_group = "███████ Heiken-Ashi Candlestick Oscillator ███████"
 
 hacolt_length = input(defval=55, title="TEMA Period",group=hacolt_group)
@@ -2196,9 +2002,6 @@ if respecthacolt or leadingindicator == "Heiken-Ashi Candlestick Oscillator"
 
 
 
-/////////////////////////////////////////////////
-////////Choppiness Index
-//////////////////////////////////////////////////
 group_ci = "██████████ Choppiness Index ██████████"
 
 
@@ -2211,9 +2014,6 @@ bool ci_filter = if respectci
 
 
 
-//////////////////////////////////////////////////
-////////Damiani Volatmeter
-//////////////////////////////////////////////////
 
 dv_group = "██████████ Damiani Volatmeter ██████████"
 int vis_atr = input.int(13,title="Vis ATR", group=dv_group, inline = '1')
@@ -2244,9 +2044,6 @@ if respectdv
         dvup := vol > t
 
 
-//////////////////////////////////////////////
-/////// MACD
-/////////////////////////////////////////////
 macd_group = "██████████ MACD ██████████"
 fast_length = input(title="Fast Length", defval=12,group=macd_group)
 slow_length = input(title="Slow Length", defval=26,group=macd_group)
@@ -2273,9 +2070,6 @@ if respectmacd or leadingindicator == 'MACD'
 
 
 
-/////////////////////////////////////////////
-///// Awesome Oscillator
-////////////////////////////////////////////
 
 ao_group = "██████████ Awesome Oscillator ██████████"
 nLengthSlow = input(34, title="Length Slow",group=ao_group)
@@ -2292,7 +2086,6 @@ if respectao or leadingindicator == 'Awesome Oscillator'
     xSMA_hl2 = ta.sma(xSMA1_SMA2, nLengthFast)
     nRes = xSMA1_SMA2 - xSMA_hl2
 
-    //// zero line cross (standard code)
     ao = ta.sma(hl2,5) - ta.sma(hl2,34)
     diff = ao - ao[1]
 
@@ -2309,9 +2102,6 @@ if respectao or leadingindicator == 'Awesome Oscillator'
 
 
 
-/////////////////////////////////////////////
-///// WolfPack ID
-////////////////////////////////////////////
 
 wolfgroup = "██████████ Wolf Pack ID ██████████"
 input1 = input(title='Fast Length', group=wolfgroup,defval=3)
@@ -2349,9 +2139,6 @@ if respectwolf or leadingindicator == 'Wolfpack Id'
 
 
 
-/////////////////////////////////////////////
-///// Bollinger Band (BB)
-////////////////////////////////////////////
 
 bb_group= "██████████ Bollinger Band ██████████"
 bb_length = input.int(20, minval=1)
@@ -2380,9 +2167,6 @@ fill(bbp1, bbp2, title = "Background", color=fillColor)
 
 
 
-/////////////////////////////////////////////
-///// BB Oscillator
-////////////////////////////////////////////
 bbgroup = "██████████ Bollinger Band (BB) Oscillator ██████████"
 
 bbosc_length = input.int(20, minval=1,group=bbgroup)
@@ -2426,340 +2210,170 @@ if respectbbosc or leadingindicator == 'BB Oscillator'
 
 
 
-// ////////////////////////////////////////////
-// ///// Trend Meter
-// ////////////////////////////////////////////
-// tm_group = "██████████ Trend Meter ██████████"
 
-// ShowTrendBar = true
 
-// WTSetups = input.bool(true, 'Wave Trend Filtered by Trend', group=tm_group, inline = 'tm')
 
-// TMSetups = input.bool(true, 'All 3 Trend Meters Now Align', group=tm_group, inline = 'tm2')
 
-// MSBar1 = 'Trend Filter'  // input(title= "1 - Wave Trend Signals",    defval = "Trend Filter",                             options = ["N/A", "Trend Filter", "Filter X", "Filter X + Trend Filter"])
 
 
-// MSBar2 = 'Trend Filter'  // input(title= "2 - Wave Trend Signals",    defval = "Filter X",                                 options = ["N/A", "Trend Filter", "Filter X", "Filter X + Trend Filter"])
 
 
 
-// TrendBar1 = input.string(title='Trend Meter 1', defval='MACD Crossover - Fast - 8, 21, 5', options=['MACD Crossover - 12, 26, 9', 'MACD Crossover - Fast - 8, 21, 5', 'Mom Dad Cross (Top Dog Trading)', 'RSI Signal Line Cross - RSI 13, Sig 21', 'RSI 13: > or < 50', 'RSI 5: > or < 50', 'Trend Candles', 'N/A'], group='Trend Meters')  // "MA Crossover", "DAD Direction (Top Dog Trading)",
 
-// TrendBar2 = input.string(title='Trend Meter 2', defval='RSI 13: > or < 50', options=['MACD Crossover - 12, 26, 9', 'MACD Crossover - Fast - 8, 21, 5', 'Mom Dad Cross (Top Dog Trading)', 'RSI Signal Line Cross - RSI 13, Sig 21', 'RSI 13: > or < 50', 'RSI 5: > or < 50', 'Trend Candles', 'N/A'], group='Trend Meters')  // "MA Crossover", "DAD Direction (Top Dog Trading)",
 
-// TrendBar3 = input.string(title='Trend Meter 3', defval='RSI 5: > or < 50', options=['MACD Crossover - 12, 26, 9', 'MACD Crossover - Fast - 8, 21, 5', 'Mom Dad Cross (Top Dog Trading)', 'RSI Signal Line Cross - RSI 13, Sig 21', 'RSI 13: > or < 50', 'RSI 5: > or < 50', 'Trend Candles', 'N/A'], group='Trend Meters')  // "MA Crossover", "DAD Direction (Top Dog Trading)",
 
-// TrendBar4 = input.string(title='Trend Bar 1', defval='MA Crossover', options=['MA Crossover', 'MA Direction - Fast MA - TB1', 'MA Direction - Slow MA - TB1', 'N/A'], group='Trend Bars')  //  "MACD Crossover - 12, 26 9", "MACD Crossover - Fast - 8, 21, 5", "DAD Direction (Top Dog Trading)",
 
-// TrendBar5 = input.string(title='Trend Bar 2', defval='MA Crossover', options=['MA Crossover', 'MA Direction - Fast MA - TB2', 'MA Direction - Slow MA - TB2', 'N/A'], group='Trend Bars')  //  "MACD Crossover - 12, 26 9", "MACD Crossover - Fast - 8, 21, 5", "DAD Direction (Top Dog Trading)",
 
 
-// ////////////////Signals - Wave Trend/////////////////////////////////////////////////////////////////////////////////////////////////
 
 
-// // Wave Trend - RSI
 
-// RSIMC = ta.rsi(close, 14)
 
-// // Wave Trend
 
-// ap = hlc3  // input(hlc3, "Wave Trend - Source")
-// n1 = 9  //input(9,    "Wave Trend - WT Channel Length")
-// n2 = 12  // input(12,   "Wave Trend - WT Average Length")
-// esa = ta.ema(ap, n1)
-// de = ta.ema(math.abs(ap - esa), n1)
-// ci = (ap - esa) / (0.015 * de)
-// tci = ta.ema(ci, n2)
-// wt11 = tci
-// wt22 = ta.sma(wt11, 3)
 
-// // Wave Trend - Overbought & Oversold lines
 
-// obLevel2 = 60  // input( 60,  "Wave Trend - WT Very Overbought")
-// obLevel = 50  // input( 50,  "Wave Trend - WT Overbought")
-// osLevel = -50  // input(-50,  "Wave Trend - WT Oversold")
-// osLevel2 = -60  // input(-60,  "Wave Trend - WT Very Oversold")
 
-// // Wave Trend - Conditions
 
-// WTCross = ta.cross(wt11, wt22)
-// WTCrossUp = wt22 - wt11 <= 0
-// WTCrossDown = wt22 - wt11 >= 0
-// WTOverSold = wt22 <= osLevel2
-// WTOverBought = wt22 >= obLevel2
 
 
-// // MA Inputs
 
-// MA1_Length = input.int(5, title='Fast MA', minval=1, group='Trend Bar 1 - Settings', inline='TB1 Fast')
-// MA1_Type = input.string(title='', defval='EMA', options=['EMA', 'SMA'], group='Trend Bar 1 - Settings', inline='TB1 Fast')
 
-// MA2_Length = input.int(11, title='Slow MA', minval=1, group='Trend Bar 1 - Settings', inline='TB1 Slow')
-// MA2_Type = input.string(title='', defval='EMA', options=['EMA', 'SMA'], group='Trend Bar 1 - Settings', inline='TB1 Slow')
 
-// MA3_Length = input.int(9, title='Fast MA', minval=1, group='Trend Bar 2 - Settings', inline='TB2 Fast')
-// MA3_Type = input.string(title='', defval='EMA', options=['EMA', 'SMA'], group='Trend Bar 2 - Settings', inline='TB2 Fast')
 
-// MA4_Length = input.int(21, title='Slow MA', minval=1, group='Trend Bar 2 - Settings', inline='TB2 Slow')
-// MA4_Type = input.string(title='', defval='SMA', options=['EMA', 'SMA'], group='Trend Bar 2 - Settings', inline='TB2 Slow')
 
 
-// // MA Calculations
 
-// Close = request.security(syminfo.tickerid, timeframe.period, close, lookahead=barmerge.lookahead_on)
 
 
-// MA1 = if MA1_Type == 'SMA'
-//     ta.sma(Close, MA1_Length)
-// else
-//     ta.ema(Close, MA1_Length)
 
 
-// MA2 = if MA2_Type == 'SMA'
-//     ta.sma(Close, MA2_Length)
-// else
-//     ta.ema(Close, MA2_Length)
 
 
-// MA3 = if MA3_Type == 'SMA'
-//     ta.sma(Close, MA3_Length)
-// else
-//     ta.ema(Close, MA3_Length)
 
 
-// MA4 = if MA4_Type == 'SMA'
-//     ta.sma(Close, MA4_Length)
-// else
-//     ta.ema(Close, MA4_Length)
 
 
-// // MA Crossover Condition
 
-// MACrossover1 = MA1 > MA2 ? 1 : 0
 
-// MACrossover2 = MA3 > MA4 ? 1 : 0
 
-// // MA Direction Condition
 
-// MA1Direction = MA1 > MA1[1] ? 1 : 0
 
-// MA2Direction = MA2 > MA2[1] ? 1 : 0
 
-// MA3Direction = MA3 > MA3[1] ? 1 : 0
 
-// MA4Direction = MA4 > MA4[1] ? 1 : 0
 
-// // MA Direction Change Condition
 
-// MA1PositiveDirectionChange = MA1Direction and not MA1Direction[1] ? 1 : 0
 
-// MA2PositiveDirectionChange = MA2Direction and not MA2Direction[1] ? 1 : 0
 
-// MA3PositiveDirectionChange = MA3Direction and not MA3Direction[1] ? 1 : 0
 
-// MA4PositiveDirectionChange = MA4Direction and not MA4Direction[1] ? 1 : 0
 
 
-// MA1NegativeDirectionChange = not MA1Direction and MA1Direction[1] ? 1 : 0
 
-// MA2NegativeDirectionChange = not MA2Direction and MA2Direction[1] ? 1 : 0
 
-// MA3NegativeDirectionChange = not MA3Direction and MA3Direction[1] ? 1 : 0
 
-// MA4NegativeDirectionChange = not MA4Direction and MA4Direction[1] ? 1 : 0
 
 
-// // MACD and MOM & DAD - Top Dog Trading
 
-// // Standard MACD Calculations
 
-// MACDfastMA = 12
-// MACDslowMA = 26
-// MACDsignalSmooth = 9
 
 
-// MACDLine = ta.ema(close, MACDfastMA) - ta.ema(close, MACDslowMA)
 
-// SignalLine = ta.ema(MACDLine, MACDsignalSmooth)
 
-// MACDHistogram = MACDLine - SignalLine
 
 
-// // MACD- Background Color Change Condition
 
-// MACDHistogramCross = MACDHistogram > 0 ? 1 : 0
 
-// MACDLineOverZero = MACDLine > 0 ? 1 : 0
 
-// MACDLineOverZeroandHistogramCross = MACDHistogramCross and MACDLineOverZero ? 1 : 0
 
-// MACDLineUnderZeroandHistogramCross = not MACDHistogramCross and not MACDLineOverZero ? 1 : 0
 
 
-// // Fast MACD Calculations
 
-// FastMACDfastMA = 8
-// FastMACDslowMA = 21
-// FastMACDsignalSmooth = 5
 
 
-// FastMACDLine = ta.ema(close, FastMACDfastMA) - ta.ema(close, FastMACDslowMA)
 
-// FastSignalLine = ta.ema(FastMACDLine, FastMACDsignalSmooth)
 
-// FastMACDHistogram = FastMACDLine - FastSignalLine
 
-// // Fast MACD- Background Color Change Condition
 
-// FastMACDHistogramCross = FastMACDHistogram > 0 ? 1 : 0
 
-// FastMACDLineOverZero = FastMACDLine > 0 ? 1 : 0
 
-// FastMACDLineOverZeroandHistogramCross = FastMACDHistogramCross and FastMACDLineOverZero ? 1 : 0
 
-// FastMACDLineUnderZeroandHistogramCross = not FastMACDHistogramCross and not FastMACDLineOverZero ? 1 : 0
 
 
-// // Top Dog Trading - Mom Dad Calculations
 
-// TopDog_Fast_MA = 5
-// TopDog_Slow_MA = 20
-// TopDog_Sig = 30
 
 
-// TopDogMom = ta.ema(close, TopDog_Fast_MA) - ta.ema(close, TopDog_Slow_MA)
 
-// TopDogDad = ta.ema(TopDogMom, TopDog_Sig)
 
-// // Top Dog Dad - Background Color Change Condition
 
-// TopDogDadDirection = TopDogDad > TopDogDad[1] ? 1 : 0
 
-// TopDogMomOverDad = TopDogMom > TopDogDad ? 1 : 0
 
-// TopDogMomOverZero = TopDogMom > 0 ? 1 : 0
 
 
 
 
-// ////// Trend Barmeter Calculations //////
 
 
-// haclose_tm = ohlc4
-// haopen_tm = 0.0
-// haopen_tm := na(haopen_tm[1]) ? (open + close) / 2 : (haopen_tm[1] + haclose_tm[1]) / 2
 
 
 
-// // RSI 5 Trend Barmeter Calculations
 
-// RSI5 = ta.rsi(close, 5)
 
-// RSI5Above50 = RSI5 > 50 ? 1 : 0
 
 
 
-// // RSI 5 Trend Barmeter Calculations
 
-// RSI13 = ta.rsi(close, 13)
 
 
-// // Linear Regression Calculation For RSI Signal Line
 
-// SignalLineLength1 = 21
 
-// x = bar_index
-// y = RSI13
-// x_ = ta.sma(x, SignalLineLength1)
-// y_ = ta.sma(y, SignalLineLength1)
-// mx = ta.stdev(x, SignalLineLength1)
-// my = ta.stdev(y, SignalLineLength1)
-// c = ta.correlation(x, y, SignalLineLength1)
-// slope = c * (my / mx)
-// inter = y_ - slope * x_
-// LinReg1 = x * slope + inter
 
 
-// RSISigDirection = LinReg1 > LinReg1[1] ? 1 : 0
 
-// RSISigCross = RSI13 > LinReg1 ? 1 : 0
 
-// RSI13Above50 = RSI13 > 50 ? 1 : 0
 
 
 
 
 
-// TrendBar1Result = TrendBar1 == 'MA Crossover' ? MACrossover1 : TrendBar1 == 'MACD Crossover - 12, 26, 9' ? MACDHistogramCross : TrendBar1 == 'MACD Crossover - Fast - 8, 21, 5' ? FastMACDHistogramCross : TrendBar1 == 'Mom Dad Cross (Top Dog Trading)' ? TopDogMomOverDad : TrendBar1 == 'DAD Direction (Top Dog Trading)' ? TopDogDadDirection : TrendBar1 == 'RSI Signal Line Cross - RSI 13, Sig 21' ? RSISigCross : TrendBar1 == 'RSI 5: > or < 50' ? RSI5Above50 : TrendBar1 == 'RSI 13: > or < 50' ? RSI13Above50 :  na
 
-// TrendBar2Result = TrendBar2 == 'MA Crossover' ? MACrossover1 : TrendBar2 == 'MACD Crossover - 12, 26, 9' ? MACDHistogramCross : TrendBar2 == 'MACD Crossover - Fast - 8, 21, 5' ? FastMACDHistogramCross : TrendBar2 == 'Mom Dad Cross (Top Dog Trading)' ? TopDogMomOverDad : TrendBar2 == 'DAD Direction (Top Dog Trading)' ? TopDogDadDirection : TrendBar2 == 'RSI Signal Line Cross - RSI 13, Sig 21' ? RSISigCross : TrendBar2 == 'RSI 5: > or < 50' ? RSI5Above50 : TrendBar2 == 'RSI 13: > or < 50' ? RSI13Above50 :  na
 
-// TrendBar3Result = TrendBar3 == 'MA Crossover' ? MACrossover1 : TrendBar3 == 'MACD Crossover - 12, 26, 9' ? MACDHistogramCross : TrendBar3 == 'MACD Crossover - Fast - 8, 21, 5' ? FastMACDHistogramCross : TrendBar3 == 'Mom Dad Cross (Top Dog Trading)' ? TopDogMomOverDad : TrendBar3 == 'DAD Direction (Top Dog Trading)' ? TopDogDadDirection : TrendBar3 == 'RSI Signal Line Cross - RSI 13, Sig 21' ? RSISigCross : TrendBar3 == 'RSI 5: > or < 50' ? RSI5Above50 : TrendBar3 == 'RSI 13: > or < 50' ? RSI13Above50 : na
 
 
 
 
-// FilterXUp = FastMACDHistogramCross and ta.ema(close, 15) > ta.ema(close, 15)[1]
 
-// FilterXDown = not FastMACDHistogramCross and ta.ema(close, 15) < ta.ema(close, 15)[1]
 
 
 
-// TrendFilterPlus = ta.ema(close, 15) > ta.ema(close, 20) and ta.ema(close, 20) > ta.ema(close, 30) and ta.ema(close, 30) > ta.ema(close, 40) and ta.ema(close, 40) > ta.ema(close, 50) ? 1 : 0
 
-// TrendFilterMinus = ta.ema(close, 15) < ta.ema(close, 20) and ta.ema(close, 20) < ta.ema(close, 30) and ta.ema(close, 30) < ta.ema(close, 40) and ta.ema(close, 40) < ta.ema(close, 50) ? 1 : 0
 
 
 
 
-// MSBar1PositiveWaveTrendSignal = MSBar1 == 'Filter X' ? FilterXUp and WTCross and WTCrossUp : MSBar1 == 'Trend Filter' ? TrendFilterPlus and WTCross and WTCrossUp : MSBar1 == 'Filter X + Trend Filter' ? FilterXUp and TrendFilterPlus and WTCross and WTCrossUp : WTCross and WTCrossUp
-// MSBar1NegativeWaveTrendSignal = MSBar1 == 'Filter X' ? FilterXDown and WTCross and WTCrossDown : MSBar1 == 'Trend Filter' ? TrendFilterMinus and WTCross and WTCrossDown : MSBar1 == 'Filter X + Trend Filter' ? FilterXDown and TrendFilterMinus and WTCross and WTCrossDown : WTCross and WTCrossDown
 
-// MSBar2PositiveWaveTrendSignal = MSBar2 == 'Filter X' ? FilterXUp and WTCross and WTCrossUp : MSBar2 == 'Trend Filter' ? TrendFilterPlus and WTCross and WTCrossUp : MSBar2 == 'Filter X + Trend Filter' ? FilterXUp and TrendFilterPlus and WTCross and WTCrossUp : WTCross and WTCrossUp
-// MSBar2NegativeWaveTrendSignal = MSBar2 == 'Filter X' ? FilterXDown and WTCross and WTCrossDown : MSBar2 == 'Trend Filter' ? TrendFilterMinus and WTCross and WTCrossDown : MSBar2 == 'Filter X + Trend Filter' ? FilterXDown and TrendFilterMinus and WTCross and WTCrossDown : WTCross and WTCrossDown
 
 
-// ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
 
 
-// CrossoverType2 = TrendBar4 == 'DAD Direction (Top Dog Trading)' ? TopDogDadDirection : TrendBar4 == 'MACD Crossover' ? MACDHistogramCross : TrendBar4 == 'MA Direction - Fast MA - TB1' ? MA1Direction : TrendBar4 == 'MA Direction - Slow MA - TB1' ? MA2Direction : MACrossover1
 
 
-// CrossoverType3 = TrendBar5 == 'DAD Direction (Top Dog Trading)' ? TopDogDadDirection : TrendBar5 == 'MACD Crossover' ? MACDHistogramCross : TrendBar5 == 'MA Direction - Fast MA - TB2' ? MA3Direction : TrendBar5 == 'MA Direction - Slow MA - TB2' ? MA4Direction : MACrossover2
 
 
 
 
 
-// MaxValueMACrossUp = ta.crossover(ta.ema(Close, 5), ta.ema(Close, 11))
-// MaxValueMACrossDown = ta.crossunder(ta.ema(Close, 5), ta.ema(Close, 11))
 
-// TB1MACrossUp = ta.crossover(MA1, MA2)
-// TB1MACrossDown = ta.crossunder(MA1, MA2)
 
 
 
-// TB2MACrossUp = ta.crossover(MA3, MA4)
-// TB2MACrossDown = ta.crossunder(MA3, MA4)
 
 
-// TB1Green = MA1 > MA2
-// TB1Red = MA1 < MA2
 
-// TB2Green = MA3 > MA4
-// TB2Red = MA3 < MA4
 
-// TB12Green = TB1Green and TB2Green and (TB1MACrossUp or TB2MACrossUp)
-// TB12Red = TB1Red and TB2Red and (TB1MACrossDown or TB2MACrossDown)
 
 
 
-/////////////////////////////////
-/////// Stochastic
-/////////////////////////////////
 groupname = "██████████ Stochastic ██████████"
 len = input.int(14, minval=1, title="Length",group=groupname)
 smoothK = input.int(3, minval=1, title="K Smoothing",group=groupname)
@@ -2767,13 +2381,10 @@ smoothD = input.int(3, minval=1, title="D Smoothing",group=groupname)
 upLine = input.int(80, minval=50, maxval=90, title="Overbought level",group=groupname)
 lowLine = input.int(20, minval=10, maxval=50, title="Oversold level",group=groupname)
 
-//definitions for Cross
 stoch_long = false
 stoch_short = false
 if respectstochastic or leadingindicator == 'Stochastic'
-    //Resolutioon for MTF
     resstoch = timeframe.period
-    //Stoch formula
     kk = ta.sma(ta.stoch(close, high, low, len), smoothK)
     dd = ta.sma(kk, smoothD)
     outK = request.security(syminfo.tickerid, resstoch, kk)
@@ -2792,9 +2403,6 @@ if respectstochastic or leadingindicator == 'Stochastic'
 
 
 
-///////////////////////////////////////////////
-///////RSI
-///////////////////////////////////////////////
 
 rsi_group = "█████████████████ RSI  █████████████████"
 
@@ -2842,11 +2450,7 @@ if respectrsi or respectrsima or respectrsimalimit or respectrsilimit or leading
     rsilimitshort := rsi <= rsilimitdown
 
 
-///////////////////////////////////////////////
-/// HULL SUITE
-//////////////////////////////////////////////
 hull_group = "██████████ HullSuite ██████████"
-//INPUT
 hullsrc = input(close, title='Source',group=hull_group)
 modeSwitch = input.string('Hma', title='Hull Variation', options=['Hma', 'Thma', 'Ehma'],group=hull_group)
 hull_length = input(55, title='hull_length(180-200 for floating S/R , 55 for swing entry)',group=hull_group)
@@ -2857,35 +2461,24 @@ htf = input.timeframe('240', title='Higher timeframe',group=hull_group)
 
 
 
-//FUNCTIONS
-//HMA
 HMA(_hullsrc, _hull_length) =>
     ta.wma(2 * ta.wma(_hullsrc, _hull_length / 2) - ta.wma(_hullsrc, _hull_length), math.round(math.sqrt(_hull_length)))
-//EHMA    
 EHMA(_hullsrc, _hull_length) =>
     ta.ema(2 * ta.ema(_hullsrc, _hull_length / 2) - ta.ema(_hullsrc, _hull_length), math.round(math.sqrt(_hull_length)))
-//THMA    
 THMA(_hullsrc, _hull_length) =>
     ta.wma(ta.wma(_hullsrc, _hull_length / 3) * 3 - ta.wma(_hullsrc, _hull_length / 2) - ta.wma(_hullsrc, _hull_length), _hull_length)
 
-//SWITCH
 Mode(modeSwitch, hullsrc, len) =>
     modeSwitch == 'Hma' ? HMA(hullsrc, len) : modeSwitch == 'Ehma' ? EHMA(hullsrc, len) : modeSwitch == 'Thma' ? THMA(hullsrc, len / 2) : na
 
-//OUT
 _hull = Mode(modeSwitch, hullsrc, int(hull_length * hull_lengthMult))
 HULL = useHtf ? request.security(syminfo.ticker, htf, _hull) : _hull
 MHULL = HULL[0]
 SHULL = HULL[2]
 
-//COLOR
-// hullColor = switchColor ? HULL > HULL[2] ? #00ff00 : #ff0000 : #ff9800
 
 
 
-/////////////////////////
-/// STC overlay signal
-/////////////////////////
 stc_group = "██████████ Schaff Trend Cycle (STC) ██████████"
 fastLength = input(title='MACD Fast Length', defval=23, group=stc_group)
 slowLength = input(title='MACD Slow Length', defval=50, group=stc_group)
@@ -2924,11 +2517,7 @@ plotshape(stcup and switch_stc? true:false, style=shape.circle, location=locatio
 
 
 
-//////////////////////////////////////////////////////
-//vector candles
-/////////////////////////////////////////////////////
 
-// Indicator Settings 
 
 pvsra_group="██████████ PVSRA ██████████"
 
@@ -2959,7 +2548,6 @@ var bool chartIs120MinOrMore = false
 
 
 
-// Logic to reference another Instruments Volume Profile
 
 
 pvsra_imnt(sresolution,sseries) => request.security(override_imnt ? pvsra_sym : syminfo.tickerid ,sresolution,sseries, barmerge.gaps_off,barmerge.lookahead_off)
@@ -2971,14 +2559,13 @@ if switch_pvsra
     open_imnt = override_imnt == true? pvsra_imnt("",open): open
 
 
-    av = ta.sma(volume_imnt, 10)//sum_2 = math.sum(volume, 10)
+    av = ta.sma(volume_imnt, 10)
     value2 = volume_imnt * (high_imnt - low_imnt)
     hivalue2 = ta.highest(value2, 10)
     imnt_override_pvsra_calc_part2 = volume_imnt >= av * 1.5 ? 2 : 0
     va = volume_imnt >= av * 2 or value2 >= hivalue2 ? 1 : imnt_override_pvsra_calc_part2
 
 
-    // Bull or bear Candle Colors
     isBull =  close_imnt > open_imnt
 
 
@@ -3023,16 +2610,11 @@ barcolor(overideCandleColours and switch_pvsra ? candleColor : NO_COLOR)
 plotcandle(open, high, low, close, color=(overideCandleColours and switch_pvsra ? candleColor : NO_COLOR), wickcolor=(overideCandleColours and switch_pvsra? candleColor : NO_COLOR), bordercolor=(overideCandleColours and switch_pvsra? candleColor : NO_COLOR), display = display.all)
 
 
-///////////////////////////////////////////////////
-//////// SUpply/Demand POI
-//////////////////////////////////////////////////
-//      INDICATOR SETTINGS
 poi_group = '██████████ Supply/Demand Zone ██████████'
 swing_length = input.int(10, title = 'Swing High/Low Length', group = poi_group, minval = 1, maxval = 50)
 history_of_demand_to_keep = input.int(20, title = 'History To Keep', minval = 5, maxval = 50, group = poi_group)
 box_width = input.float(2.5, title = 'Supply/Demand Box Width', group = poi_group, minval = 1, maxval = 10, step = 0.5)
 
-//      INDICATOR VISUAL SETTINGS
 show_zigzag = input.bool(false, title = 'Show Zig Zag', group = 'Visual Settings', inline = '1')
 show_price_action_labels = input.bool(false, title = 'Show Price Action Labels', group = 'Visual Settings', inline = '2')
 
@@ -3048,21 +2630,13 @@ poi_label_color = input.color(color.white, title = 'POI Label', group = 'Visual 
 swing_type_color = input.color(color.black, title = 'Price Action Label', group = 'Visual Settings', inline = '8')
 zigzag_color = input.color(color.new(#000000,0), title = 'Zig Zag', group = 'Visual Settings', inline = '9')
 
-//
-//END SETTINGS
-//
 
 atrpoi = ta.atr(50)
-//
-//FUNCTIONS
-//
 
-//      FUNCTION TO ADD NEW AND REMOVE LAST IN ARRAY
 f_array_add_pop(array, new_value_to_add) =>
     array.unshift(array, new_value_to_add)
     array.pop(array)
 
-//      FUNCTION SWING H & L LABELS
 f_sh_sl_labels(array, swing_type) =>
 
     var string label_text = na
@@ -3080,7 +2654,6 @@ f_sh_sl_labels(array, swing_type) =>
             label_text := 'LL'
         label.new(bar_index - swing_length, array.get(array,0), text = label_text, style=label.style_label_up, textcolor = swing_type_color, color = color.new(swing_type_color, 100), size = size.tiny)
 
-//      FUNCTION MAKE SURE SUPPLY ISNT OVERLAPPING
 f_check_overlapping(new_poi, box_array, atrpoi) =>
 
     atr_threshold = atrpoi * 2
@@ -3102,7 +2675,6 @@ f_check_overlapping(new_poi, box_array, atrpoi) =>
     okay_to_draw
 
 
-//      FUNCTION TO DRAW SUPPLY OR DEMAND ZONE
 f_supply_demand(value_array, bn_array, box_array, label_array, box_type, atrpoi) =>
 
     atr_buffer = atrpoi * (box_width / 10)
@@ -3124,9 +2696,7 @@ f_supply_demand(value_array, bn_array, box_array, label_array, box_type, atrpoi)
         poi := (box_top + box_bottom) / 2
 
     okay_to_draw = f_check_overlapping(poi, box_array, atrpoi)
-    // okay_to_draw = true
 
-    //delete oldest box, and then create a new box and add it to the array
     if box_type == 1 and okay_to_draw and switch_poi
         box.delete( array.get(box_array, array.size(box_array) - 1) )
         f_array_add_pop(box_array, box.new( left = box_left, top = box_top, right = box_right, bottom = box_bottom, border_color = supply_outline_color,
@@ -3146,13 +2716,11 @@ f_supply_demand(value_array, bn_array, box_array, label_array, box_type, atrpoi)
              bgcolor = color.new(poi_label_color,90), extend = extend.right,  text = 'POI', text_halign = text.align_left, text_valign = text.align_center, text_color = poi_label_color, text_size = size.small, xloc = xloc.bar_index))
 
 
-//      FUNCTION TO CHANGE SUPPLY/DEMAND TO A BOS IF BROKEN
 f_sd_to_bos(box_array, bos_array, label_array, zone_type) =>
 
     if zone_type == 1  and switch_poi
         for i = 0 to array.size(box_array) - 1
             level_to_break = box.get_top(array.get(box_array,i))
-            // if ta.crossover(close, level_to_break)
             if close >= level_to_break
                 copied_box = box.copy(array.get(box_array,i))
                 f_array_add_pop(bos_array, copied_box)
@@ -3173,7 +2741,6 @@ f_sd_to_bos(box_array, bos_array, label_array, zone_type) =>
     if zone_type == -1  and switch_poi
         for i = 0 to array.size(box_array) - 1
             level_to_break = box.get_bottom(array.get(box_array,i))
-            // if ta.crossunder(close, level_to_break)
             if close <= level_to_break
                 copied_box = box.copy(array.get(box_array,i))
                 f_array_add_pop(bos_array, copied_box)
@@ -3192,7 +2759,6 @@ f_sd_to_bos(box_array, bos_array, label_array, zone_type) =>
 
 
 
-//      FUNCTION MANAGE CURRENT BOXES BY CHANGING ENDPOINT
 f_extend_box_endpoint(box_array) =>
 
     for i = 0 to array.size(box_array) - 1
@@ -3202,36 +2768,26 @@ f_extend_box_endpoint(box_array) =>
 
 
 
-//      CALCULATE SWING HIGHS & SWING LOWS
 swing_high = ta.pivothigh(high, swing_length, swing_length)
 swing_low = ta.pivotlow(low, swing_length, swing_length)
 
-//      ARRAYS FOR SWING H/L & BN 
 var swing_high_values = array.new_float(5,0.00)
 var swing_low_values = array.new_float(5,0.00)
 
 var swing_high_bns = array.new_int(5,0)
 var swing_low_bns = array.new_int(5,0)
 
-//      ARRAYS FOR SUPPLY / DEMAND
 var current_supply_box = array.new_box(history_of_demand_to_keep, na)
 var current_demand_box = array.new_box(history_of_demand_to_keep, na)
 
-//      ARRAYS FOR SUPPLY / DEMAND POI LABELS
 var current_supply_poi = array.new_box(history_of_demand_to_keep, na)
 var current_demand_poi = array.new_box(history_of_demand_to_keep, na)
 
-//      ARRAYS FOR BOS
 var supply_bos = array.new_box(5, na)
 var demand_bos = array.new_box(5, na)
-//
-//END CALCULATIONS
-//
 
-//      NEW SWING HIGH
 if not na(swing_high)
 
-    //MANAGE SWING HIGH VALUES
     f_array_add_pop(swing_high_values, swing_high)
     f_array_add_pop(swing_high_bns, bar_index[swing_length])
     if show_price_action_labels
@@ -3239,10 +2795,8 @@ if not na(swing_high)
 
     f_supply_demand(swing_high_values, swing_high_bns, current_supply_box, current_supply_poi, 1, atrpoi)
 
-//      NEW SWING LOW
 else if not na(swing_low)
 
-    //MANAGE SWING LOW VALUES
     f_array_add_pop(swing_low_values, swing_low)
     f_array_add_pop(swing_low_bns, bar_index[swing_length])
     if show_price_action_labels
@@ -3258,7 +2812,6 @@ if switch_poi
     f_extend_box_endpoint(current_demand_box)
     f_extend_box_endpoint(current_supply_box)
 
-//ZIG ZAG
 h = ta.highest(high, swing_length * 2 + 1)
 l = ta.lowest(low, swing_length * 2 + 1)
 f_isMin(len) =>
@@ -3312,9 +2865,6 @@ if not dirUp
             li
 
 
-///////////////////////////////////////////////////
-/////////  Heiken Ashi Candle
-////////////////////////////////////////////////////
 
 
 hagroup = "███████ Heiken-ashi candles ███████"
@@ -3326,7 +2876,6 @@ hkOpen          := na(hkOpen[1]) ? (open + close) / 2 : (nz(hkOpen[1]) + nz(hkCl
 hkHigh          = math.max(high, math.max(hkOpen, hkClose))
 hkLow           = math.min(low,  math.min(hkOpen, hkClose))
 
-//[hkOpen, hkHigh, hkLow, hkClose] = security(heikinashi(syminfo.tickerid), timeframe.period, [open, high, low, close])
 
 candletype      = input.string  ("Hollow",      "Candle Type",  options=["Hollow", "Bars", "Candles"],      group=hagroup, tooltip="Candle Type to be dispalyed. User will have to 'Mute' the main series bar using the 👁 symbol next to ticker id.")
 
@@ -3354,9 +2903,6 @@ plotcandle(
 
 
 
-///////////////////////////////////////////////////
-/////////  Fair Value gap
-////////////////////////////////////////////////////
 
 
 fvggroup = "██████████ Fair Value Gap (FVG) ██████████"
@@ -3388,7 +2934,6 @@ var array<int> _countArr =array.new<int>(0)
 var array<int> _countArrIOFED =array.new<int>(0)
 
 
-    //modified form of @Bjorgum's looping function.  This stops boxes/lines painting when price passes to or through them
 extendAndRemoveBx(array<box> boxArray, array<line> lineArray, array<int> countArr1, array<int> countArr2, simple bool isBull, int maxSize) => 
     if boxArray.size() > 0
         for i = boxArray.size() -1 to 0
@@ -3403,7 +2948,7 @@ extendAndRemoveBx(array<box> boxArray, array<line> lineArray, array<int> countAr
             if hiLo * m > price * m 
                 boxArray.remove(i)
                 lineArray.remove(i)
-                countArr1.push(isBull?1:-1) //for 'above/below threshold alerts; counter sum will decrement 1 on lower threshold hit, increment 1 on upper threshold hit
+                countArr1.push(isBull?1:-1)
                 if deleteFilledBoxes
                     bx.set_bgcolor(colorNone)
                     ln.set_color(colorNone)
@@ -3414,7 +2959,7 @@ extendAndRemoveBx(array<box> boxArray, array<line> lineArray, array<int> countAr
         box.delete(boxArray.shift())
         line.delete(lineArray.shift())
 
-extendAndRemoveBx(bxDnArr,lnDnArr,_countArr,_countArrIOFED, true, 12) //12 should be good for around 2200 bars of history
+extendAndRemoveBx(bxDnArr,lnDnArr,_countArr,_countArrIOFED, true, 12)
 extendAndRemoveBx(bxUpArr, lnUpArr,_countArr,_countArrIOFED, false, 12)
 
 upThresholdLst = array.sum(_countArr)>array.sum(_countArr)[1]
@@ -3424,9 +2969,6 @@ upIOFEDlast= array.sum(_countArrIOFED)>array.sum(_countArrIOFED)[1]
 dnIOFEDlast= array.sum(_countArrIOFED)<array.sum(_countArrIOFED)[1] 
 
 
-///////////////////////////////////////////////////
-/////////// Vector Zone
-//////////////////////////////////////////////////
 
 import TradersReality/Traders_Reality_Lib/1 as trLib
 
@@ -3491,9 +3033,6 @@ trLib.cleanarr(zoneBoxesBelow)
 
 
 
-//*****************
-// Market sessions
-//*****************
 
 
 string weekend_sessions = ':1234567'
@@ -3505,7 +3044,7 @@ bool show_or1 = input.bool(group='Market session: London (0800-1630 UTC+0) - DST
 string sess1Label = input.string(group='Market session: London (0800-1630 UTC+0) - DST Aware', defval='London', title='Name:', inline='session1style')
 color sess1col = input.color(group='Market session: London (0800-1630 UTC+0) - DST Aware', title='Color: Box', defval=color.rgb(120, 123, 134, 75), inline='session1style')
 color sess1colLabel = input.color(group='Market session: London (0800-1630 UTC+0) - DST Aware', title='Label', defval=color.rgb(120, 123, 134, 0), inline='session1style')
-string sess1TimeX = '0800-1630'//input.session(group='Market session: London (0800-1630 UTC+0)', defval='0800-1630', title='Time (UTC+0):', inline='session1style', tooltip='Normally you will not want to adjust these times. Defaults are taken as if the session is NOT in DST and times must be in UTC+0. Note due to limitations of pinescript some values sellected here other than the default might not work correctly on all exchanges.')
+string sess1TimeX = '0800-1630'
 string rectStyle = input.string(group='Market session: London (0800-1630 UTC+0) - DST Aware', defval='Dashed', title='Line style of Market Session hi/lo line', options=['Dashed', 'Solid'])
 sessLineStyle = line.style_dashed
 bool show_markets_weekends = input.bool(false, group='Market session: London (0800-1630 UTC+0) - DST Aware', title='Show Market Session on Weekends?', tooltip='Turn on or off market sessions in the weekends. Note do not turn this on for exchanges that dont have weekend data like OANDA') 
@@ -3520,7 +3059,7 @@ bool show_or2 = input.bool(group='Market session: New York (1430-2100 UTC+0) - D
 string sess2Label = input.string(group='Market session: New York (1430-2100 UTC+0) - DST Aware', defval='NewYork', title='Name:', inline='session2style')
 color sess2col = input.color(group='Market session: New York (1430-2100 UTC+0) - DST Aware', title='Color: Box', defval=color.rgb(251, 86, 91, 75), inline='session2style')
 color sess2colLabel = input.color(group='Market session: New York (1430-2100 UTC+0) - DST Aware', title='Label', defval=color.rgb(253, 84, 87, 25), inline='session2style')
-string sess2TimeX = '1430-2100'//input.session(group='Market session: New York (1430-2100 UTC+0)', defval='1430-2100', title='Time (UTC+0):', inline='session2style', tooltip='Normally you will not want to adjust these times. Defaults are taken as if the session is NOT in DST times must be in UTC+0. Note due to limitations of pinescript some values sellected here other than the default might not work correctly on all exchanges.')
+string sess2TimeX = '1430-2100'
 sess2Time = show_markets_weekends ? sess2TimeX + weekend_sessions : sess2TimeX  + no_weekend_sessions
 
 
@@ -3530,7 +3069,7 @@ bool show_or3 = input.bool(group='Market session: Tokyo (0000-0600 UTC+0) - DST 
 string sess3Label = input.string(group='Market session: Tokyo (0000-0600 UTC+0) - DST Aware', defval='Tokyo', title='Name:', inline='session3style')
 color sess3col = input.color(group='Market session: Tokyo (0000-0600 UTC+0) - DST Aware', title='Color: Box', defval=color.rgb(80, 174, 85, 75), inline='session3style')
 color sess3colLabel = input.color(group='Market session: Tokyo (0000-0600 UTC+0) - DST Aware', title='Label', defval=color.rgb(80, 174, 85, 25), inline='session3style')
-string sess3TimeX = '0000-0600'//input.session(group='Market session: Tokyo (0000-0600 UTC+0)', defval='0000-0600', title='Time (UTC+0):', inline='session3style', tooltip='Normally you will not want to adjust these times. Defaults are taken as if the session is NOT in DST times must be in UTC+0. Note due to limitations of pinescript some values sellected here other than the default might not work correctly on all exchanges.')
+string sess3TimeX = '0000-0600'
 sess3Time = show_markets_weekends ? sess3TimeX + weekend_sessions : sess3TimeX + no_weekend_sessions
 
 
@@ -3540,7 +3079,7 @@ bool show_or4 = input.bool(group='Market session: Hong Kong (0130-0800 UTC+0) - 
 string sess4Label = input.string(group='Market session: Hong Kong (0130-0800 UTC+0) - DST Aware', defval='HongKong', title='Name:', inline='session4style')
 color sess4col = input.color(group='Market session: Hong Kong (0130-0800 UTC+0) - DST Aware', title='Color: Box', defval=color.rgb(128, 127, 23, 75), inline='session4style')
 color sess4colLabel = input.color(group='Market session: Hong Kong (0130-0800 UTC+0) - DST Aware', title='Label', defval=color.rgb(128, 127, 23, 25), inline='session4style')
-string sess4TimeX = '0130-0800'//input.session(group='Market session: Hong Kong (0130-0800 UTC+0)', defval='0130-0800', title='Time (UTC+0):', inline='session4style', tooltip='Normally you will not want to adjust these times. Defaults are taken as if the session is NOT in DST times must be in UTC+0. Note due to limitations of pinescript some values sellected here other than the default might not work correctly on all exchanges.')
+string sess4TimeX = '0130-0800'
 sess4Time = show_markets_weekends ? sess4TimeX + weekend_sessions : sess4TimeX + no_weekend_sessions
 
 bool show_rectangle5 = input.bool(group='Market session: Sydney (NZX+ASX 2200-0600 UTC+0) - DST Aware', defval=true, title='Show: session?', inline='session5conf', tooltip='If this checkbox is off, Label and Open Range have no effect') and show_markets
@@ -3549,7 +3088,7 @@ bool show_or5 = input.bool(group='Market session: Sydney (NZX+ASX 2200-0600 UTC+
 string sess5Label = input.string(group='Market session: Sydney (NZX+ASX 2200-0600 UTC+0) - DST Aware', defval='Sydney', title='Name:', inline='session5style')
 color sess5col = input.color(group='Market session: Sydney (NZX+ASX 2200-0600 UTC+0) - DST Aware', title='Color: Box', defval=color.rgb(37, 228, 123, 75), inline='session5style')
 color sess5colLabel = input.color(group='Market session: Sydney (NZX+ASX 2200-0600 UTC+0) - DST Aware', title='Label', defval=color.rgb(37, 228, 123, 25), inline='session5style')
-string sess5TimeX = '2200-0600'//input.session(group='Market session: Sydney (NZX+ASX 2200-0600 UTC+0)', defval='2200-0600', title='Time (UTC+0):', inline='session5style', tooltip='Normally you will not want to adjust these times. Defaults are taken as if the session is NOT in DST times must be in UTC+0. Note due to limitations of pinescript some values sellected here other than the default might not work correctly on all exchanges.')
+string sess5TimeX = '2200-0600'
 sess5Time = show_markets_weekends ? sess5TimeX + weekend_sessions : sess5TimeX + no_weekend_sessions
 
 bool show_rectangle6 = input.bool(group='Market session: EU Brinks (0800-0900 UTC+0) - DST Aware', defval=true, title='Show: session?', inline='session6conf', tooltip='If this checkbox is off, Label and Open Range have no effect') and show_markets
@@ -3558,7 +3097,7 @@ bool show_or6 = input.bool(group='Market session: EU Brinks (0800-0900 UTC+0) - 
 string sess6Label = input.string(group='Market session: EU Brinks (0800-0900 UTC+0) - DST Aware', defval='EU Brinks', title='Name:', inline='session6style')
 color sess6col = input.color(group='Market session: EU Brinks (0800-0900 UTC+0) - DST Aware', title='Color: Box', defval=color.rgb(255, 255, 255, 65), inline='session6style')
 color sess6colLabel = input.color(group='Market session: EU Brinks (0800-0900 UTC+0) - DST Aware', title='Label', defval=color.rgb(255, 255, 255, 25), inline='session6style')
-string sess6TimeX = '0800-0900'//input.session(group='Market session: EU Brinks (0800-0900 UTC+0)', defval='0800-0900', title='Time (UTC+0):', inline='session6style', tooltip='Normally you will not want to adjust these times. Defaults are taken as if the session is NOT in DST times must be in UTC+0. Note due to limitations of pinescript some values sellected here other than the default might not work correctly on all exchanges.')
+string sess6TimeX = '0800-0900'
 sess6Time = show_markets_weekends ? sess6TimeX + weekend_sessions : sess6TimeX + no_weekend_sessions
 
 bool show_rectangle7 = input.bool(group='Market session: US Brinks (1400-1500 UTC+0) - DST Aware', defval=true, title='Show: session?', inline='session7conf', tooltip='If this checkbox is off, Label and Open Range have no effect') and show_markets
@@ -3567,32 +3106,24 @@ bool show_or7 = input.bool(group='Market session: US Brinks (1400-1500 UTC+0) - 
 string sess7Label = input.string(group='Market session: US Brinks (1400-1500 UTC+0) - DST Aware', defval='US Brinks', title='Name:', inline='session7style')
 color sess7col = input.color(group='Market session: US Brinks (1400-1500 UTC+0) - DST Aware', title='Color: Box', defval=color.rgb(255, 255, 255, 65), inline='session7style')
 color sess7colLabel = input.color(group='Market session: US Brinks (1400-1500 UTC+0) - DST Aware', title='Label', defval=color.rgb(255, 255, 255, 25), inline='session7style')
-string sess7TimeX = '1400-1500'//input.session(group='Market session: US Brinks (1400-1500 UTC+0)', defval='1400-1500', title='Time (UTC+0):', inline='session7style', tooltip='Normally you will not want to adjust these times. Defaults are taken as if the session is NOT in DST times must be in UTC+0. Note due to limitations of pinescript some values sellected here other than the default might not work correctly on all exchanges.')
+string sess7TimeX = '1400-1500'
 sess7Time = show_markets_weekends ? sess7TimeX + weekend_sessions : sess7TimeX + no_weekend_sessions
 
 
 
 splitSessionString(sessXTime) =>
-    //session stirng looks like this: 0000-0000:1234567 ie start time, end time, day of the week
-    //we need to parse the sessXTime string into hours and min for start and end times so we can use those in the timestampfunction below
 
-    //string times contains "0000-2300" as an example
     string times = array.get(str.split(sessXTime, ':'), 0)
 
-    //string startTime contains "0000"
     string startTime = array.get(str.split(times, '-'), 0)
-    //string endTime contains "2300"
     string endTime = array.get(str.split(times, '-'), 1)
 
-    //now we need to get the start hour and start min, sing 0 index - hour is the characters in index 0 and index 1 while min is the chars at index 2 and 3
     string[] startTimeChars = str.split(startTime, '')
     string[] endTimeChars = str.split(endTime, '')
 
-    //so now startHour contains 00 and start min contains 00
     string startHour = array.get(startTimeChars, 0) + array.get(startTimeChars, 1)
     string startMin = array.get(startTimeChars, 2) + array.get(startTimeChars, 3)
 
-    //so now endHour contains 23 and end min contains 00
     string endHour = array.get(endTimeChars, 0) + array.get(endTimeChars, 1)
     string endMin = array.get(endTimeChars, 2) + array.get(endTimeChars, 3)
     [startHour, startMin, endHour, endMin]
@@ -3605,8 +3136,6 @@ calc_session_startend(sessXTime, gmt) =>
     midnight_exchange = timestamp(year, month, dayofmonth, 00, 00, 00)  
 
 
-    //if start hour is greater than end hour we are dealing with a session that starts towards the end of one day 
-    //and ends the next day. ie advance the end time by 24 hours - its the next day
     bool adjusted = false
     if gmt == 'GMT+0'
         if math.round(str.tonumber(startHour)) > math.round(str.tonumber(endHour))
@@ -3636,15 +3165,12 @@ calc_session_startend(sessXTime, gmt) =>
 
 draw_open_range(sessXTime, sessXcol, show_orX, gmt)=>
     if show_orX
-        // Initialize variables on bar zero only, so they preserve their values across bars.
         var hi = float(na)
         var lo = float(na)
         var box hiLoBox = na
-        // Detect changes in timeframe.
         session = time(timeframe.period, sessXTime, gmt)
         bool newTF = not na(session) and na(session[1])
         if newTF
-            // New bar in higher timeframe; reset values and create new lines and box.
             [targetstartTimeX,targetendTimeX] = calc_session_startend(sessXTime, gmt)
             sessionDuration = math.round(math.abs(time  - targetendTimeX)/(timeframe.multiplier*60*1000))
    
@@ -3658,15 +3184,12 @@ draw_open_range(sessXTime, sessXcol, show_orX, gmt)=>
             int(na)
 draw_session_hilo(sessXTime, show_rectangleX, show_labelX, sessXcolLabel, sessXLabel, gmt)=>
     if show_rectangleX
-        // Initialize variables on bar zero only, so they preserve their values across bars.
         var hi = float(0)
         var lo = float(10000000000.0)
        
         var line line_t = na
         var line line_b = na
         var label line_label = na
-        // var box hiLoBox = na
-        // Detect changes in timeframe.
         session = time(timeframe.period, sessXTime, gmt)
         sessLineStyleX = rectStyle == 'Solid' ? line.style_solid : line.style_dashed
         bool newTF = not na(session) and na(session[1])
@@ -3703,9 +3226,6 @@ draw_session_hilo(sessXTime, show_rectangleX, show_labelX, sessXcolLabel, sessXL
 
 
 
-//*****************************//
-// Daylight Savings Time Flags //
-//*****************************//
 
 int previousSunday = dayofmonth - dayofweek + 1
 bool nyDST = false
@@ -3732,7 +3252,7 @@ else if month == 10
     nyDST := true
     ukDST := previousSunday <= 24
     sydDST := previousSunday >= 0
-else // month == 11
+else
     nyDST := previousSunday <= 0
     ukDST := false
     sydDST := true
@@ -3754,11 +3274,9 @@ else
     draw_open_range(sess2Time,sess2col,show_or2,'GMT+0')
     draw_session_hilo(sess2Time, show_rectangle2, show_label2, sess2colLabel, sess2Label, 'GMT+0')
 
-// Tokyo
 draw_open_range(sess3Time,sess3col,show_or3,'GMT+0')
 draw_session_hilo(sess3Time, show_rectangle3, show_label3, sess3colLabel, sess3Label, 'GMT+0')
 
-// Hong Kong
 draw_open_range(sess4Time,sess4col,show_or4,'GMT+0')
 draw_session_hilo(sess4Time, show_rectangle4, show_label4, sess4colLabel, sess4Label, 'GMT+0')
 
@@ -3781,21 +3299,15 @@ else
 
 
 
-//////////////////////////////////////////////////
-////QQE MOD
-/////////////////////////////////////////////////
 
 qqe_gorup = "██████████ QQE ██████████"
 RSI_Period = input(6, title='RSI Length', group=qqe_gorup)
 SF = input(5, title='RSI Smoothing', group=qqe_gorup)
 QQE = input(3, title='Fast QQE Factor', group=qqe_gorup)
 ThreshHold = input(3, title='Thresh-hold', group=qqe_gorup)
-//
 
 srcqqe = input(close, title='RSI Source', group=qqe_gorup)
-//
 
-//
 Wilders_Period = RSI_Period * 2 - 1
 
 
@@ -3829,18 +3341,14 @@ lowerqqe = basis - dev
 color_bar = RsiMa - 50 > upperqqe ? #00c3ff : RsiMa - 50 < lowerqqe ? #ff0062 : color.gray
 
 
-//
-// Zero cross
 QQEzlong = 0
 QQEzlong := nz(QQEzlong[1])
 QQEzshort = 0
 QQEzshort := nz(QQEzshort[1])
 QQEzlong := RSIndex >= 50 ? QQEzlong + 1 : 0
 QQEzshort := RSIndex < 50 ? QQEzshort + 1 : 0
-//  
 
 
-////////////////////////////////////////////////////////////////
 
 RSI_Period2 = input(6, title='RSI Length', group=qqe_gorup)
 SF2 = input(5, title='RSI Smoothing', group=qqe_gorup)
@@ -3848,9 +3356,7 @@ QQE2 = input(1.61, title='Fast QQE2 Factor', group=qqe_gorup)
 ThreshHold2 = input(3, title='Thresh-hold', group=qqe_gorup)
 
 src2 = input(close, title='RSI Source', group=qqe_gorup)
-//
 
-//
 isqqeabove = false
 isqqebelow = false
 if respectqqe or leadingindicator == 'QQE Mod'
@@ -3877,17 +3383,13 @@ if respectqqe or leadingindicator == 'QQE Mod'
     FastAtrRsi2TL = trend2 == 1 ? longband2 : shortband2
 
 
-    //
-    // Zero cross
     QQE2zlong = 0
     QQE2zlong := nz(QQE2zlong[1])
     QQE2zshort = 0
     QQE2zshort := nz(QQE2zshort[1])
     QQE2zlong := RSIndex2 >= 50 ? QQE2zlong + 1 : 0
     QQE2zshort := RSIndex2 < 50 ? QQE2zshort + 1 : 0
-    //
     qqeline = FastAtrRsi2TL - 50
-    // hcolor2 = RsiMa2 - 50 > ThreshHold2 ? color.silver : RsiMa2 - 50 < 0 - ThreshHold2 ? color.silver : na
 
 
     Greenbar1 = RsiMa2 - 50 > ThreshHold2
@@ -3896,8 +3398,6 @@ if respectqqe or leadingindicator == 'QQE Mod'
     Redbar1 = RsiMa2 - 50 < 0 - ThreshHold2
     Redbar2 = RsiMa - 50 < lowerqqe
 
-    // isqqebarabove = Greenbar1 and Greenbar2
-    // isqqebarbelow = Redbar1 and Redbar2
 
 
     if qqetype == 'Line'
@@ -3911,9 +3411,6 @@ if respectqqe or leadingindicator == 'QQE Mod'
         isqqebelow := RsiMa2 - 50 < 0 and (Redbar1 and Redbar2) and qqeline<0
 
 
-/////////////////////////////////////////////////
-/////////////// Volume Up/Down
-////////////////////////////////////////////////
 vgroup = "██████████ Up/Down Volume ██████████"
 lowerTimeframeTooltip = "The indicator scans lower timeframe data to approximate Up/Down volume. By default, the timeframe is chosen automatically. These inputs override this with a custom timeframe.\n\nHigher timeframes provide more historical data, but the data will be less precise."
 useCustomTimeframeInput = input.bool(false, "Use custom timeframe", tooltip = lowerTimeframeTooltip,group=vgroup)
@@ -3941,7 +3438,6 @@ longvol = false
 shortvol = false
 
 if respectvol
-    // Modify the timeframe argument in the security call
     timeframeForSecurity = useCustomTimeframeInput ? lowerTimeframeInput : timeframe.period
 
     [upVolumeArray, downVolumeArray] = request.security_lower_tf(syminfo.tickerid, timeframeForSecurity, upAndDownVolume())
@@ -4164,16 +3660,6 @@ else if leadingindicator == 'SuperIchi'
     leadinglongcond := superichi_long
     leadingshortcond := superichi_short
 
-// else if leadingindicator == 'Trend Meter'
-//     if tmtype == '3 TM and 2 TB change to same color'
-//         leadinglongcond := TB1Green and TB2Green  and (TrendBar1Result and TrendBar2Result and TrendBar3Result ? 1 : 0)
-//         leadingshortcond := TB1Red and TB2Red and (not TrendBar1Result and not TrendBar2Result and not TrendBar3Result ? 1 : 0)
-//     else if tmtype == '3 TM change to same color'
-//         leadinglongcond := TrendBar1Result and TrendBar2Result and TrendBar3Result ? 1 : 0
-//         leadingshortcond := not TrendBar1Result and not TrendBar2Result and not TrendBar3Result ? 1 : 0
-//     else if tmtype == '3 TM, 2 TB and Wavetrend change to same color'
-//         leadinglongcond := TB1Green and TB2Green  and (TrendBar1Result and TrendBar2Result and TrendBar3Result ? 1 : 0) and MSBar1PositiveWaveTrendSignal
-//         leadingshortcond := TB1Red and TB2Red and (not TrendBar1Result and not TrendBar2Result and not TrendBar3Result ? 1 : 0) and MSBar1NegativeWaveTrendSignal
 else if leadingindicator == 'CCI'
     leadinglongcond := ccilong
     leadingshortcond := ccishort
@@ -4182,15 +3668,6 @@ else if leadingindicator == 'CCI'
 tmup = false
 tmdown = false
 
-// if tmtype == '3 TM and 2 TB change to same color'
-//     tmup := TB1Green and TB2Green  and (TrendBar1Result and TrendBar2Result and TrendBar3Result ? 1 : 0)
-//     tmdown := TB1Red and TB2Red and (not TrendBar1Result and not TrendBar2Result and not TrendBar3Result ? 1 : 0)
-// else if tmtype == '3 TM change to same color'
-//     tmup := TrendBar1Result and TrendBar2Result and TrendBar3Result ? 1 : 0
-//     tmdown := not TrendBar1Result and not TrendBar2Result and not TrendBar3Result ? 1 : 0
-// else if tmtype == '3 TM, 2 TB and Wavetrend change to same color'
-//     tmup := TB1Green and TB2Green  and (TrendBar1Result and TrendBar2Result and TrendBar3Result ? 1 : 0) and MSBar1PositiveWaveTrendSignal
-//     tmdown := TB1Red and TB2Red and (not TrendBar1Result and not TrendBar2Result and not TrendBar3Result ? 1 : 0) and MSBar1NegativeWaveTrendSignal
 
 hullup = false
 hulldown = false
@@ -4213,14 +3690,12 @@ longCond := leadinglongcond  and   (respectrf?uprf:justcontinue) and
  (respectadx?adxupcondition:justcontinue)  and (respecttsi?tsi_long:justcontinue) and (respecthacolt?hacolt_long:justcontinue)  and (respectmd?md_long:justcontinue) and (respecttdfi?tdfi_long:justcontinue) and (respectdpo?dpo_long:justcontinue)    and (respectrd? rd_signal:justcontinue)   and (respectci?ci_filter:justcontinue)  and (respectroc?roc_long:justcontinue)     and (respectht?halftrend_long:justcontinue)  and (respectdonchian?donchian_long:justcontinue)   and (respecttrendline_breakout?tb_buysignal:justcontinue) and (respectbbpt?bbpt_long:justcontinue) and (respectrqk?rqkuptrend:justcontinue)  and (respectbx?bx_long:justcontinue)   and (respectbbosc?bbosc_long:justcontinue)   and (respectwae?wae_long:justcontinue)  and (respectce?ce_long:justcontinue)  and (respectssl?ssl_long:justcontinue) and (respect2ma?ema2_long:justcontinue) and (respect3ma?ema3_long:justcontinue) and (respectstochastic?stoch_long:justcontinue) and (respectcci?ccilong:justcontinue) and (respectst?isstup:justcontinue) and (respectrsi?rsiup:justcontinue) and (respectrsimalimit?rsimalimitlong:justcontinue)  and (respectrsilimit?rsilimitlong:justcontinue) and (respectrsima?rsimalong2:justcontinue)  and (respectema?isaboverespectema:justcontinue) and (respectqqe?isqqeabove:justcontinue) and (respectsar?sarup:justcontinue) and
   (respectvol?longvol:justcontinue) and (respectchaikin?chaikin_long:justcontinue)  and (respectvwap?long_vwap:justcontinue) and (respectvo?vo_long:justcontinue)  and (respectao?ao_long:justcontinue) and (respectsuperichi?superichi_long:justcontinue) and (respectwolf?wolf_long:justcontinue) and (respectichi?ichi_long:justcontinue) and (respectmacd?ismacdup:justcontinue)   and (respecthull?hullup:justcontinue) and (respectvi?vipcondition:justcontinue)   and (respectstc?stcup:justcontinue)  and (respectdv?dvup:justcontinue)
 
-//and (respecttm?tmup:justcontinue)
 
 shortCond := leadingshortcond and   (respectrf?downrf:justcontinue)  and 
  (respectadx?adxdowncondition:justcontinue) and (respecttsi?tsi_short:justcontinue)   and (respecthacolt?hacolt_short:justcontinue)  and (respectmd?md_short:justcontinue) and (respecttdfi?tdfi_short:justcontinue)  and (respectdpo?dpo_short:justcontinue)    and (respectrd? rd_signal:justcontinue)   and (respectci?ci_filter:justcontinue)    and (respectroc?roc_short:justcontinue)    and (respectht?halftrend_short:justcontinue)    and (respecttrendline_breakout?tb_sellsignal:justcontinue) and (respectdonchian?donchian_short:justcontinue)  and (respectbbpt?bbpt_short:justcontinue) and (respectrqk?rqkdowntrend:justcontinue)   and (respectbx?bx_short:justcontinue)   and (respectbbosc?bbosc_short:justcontinue)   and (respectwae?wae_short:justcontinue) and (respectce?ce_short:justcontinue)  and (respectssl?ssl_short:justcontinue)  and (respectchaikin?chaikin_short:justcontinue)  and (respect2ma?ema2_short:justcontinue) and (respect3ma?ema3_short:justcontinue)  and (respectstochastic?stoch_short:justcontinue) and (respectcci?ccishort:justcontinue) and (respectrsimalimit?rsimalimitshort:justcontinue)  and (respectrsilimit?rsilimitshort:justcontinue) and (respectrsima?rsimashort2:justcontinue) and (respectst?isstdown:justcontinue) and (respectrsi?rsidown:justcontinue) and (respectema?isbelowrespectema:justcontinue)  and (respectqqe?isqqebelow:justcontinue) and (respectsar?sardown:justcontinue) and 
   (respectvol?shortvol:justcontinue) and (respectvwap?short_vwap:justcontinue)  and (respectvo?vo_short:justcontinue) and (respectao?ao_short:justcontinue)  and (respectsuperichi?superichi_short:justcontinue) and (respectwolf?wolf_short:justcontinue)   and (respectichi?ichi_short:justcontinue)   and (respectmacd?ismacddown:justcontinue) and (respecthull?hulldown:justcontinue) and (respectvi?vimcondition:justcontinue)   and (respectstc?stcdown:justcontinue)  and (respectdv?dvup:justcontinue)
 
  
-//and (respecttm?tmdown:justcontinue)
 
 
 var int leadinglong_count = 0
@@ -4265,13 +3740,9 @@ shortCondition = false
 
 
 
-// if expiry option is used
 longcond_withexpiry = longCond and leadinglong_count2 <= signalexpiry
 shortcond_withexpiry = shortCond and leadingshort_count2 <= signalexpiry
 
-//log.info("leadinglong_count2 : {0}",leadinglong_count2)
-//log.info("leadingshort_count2: {0}",leadingshort_count2)
-//without expiry
 longCondition := longcond_withexpiry and CondIni[1] == -1 
 shortCondition := shortcond_withexpiry and CondIni[1] == 1
 
@@ -4350,7 +3821,6 @@ pushConfirmation(respectvwap, "VWAP", long_vwap, short_vwap)
 pushConfirmation(respectichi, "Ichimoku Cloud", ichi_long, ichi_short)
 pushConfirmation(respectsuperichi, "Superichi", superichi_long, superichi_short)
 pushConfirmation(respectbbosc, "BB Oscillator", bbosc_long, bbosc_short)
-// pushConfirmation(respecttm, "Trend Meter", tmup, tmdown)
 pushConfirmation(respectce, "Chandelier Exit", ce_long, ce_short)
 pushConfirmation(respectcci, "CCI", ccilong, ccishort)
 pushConfirmation(respectadx, "DMI (Adx)  (" + str.tostring(adxtype) + ")", adxupcondition, adxdowncondition)
@@ -4360,8 +3830,8 @@ pushConfirmation(respectvo, "Volatility Oscillator", vo_long, vo_short)
 pushConfirmation(respectdpo, "Detrended Price Oscillator(DPO)", dpo_long, dpo_short)
 pushConfirmation(respectmd, "McGinley Dynamic", md_long, md_short)
 
-pushConfirmation(respectdv, "DV", dvup, dvup) // Note: Both are 'dvup'. Double-check if it's intended.
-pushConfirmation(respectci, "Choppiness Index", ci_filter, ci_filter) // Note: Both are 'dvup'. Double-check if it's intended.
+pushConfirmation(respectdv, "DV", dvup, dvup)
+pushConfirmation(respectci, "Choppiness Index", ci_filter, ci_filter)
 
 pushConfirmation(respectstochastic, "Stochastic (" + str.tostring(stochtype) + ")", stoch_long, stoch_short)
 pushConfirmation(respectrsi, "RSI (" + str.tostring(rsitype2) + ")", rsiup, rsidown)

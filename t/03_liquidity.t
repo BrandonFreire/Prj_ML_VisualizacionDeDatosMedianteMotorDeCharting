@@ -19,13 +19,13 @@ sub liquidity_candles {
     );
 
     if ($scenario eq 'grab') {
-        $rows[8] = [111, 105, 111]; # rompe y cierra fuera del BSL
-        $rows[9] = [109, 104, 109]; # reclama el nivel una vela después
+        $rows[8] = [111, 105, 111];
+        $rows[9] = [109, 104, 109];
     }
     elsif ($scenario eq 'run') {
         $rows[8]  = [111, 105, 111];
         $rows[9]  = [112, 106, 111];
-        $rows[10] = [113, 107, 111]; # tercer cierre consecutivo fuera
+        $rows[10] = [113, 107, 111];
     }
 
     return [ map {

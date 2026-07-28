@@ -19,9 +19,6 @@ sub new {
         },
         current_tf => '1',
         _cursor    => undef,
-        # Cada mutacion de velas invalida el cache de volumen. El cache se
-        # conserva por temporalidad macro para que volver de 1h a 5m no
-        # reconstruya los mismos buckets 1m/5m/15m.
         _data_revision       => 0,
         _volume_index        => {},
         _volume_index_cache  => {},
@@ -41,8 +38,6 @@ sub add_candle {
     $self->_touch_data();
 }
 
-# Build higher-timeframe candles from 1m data using integer arithmetic for bucket boundaries.
-# Evita float32 para epochs de 2026; los buckets se calculan con enteros Perl.
 sub build_tf_candles {
     my ($self, $tf, %opts) = @_;
     my @base    = @{ $self->{data}{'1'} };
@@ -50,7 +45,6 @@ sub build_tf_candles {
     my $tf_secs = $tf * 60;
     return unless $n > 0;
 
-    # ---- Extract columns ----
     my (@times, @opens, @highs, @lows, @closes, @vols);
     for my $c (@base) {
         push @times,  $c->{time};
@@ -61,18 +55,13 @@ sub build_tf_candles {
         push @vols,   $c->{volume};
     }
 
-    # ---- Bucket timestamps (enteros Perl para evitar perdida de precision) ----
-    # float32 ULP para ~1.78e9 es 128 seg: velas al borde caerian en el bucket equivocado.
     my @buckets = map { int($times[$_] / $tf_secs) * $tf_secs } 0 .. $n - 1;
 
-    # ---- Group boundary detection (Perl integers) ----
     my @starts = (0);
     for my $i (0 .. $n - 2) {
         push @starts, $i + 1 if $buckets[$i + 1] != $buckets[$i];
     }
 
-    # ---- Per-group aggregation (Perl loop over groups, Perl arrays for speed) ----
-    # Evita overhead innecesario para miles de slices pequenos.
     my @result;
     for my $gi (0 .. $#starts) {
         my $s  = $starts[$gi];
@@ -110,13 +99,6 @@ sub build_timeframes {
     $self->_touch_data();
 }
 
-## ----------------------------------------------------------------
-# Índice de volumen multi-temporal (Sección 4.4 de la especificación)
-#
-# Para cada vela de la temporalidad macro activa, almacena la suma de
-# volumen de las sub-velas de 1m, 5m y 15m que caen dentro de ese
-# bucket temporal.  Se construye O(N) una sola vez; lookup O(1).
-# ----------------------------------------------------------------
 sub build_volume_index {
     my ($self, $tf_macro) = @_;
     $tf_macro //= $self->{current_tf} // '1';
@@ -189,8 +171,6 @@ sub _active_array {
     return $self->{data}{ $self->{current_tf} };
 }
 
-# API publica para consumidores. Mantener _active_array como detalle interno
-# evita que los indicadores queden acoplados a la representacion de MarketData.
 sub get_active_candles {
     my ($self) = @_;
     return $self->_active_array();
@@ -252,9 +232,6 @@ sub merge_delta_row {
 sub _touch_data {
     my ($self) = @_;
     $self->{_data_revision} = ($self->{_data_revision} // 0) + 1;
-    # No hace falta borrar los hashes: la revision impide reusarlos. Limpiar
-    # evita que una fuente de streaming de larga duracion acumule un cache
-    # obsoleto sin limite.
     $self->{_volume_index}       = {};
     $self->{_volume_index_cache} = {};
     return;

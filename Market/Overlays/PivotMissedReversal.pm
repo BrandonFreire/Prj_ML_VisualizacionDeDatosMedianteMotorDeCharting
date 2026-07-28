@@ -4,9 +4,6 @@ use strict;
 use warnings;
 use utf8;
 
-# Renderiza la salida causal de PivotMissedReversal. Los fantasmas señalan
-# extremos que el zigzag regular omitió; no se muestran hasta su vela de
-# confirmación. El dibujo vectorial evita depender de una fuente de emojis.
 
 my $COLOR_HIGH         = '#ef5350';
 my $COLOR_LOW          = '#26a69a';
@@ -217,7 +214,6 @@ sub _render_provisional {
     my $type  = $pivot->{type};
     my $color = _type_color($type);
 
-    # Línea provisional desde el último pivote confirmado al extremo actual.
     if (defined $pivot->{from_index} && defined $pivot->{from_price}
         && $pivot->{from_index} < $idx) {
         my $from_i = $pivot->{from_index};
@@ -239,7 +235,6 @@ sub _render_provisional {
         }
     }
 
-    # Nivel temporal: se mueve cuando aparece un extremo más reciente.
     if ($idx <= $d_end && $current_bar >= $d_start) {
         my $draw_start = $idx < $d_start ? $d_start : $idx;
         my $draw_end = $current_bar > $d_end ? $d_end : $current_bar;

@@ -3,7 +3,6 @@ package Market::Panels::VolumePanel;
 use strict;
 use warnings;
 
-# Renders volume in its own panel so price overlays cannot cover it.
 
 my $COLOR_VOL_UP   = '#1d6f68';
 my $COLOR_VOL_DOWN = '#7b343b';

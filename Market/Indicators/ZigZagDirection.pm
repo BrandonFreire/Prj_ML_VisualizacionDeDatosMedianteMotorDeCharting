@@ -3,9 +3,6 @@ package Market::Indicators::ZigZagDirection;
 use strict;
 use warnings;
 
-# Two-level ZigZag direction engine.
-# - external: long local pivots on the active chart timeframe
-# - internal: pivots on synthetic resolution candles mapped back to chart indices
 
 sub new {
     my ($class, %args) = @_;
@@ -349,8 +346,6 @@ sub _append_developing_pivot {
     my $to   = $current_bar;
     return \@zz if $from > $to;
 
-    # Un pivote confirmado es inmutable. El extremo en desarrollo siempre es
-    # el extremo opuesto siguiente; puede desplazarse mientras sea provisional.
     my $wanted = $last->{type} eq 'high' ? 'low' : 'high';
     my $developing = _range_extreme($candles, $from, $to, $wanted);
     if ($developing && $developing->{index} > $last->{index}) {

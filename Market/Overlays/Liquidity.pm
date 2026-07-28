@@ -4,22 +4,18 @@ use strict;
 use warnings;
 use utf8;
 
-# Módulo de Liquidez — renderiza BSL y SSL segun la especificacion Tabla 2:
-#   BSL (Buy Side Liquidity):  linea horizontal discontinua ROJA por encima de swing highs
-#   SSL (Sell Side Liquidity): linea horizontal discontinua VERDE por debajo de swing lows
-# Lee los swing points del indicador Market::Indicators::SMC_Structures.
 
-my $COLOR_BSL = '#ef5350';   # rojo  — Buy Side Liquidity (stops de vendedores cortos)
-my $COLOR_SSL = '#26a69a';   # verde — Sell Side Liquidity (stops de compradores)
-my $COLOR_GRAB = '#ff9800';  # naranja — Liquidity Grab
-my $COLOR_RUN  = '#2196f3';  # azul — Liquidity Run
+my $COLOR_BSL = '#ef5350';
+my $COLOR_SSL = '#26a69a';
+my $COLOR_GRAB = '#ff9800';
+my $COLOR_RUN  = '#2196f3';
 
 sub new {
     my ($class, %args) = @_;
     return bless {
         indicator  => $args{indicator},
         visibility => $args{visibility},
-        max_levels => $args{max_levels} // 8,   # cuantos niveles mostrar como maximo por lado
+        max_levels => $args{max_levels} // 8,
         max_equal_levels => $args{max_equal_levels} // 6,
         show_bsl   => $args{show_bsl}   // 1,
         show_ssl   => $args{show_ssl}   // 1,
@@ -38,8 +34,6 @@ sub _visible {
     return $v->{$key} ? 1 : 0;
 }
 
-# Renderiza los niveles de liquidez sobre el canvas de precio.
-# Solo muestra niveles NO barridos y dentro del rango visible.
 sub render {
     my ($self, $canvas, $d_start, $d_end, $scale, $current_bar) = @_;
     $current_bar //= $d_end;
@@ -50,8 +44,6 @@ sub render {
     $self->{_label_slots} = {};
     return unless $self->_visible('liquidity_enabled', 1);
 
-    # Liquidity expone todos los niveles para poder dibujar lineas historicas cortadas
-    # en swept_at y etiquetas finales en resolved_at. Fallback: swings simples de SMC.
     my ($bsl, $ssl);
     if ( $ind->can('get_levels') ) {
         my $levels = $ind->get_levels() // [];
@@ -316,7 +308,6 @@ sub _render_eq_connector {
     return if $pair_idx > $current_bar || $start_idx > $current_bar;
     return unless defined $lvl->{price};
 
-    # pair_idx es el pivote anterior (indice menor), start_idx el posterior
     my $from = $pair_idx < $start_idx ? $pair_idx : $start_idx;
     my $to   = $pair_idx < $start_idx ? $start_idx : $pair_idx;
 

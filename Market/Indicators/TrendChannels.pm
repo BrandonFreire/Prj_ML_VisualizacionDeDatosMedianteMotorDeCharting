@@ -6,9 +6,6 @@ use warnings;
 use List::Util qw(max min);
 use Time::Local qw(timegm);
 
-# Detector causal de canales paralelos. Recibe solo velas visibles y pivotes
-# ya confirmados; por eso una ejecución sobre un prefijo de datos no puede
-# producir canales que dependan de velas futuras.
 
 my %DEFAULT = (
     pivot_left                    => 3,
@@ -178,7 +175,6 @@ sub _find_confirmed_pivots {
             $is_high = 0 if $high <= $series->[$index + $offset]{high};
             $is_low  = 0 if $low  >= $series->[$index + $offset]{low};
         }
-        # Una misma vela exterior no aporta dos anclajes temporales distintos.
         next if $is_high && $is_low;
         for my $kind ($is_high ? 'high' : (), $is_low ? 'low' : ()) {
             push @out, {
