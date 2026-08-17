@@ -1,6 +1,81 @@
 # Prj_ML_VisualizacionDeDatosMedianteMotorDeCharting
 
-## Pruebas
+Proyecto en Perl orientado al análisis técnico, visualización de mercado y preparación de datos para un flujo de Machine Learning sobre series temporales financieras.
+
+## Descripción general
+
+Este repositorio combina tres bloques principales:
+
+1. **Motor de visualización de gráficos** con interfaz gráfica en Tk.
+2. **Sistema de indicadores técnicos y overlays** para estudiar estructura de mercado, liquidez, pivotes, volumen y VWAP.
+3. **Pipeline de Machine Learning** para extraer características causales desde velas OHLCV y entrenar un modelo LSTM para detectar patrones de “ghosts in swings”.
+
+En la práctica, el proyecto permite cargar datos CSV de mercado, construir timeframes, calcular indicadores, visualizar señales sobre el chart y generar datasets de entrenamiento/predicción sin fuga de información futura.
+
+## Qué resuelve el proyecto
+
+El objetivo del proyecto es facilitar el estudio y la automatización de análisis de mercado en cuatro niveles:
+
+- **Lectura y normalización de datos OHLCV**.
+- **Cálculo de indicadores técnicos y conceptos SMC**.
+- **Visualización interactiva con overlays** para inspección manual.
+- **Extracción de features y entrenamiento supervisado** para predicción de eventos de corto plazo.
+
+## Componentes principales
+
+### 1. `market.pl`
+
+Es la aplicación principal. Carga un CSV de velas, construye agregaciones por timeframe y muestra un chart interactivo con:
+
+- ATR
+- ZigZag externo e interno
+- Liquidez y estados SWEEP/GRAB/RUN
+- Estructura SMC: BOS, CHoCH, FVG, OB
+- Market Regime
+- Strategy Builder
+- Volume Profile
+- Anchored VWAP
+- Pivot Missed Reversal
+- Herramientas auxiliares como canal de regresión y Fibonacci manual/automático
+
+### 2. `ml/extract_features.pl`
+
+Script de extracción causal de características. Toma un CSV de entrada y genera otro CSV listo para entrenamiento, usando:
+
+- eventos observables en replay de 1 minuto
+- distancias a niveles de mercado en múltiples marcos temporales
+- targets `Y_3m`, `Y_5m`, `Y_10m`, `Y_15m`
+
+### 3. Módulos `Market::*`
+
+El repositorio contiene varios módulos responsables de:
+
+- estructurar datos de mercado
+- calcular indicadores
+- construir overlays
+- orquestar el render del chart
+- preparar el pipeline de ML
+
+## Flujo de trabajo
+
+1. Se carga un CSV de velas.
+2. Se construyen los timeframes agregados.
+3. Se calculan indicadores y estructuras de mercado.
+4. La interfaz permite revisar el comportamiento visual del precio.
+5. El pipeline ML extrae features causales.
+6. Se entrena y evalúa el modelo con datos separados por período.
+
+## Datos y archivos relevantes
+
+Según el README y scripts del proyecto, los archivos clave son:
+
+- `market.pl` — interfaz principal del chart.
+- `ml/extract_features.pl` — extracción de características.
+- `ml/run_all.sh` — orquestación del pipeline ML.
+- `2026_Abril-Junio.csv` — conjunto de entrenamiento/ajuste.
+- `2026_07_24.csv` — conjunto de prueba/visualización por defecto.
+
+## Cómo ejecutar pruebas
 
 Las pruebas del motor se ejecutan sin interfaz gráfica ni datos CSV externos:
 
@@ -8,15 +83,9 @@ Las pruebas del motor se ejecutan sin interfaz gráfica ni datos CSV externos:
 prove -I. -lr t
 ```
 
-La batería verifica agregación OHLCV/replay de `MarketData`, ATR, Liquidity,
-SMC, niveles HTF, régimen, señales y backtesting. Cada indicador nuevo o
-corregido debe incorporar sus casos reproducibles en `t/`.
-
 ## Evaluación de señales
 
-`Market::Indicators::Strategy_Builder` expone `run_backtest()`. Una señal
-confirmada en la vela `i` entra únicamente en la apertura de `i + 1`; no se
-puede usar el máximo o mínimo de la vela que la originó.
+`Market::Indicators::Strategy_Builder` expone `run_backtest()`. Una señal confirmada en la vela `i` entra únicamente en la apertura de `i + 1`; no se debe usar el máximo o mínimo de la vela que la originó.
 
 ```perl
 my $result = $strategy->run_backtest(
@@ -29,89 +98,58 @@ my $result = $strategy->run_backtest(
 );
 ```
 
-El resultado incluye operaciones, curva de equity, drawdown y señales
-descartadas. Si una vela toca SL y TP, el modo `stop_first` es conservador por
-defecto; `intrabar_priority => 'target_first'` sirve solo para analizar la
-sensibilidad de ese supuesto.
-
-## Régimen ML y pivotes omitidos
-
-`Market::ML::RegimePipeline` clasifica el contexto de forma no supervisada.
-Hay que indicar el último índice de entrenamiento: la salida solo contiene
-predicciones posteriores a él y no es una señal de compra/venta.
-
-```perl
-my $ml = Market::ML::RegimePipeline->new(feature_window => 20);
-my $regimes = $ml->compute(
-    candles         => $candles,
-    atr_series      => $strategy->get_atr(),
-    train_end_index => 3_000,
-);
-```
-
-Además del K-means determinista predeterminado, se puede usar una mezcla
-gaussiana diagonal con HMM. El filtro HMM es hacia adelante: un estado en la
-vela `i` no usa observaciones posteriores. Para una evaluación más estricta,
-`walk_forward => 1` reentrena de forma expansiva antes de cada predicción;
-es más costoso y está pensado para validación, no para una actualización de
-pantalla en cada tick.
-
-```perl
-my $ml = Market::ML::RegimePipeline->new(
-    feature_window => 20,
-    algorithm      => 'gmm_hmm',
-    walk_forward   => 1,
-);
-```
-
-`Market::Indicators::PivotMissedReversal` ofrece pivotes regulares,
-reversiones omitidas, su nivel activo y un extremo provisional. Los eventos
-se publican al confirmarse, nunca en la vela extrema con información futura.
-Su Replay de rastros usa el `Pivot Length = 50` de `Ghosts_in_swings.txt`: una
-aparición al cambiar el ancla y un `move` únicamente cuando el precio marca un
-extremo estrictamente nuevo. Los empates mueven el icono vivo, pero no crean un
-`1` ni un target artificial. La interfaz conserva el AVWAP manual y añade las
-dos curvas del Pine: `Swing VWAP` desde el último pivote regular confirmado y
-`Ghost VWAP` desde la ubicación causal del fantasma vivo. En
-**Indicadores y Overlays → Pivots → Rastros (1)** se pueden verificar las
-etiquetas causalmente durante Replay.
-
-## Pipeline final Ghosts_in_swings
+## Pipeline ML final
 
 El pipeline supervisado final usa exclusivamente:
 
-- `2026_Abril-Junio.csv` para seleccionar y ajustar una red LSTM;
-- `2026_07_24.csv` como test externo, sin reajustar scaler ni pesos;
-- apariciones y reubicaciones observables mediante Replay de 1 minuto;
-- distancias en PIP a los once grupos exigidos en 1m, 10m y 1h;
-- cuatro salidas simultáneas: `Y_3m`, `Y_5m`, `Y_10m` y `Y_15m`.
+- `2026_Abril-Junio.csv` para seleccionar y ajustar la red LSTM
+- `2026_07_24.csv` como test externo
+- características causales derivadas del replay
+- cuatro salidas simultáneas: `Y_3m`, `Y_5m`, `Y_10m` y `Y_15m`
+
+Ejecución completa:
 
 ```bash
 bash ml/run_all.sh
 ```
 
-El extractor analítico vive en `Market::ML::GhostFeatureExtractor` y no carga
-Tk ni overlays. El entrenamiento guarda por separado
-`ml/model_fantasmas_lstm.npz`, `ml/scaler_params_lstm.npz`,
-`ml/model_config_lstm.json` y `ml/training_report_lstm.json`. El evaluador
-recarga esos artefactos y genera `ml/test_metrics_lstm.json`.
+## Artefactos generados
 
-Los artefactos históricos `.joblib` (Random Forest) y
-`artifacts/models/trained_model.pt` (GRU) se conservan sólo por trazabilidad;
-la interfaz y el pipeline oficial ya no los consumen.
+El entrenamiento guarda por separado:
 
-La interfaz no carga abril-junio al arrancar ni reentrena automáticamente.
-Por defecto muestra `2026_07_24.csv`, carga el modelo/scaler ya persistidos
-para predecir y sólo usa abril-junio cuando se pulsa **Entrenar Modelo**. Para
-visualizar otro archivo sin cambiar el conjunto oficial de entrenamiento:
+- `ml/model_fantasmas_lstm.npz`
+- `ml/scaler_params_lstm.npz`
+- `ml/model_config_lstm.json`
+- `ml/training_report_lstm.json`
+
+El evaluador genera:
+
+- `ml/test_metrics_lstm.json`
+
+## Requisitos funcionales del proyecto
+
+Para que el sistema funcione correctamente, el repositorio debe conservar:
+
+- consistencia en el formato CSV de entrada
+- separación entre entrenamiento y prueba
+- extracción causal sin fuga de futuro
+- indicadores reproducibles y testeados
+- sincronización entre overlays, chart y pipeline ML
+
+## Uso básico
+
+Abrir la visualización principal:
 
 ```bash
 perl market.pl ruta/al/archivo.csv
 ```
 
-Pruebas específicas:
+Ejecutar extracción de features:
 
 ```bash
-prove -I. t/27_ghost_feature_extractor.t
-python3 -m unittest ml/test_lstm_core.py
+perl ml/extract_features.pl entrada.csv salida.csv
 ```
+
+## En resumen
+
+Este proyecto es una plataforma de análisis de mercado en Perl que integra visualización interactiva, indicadores técnicos avanzados y un pipeline de Machine Learning para estudiar patrones de precio y generar predicciones a partir de datos OHLCV.
